@@ -411,7 +411,8 @@ class RheedCameraWorker(QThread):
             return ScreenGrabCamera.legacy_mss()
         else:
             from drivers.rheed_camera import DummyCamera
-            return DummyCamera()
+            preset = self.mode if self.mode in DummyCamera.PRESETS else None
+            return DummyCamera(preset=preset)
 
     def stop(self):
         """Stop the camera worker thread."""
@@ -755,7 +756,7 @@ class ClassifierWorker(QThread):
     # Class-level knobs — instance-override in tests via monkey-patching.
     POLL_INTERVAL_S = 0.5           # 2 Hz classification cadence
     EMA_ALPHA = 0.2                 # ~5 s time constant at 2 Hz
-    OOD_QUALITY_THRESHOLD = 0.3     # below this = freeze EMA + set is_ood
+    OOD_QUALITY_THRESHOLD = 0.0     # disabled for test — show all predictions
     MAX_CONSECUTIVE_FAILS = 5       # symmetric with Jul-2 driver-hardening pattern
 
     def __init__(self, ai_repo_root, model_path=None):

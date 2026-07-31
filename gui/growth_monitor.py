@@ -992,7 +992,8 @@ class GrowthMonitor(QWidget):
 
         self.config_camera_mode = QComboBox()
         self.config_camera_mode.addItems(
-            ["dummy", "screengrab", "screengrab_mss", "vimba"]
+            ["dummy", "dummy_c6x2", "dummy_tw",
+             "screengrab", "screengrab_mss", "vimba"]
         )
         self.config_camera_mode.setItemData(
             1,

@@ -920,35 +920,101 @@ class ScreenGrabCamera(RheedCamera):
 
 
 class DummyCamera(RheedCamera):
-    """Test camera that returns synthetic frames. Useful for GUI development."""
+    """Test camera that plays back real experimental RHEED images.
 
-    def __init__(self, width: int = 656, height: int = 492):
+    Shows unmodified BMP frames — the live image IS the truth.
+    Calibration warps the basis images (right pane) to match.
+    """
+
+    PRESETS: dict[str, str] = {
+        "dummy":      "1x1",
+        "dummy_c6x2": "c6x2",
+        "dummy_tw":   "Twinned2x1",
+    }
+    DEFAULT_PRESET = "dummy"
+
+    def __init__(self, width: int = 656, height: int = 492,
+                 preset: str | None = None):
         self._width = width
         self._height = height
         self._connected = False
         self._frame_count = 0
+        self._images: list = []
+        self._data_class = self.PRESETS.get(preset or self.DEFAULT_PRESET,
+                                            self.PRESETS[self.DEFAULT_PRESET])
+
+    def _find_data_dir(self) -> str | None:
+        """Locate the RHEEDClassify data directory for this preset's class."""
+        from pathlib import Path
+        candidates = [
+            Path(f"D:/AI4MBE/RHEEDClassify/data/STO_ideal_{self._data_class}"),
+            Path(f"../RHEEDClassify/data/STO_ideal_{self._data_class}"),
+        ]
+        for p in candidates:
+            if p.is_dir():
+                return str(p)
+        return None
+
+    def _load_images(self):
+        """Pre-load and downsample real experimental RHEED frames."""
+        if self._images:
+            return
+        from PIL import Image
+        from scripts.equalizer_ui import PROCESS_WH
+        pw, ph = PROCESS_WH
+
+        data_dir = self._find_data_dir()
+        if data_dir is None:
+            return
+
+        import glob
+        files = sorted(glob.glob(f"{data_dir}/*.bmp"))[:20]  # first 20 frames
+        for fpath in files:
+            try:
+                img = Image.open(fpath).convert("L")
+                img = img.resize((pw, ph), Image.Resampling.BILINEAR)
+                self._images.append(np.asarray(img, dtype=np.float32))
+            except Exception:
+                continue
 
     def connect(self) -> None:
         self._connected = True
         self._frame_count = 0
+        self._load_images()
 
     def read_frame(self) -> np.ndarray:
         if not self._connected:
             raise RuntimeError("Dummy camera not connected.")
+        self._load_images()
 
-        # Generate a test pattern with a moving bright spot
-        frame = np.zeros((self._height, self._width, 3), dtype=np.uint8)
+        h, w = self._height, self._width
+        frame = np.zeros((h, w, 3), dtype=np.uint8)
 
-        # Moving Gaussian spot to simulate RHEED oscillations
-        cx = self._width // 2
-        cy = self._height // 2
-        intensity = int(128 + 100 * np.sin(self._frame_count * 0.1))
+        if not self._images:
+            # Fallback: simple Gaussian spot if no data found.
+            from scripts.equalizer_ui import PROCESS_WH
+            pw, ph = PROCESS_WH
+            fallback = np.zeros((ph, pw), dtype=np.float32)
+            cx, cy = pw // 2, ph // 2
+            yg, xg = np.ogrid[:ph, :pw]
+            r2 = (xg - cx) ** 2 + (yg - cy) ** 2
+            fallback += 200 * np.exp(-r2 / (2 * 50**2))
+        else:
+            # Show a single stable image (first frame, always the same).
+            fallback = self._images[0].copy()
 
-        y, x = np.ogrid[:self._height, :self._width]
-        r2 = (x - cx) ** 2 + (y - cy) ** 2
-        spot = np.clip(intensity * np.exp(-r2 / (2 * 50**2)), 0, 255).astype(np.uint8)
-        frame[:, :, 1] = spot  # green channel
+        # Show raw image — no transform. Left pane is truth.
+        blend = fallback.astype(np.float32)
 
+        blend = np.clip(blend, 0, 255).astype(np.float32)
+
+        # Upsample to camera resolution.
+        from PIL import Image
+        u8 = np.asarray(blend, dtype=np.uint8)
+        up = np.array(Image.fromarray(u8).resize((int(w), int(h)), Image.BILINEAR))
+
+        frame[:, :, 1] = up  # green channel
+        frame[:, :, 2] = np.clip(up.astype(np.int16) // 3, 0, 255).astype(np.uint8)
         self._frame_count += 1
         return frame
 

@@ -173,6 +173,12 @@ class GrowthLogger:
         "frame_path",
         "capture_backend", "captured_at_utc", "capture_sequence",
         "frame_age_ms", "source_hwnd",
+        # Camera alignment calibration provenance (Jul 30 2026).
+        "calibration_dx_px", "calibration_dy_px",
+        "calibration_max_disagreement_px",
+        "calibration_view_segment_id",
+        "calibration_source_hwnd",
+        "calibration_accepted",
     ]
     # Event labels written by the Events tab labeling form. The from/to
     # columns are reserved for the deferred reconstruction-transition
@@ -572,6 +578,7 @@ class GrowthLogger:
         current_A: Optional[float] = None,
         psu_source: str = "none",
         capture_metadata: Optional[dict] = None,
+        calibration=None,  # Optional[Calibration]
     ) -> int:
         """Append a Live Equalizer label to live_labels.csv.
 
@@ -650,6 +657,37 @@ class GrowthLogger:
             ),
             "psu_source": psu_source,
             "frame_path": frame_path,
+            # Camera alignment calibration provenance (Jul 30 2026).
+            "calibration_dx_px": (
+                f"{calibration.offset[0]:.1f}"
+                if calibration is not None and calibration.grower_accepted
+                else ""
+            ),
+            "calibration_dy_px": (
+                f"{calibration.offset[1]:.1f}"
+                if calibration is not None and calibration.grower_accepted
+                else ""
+            ),
+            "calibration_max_disagreement_px": (
+                f"{calibration.max_disagreement_px:.1f}"
+                if calibration is not None and calibration.grower_accepted
+                else ""
+            ),
+            "calibration_view_segment_id": (
+                str(calibration.view_segment_id)
+                if calibration is not None and calibration.grower_accepted
+                else ""
+            ),
+            "calibration_source_hwnd": (
+                str(calibration.source_hwnd)
+                if calibration is not None and calibration.grower_accepted
+                else ""
+            ),
+            "calibration_accepted": (
+                "True"
+                if calibration is not None and calibration.grower_accepted
+                else ""
+            ),
             **self._capture_columns(capture_metadata),
         })
         self._live_label_file.flush()

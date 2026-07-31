@@ -100,6 +100,8 @@ def resolve_workspace_folder(folder: str | Path) -> Path:
 # sync with EventsTab._KNOWN_AI_REPO_ROOTS in gui/events_tab.py — if
 # a third caller shows up, move both to a shared module.
 _KNOWN_AI_REPO_ROOTS = [
+    # Local workstation — RHEEDClassify repository.
+    r"D:\AI4MBE\RHEEDClassify",
     # Bulbasaur (O-MBE)
     r"C:\Users\Lab10\AI_for_quantum",
     # Ch-MBE (Omicron chalcogenide MBE) — added 2026-07-21
@@ -327,7 +329,7 @@ class GrowthApp(QMainWindow):
             # off, kill it so the UI doesn't get updates from a stale
             # worker while showing "disabled".
             if self.classifier_worker and self.classifier_worker.isRunning():
-                self._stop_worker(self.classifier_worker)
+                self._stop_workers(self.classifier_worker)
                 self.classifier_worker = None
             # Explicit "disabled" signal to the monitor so the sliders
             # show a clear message instead of just staying at "idle".
@@ -372,20 +374,18 @@ class GrowthApp(QMainWindow):
 
     @pyqtSlot()
     def _on_disarm(self):
-        """Disconnect all hardware workers."""
-        self._stop_worker(self.camera_worker)
+        """Disconnect all hardware workers (parallel stop for minimal lag)."""
+        self._stop_workers(
+            self.camera_worker,
+            self.pyrometer_worker,
+            self.mistral_worker,
+            self.evap_worker,
+            self.classifier_worker,
+        )
         self.camera_worker = None
-
-        self._stop_worker(self.pyrometer_worker)
         self.pyrometer_worker = None
-
-        self._stop_worker(self.mistral_worker)
         self.mistral_worker = None
-
-        self._stop_worker(self.evap_worker)
         self.evap_worker = None
-
-        self._stop_worker(self.classifier_worker)
         self.classifier_worker = None
 
         self.monitor.reset_displays()
@@ -412,7 +412,7 @@ class GrowthApp(QMainWindow):
             False, in_progress=True,
         )
         if self.camera_worker is not None and self.camera_worker.isRunning():
-            self._stop_worker(self.camera_worker)
+            self._stop_workers(self.camera_worker)
         self.camera_worker = RheedCameraWorker(
             mode="screengrab", poll_interval=1.0,
         )
@@ -682,6 +682,7 @@ class GrowthApp(QMainWindow):
         if pyro is not None and pyro.connected:
             pyro_temp = pyro.temperature
 
+        cal = self.monitor.live_equalizer_tab.get_calibration()
         idx = self.growth_log.record_live_label(
             elapsed_s=self.monitor.get_elapsed_seconds(),
             weights=weights,
@@ -691,6 +692,7 @@ class GrowthApp(QMainWindow):
             current_A=current_a,
             psu_source=psu_source,
             capture_metadata=capture_metadata,
+            calibration=cal,
         )
         if idx > 0:
             self.statusBar().showMessage(
@@ -1209,10 +1211,22 @@ class GrowthApp(QMainWindow):
     # --- Helpers -----------------------------------------------------------
 
     @staticmethod
-    def _stop_worker(worker):
-        if worker is not None:
-            worker.stop()
-            worker.wait(5000)
+    def _stop_workers(*workers):
+        """Stop multiple workers in parallel, then wait for all.
+
+        Calls stop() on every worker first (non-blocking boolean flags),
+        then waits for all threads to exit. Total wait time is bounded by
+        the slowest worker's remaining poll interval (~1 s), not the sum
+        of all workers' intervals (~7.5 s sequential).
+        """
+        # Phase 1: signal all to stop (non-blocking).
+        for w in workers:
+            if w is not None:
+                w.stop()
+        # Phase 2: wait for all to finish (they exit concurrently).
+        for w in workers:
+            if w is not None and w.isRunning():
+                w.wait(2000)
 
     # --- Shutdown ----------------------------------------------------------
 
@@ -1229,8 +1243,11 @@ class GrowthApp(QMainWindow):
                 self.growth_log.generate_temperature_plot(metadata)
             except Exception as e:
                 log.warning("Auto T vs t plot failed during close: %s", e)
-        self._stop_worker(self.camera_worker)
-        self._stop_worker(self.pyrometer_worker)
-        self._stop_worker(self.mistral_worker)
-        self._stop_worker(self.evap_worker)
+        self._stop_workers(
+            self.camera_worker,
+            self.pyrometer_worker,
+            self.mistral_worker,
+            self.evap_worker,
+            self.classifier_worker,
+        )
         event.accept()
