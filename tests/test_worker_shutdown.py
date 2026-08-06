@@ -34,6 +34,11 @@ except ModuleNotFoundError:
     sys.modules["pyqtgraph"] = types.ModuleType("pyqtgraph")
 
 from gui.growth_app import GrowthApp  # noqa: E402
+from gui.auto_capture import (  # noqa: E402
+    CapturedFrameSample,
+    ReconstructionChangeEvent,
+    ReconstructionPrediction,
+)
 from gui.growth_logger import AutoCaptureCommitResult  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QMainWindow  # noqa: E402
 
@@ -137,6 +142,7 @@ class _Monitor:
         self._latest_pyro = None
         self.auto_capture_statuses: list[str] = []
         self.auto_capture_events: list[tuple[int, float, str]] = []
+        self.events_tab = _EventsTab()
 
     def reset_displays(self) -> None:
         self.reset_called = True
@@ -175,6 +181,14 @@ class _Combo:
 
     def currentText(self) -> str:
         return self.value
+
+
+class _EventsTab:
+    def __init__(self):
+        self.refreshes: list[tuple[np.ndarray, float]] = []
+
+    def on_frame_captured(self, frame: np.ndarray, score: float) -> None:
+        self.refreshes.append((frame, score))
 
 
 class _Button:
@@ -531,6 +545,72 @@ class StopWorkersTests(unittest.TestCase):
         self.assertFalse(app.auto_capture_engine.enabled)
         self.assertIn("CSV writer unavailable", app.monitor.auto_capture_statuses[-1])
         self.assertIn("further capture is disabled", app._status_bar.messages[-1])
+
+    def test_model_change_event_binds_dynamic_contract_and_refreshes_after_commit(self):
+        app = _AppHarness()
+        app.growth_log.active = True
+        frame = np.full((4, 4, 3), 100, dtype=np.uint8)
+        metadata = {
+            "capture_backend": "fake-wgc",
+            "captured_at_utc": "2026-08-06T12:00:00Z",
+            "captured_monotonic_ns": 10_000_000_000,
+            "capture_sequence": 12,
+            "source_hwnd": 42,
+            "capture_geometry_id": "fake:42:4x4:v1",
+            "camera_width": 4,
+            "camera_height": 4,
+            "session_id": "growth_test",
+            "view_segment_id": 0,
+            "visual_history_generation": 0,
+        }
+        sample = CapturedFrameSample(
+            frame=frame,
+            metadata=metadata,
+            captured_monotonic_ns=10_000_000_000,
+            capture_sequence=12,
+        )
+        prediction = ReconstructionPrediction(
+            source="classifier",
+            model_version="four-output-model",
+            source_capture_sequence=12,
+            source_captured_monotonic_ns=10_000_000_000,
+            labels=("HTR", "RT13", "Tw(2x1)", "c(6x2)"),
+            scores=(0.05, 0.8, 0.05, 0.1),
+            predicted_label="RT13",
+            view_segment_id=0,
+            visual_history_generation=0,
+            model_input_mode="single_frame",
+        )
+        event = ReconstructionChangeEvent(
+            prediction=prediction,
+            previous_label="Tw(2x1)",
+            new_label="RT13",
+            change_score=0.5,
+            trigger_capture=sample,
+            captures=(sample,),
+            pre_window_s=60.0,
+            post_window_s=60.0,
+            sample_interval_s=1.0,
+        )
+        app.monitor.get_elapsed_seconds = lambda: 72.0
+
+        with patch("gui.growth_app.time.perf_counter_ns", return_value=70_000_000_000):
+            GrowthApp._on_reconstruction_change_event(app, event)
+
+        self.assertEqual(app._auto_capture_event_count, 1)
+        kwargs = app.growth_log.last_auto_capture_kwargs
+        self.assertEqual(kwargs["event_metadata"]["model_change_from"], "Tw(2x1)")
+        self.assertEqual(kwargs["event_metadata"]["model_change_to"], "RT13")
+        self.assertFalse(kwargs["event_metadata"]["model_supports_1x1"])
+        self.assertGreaterEqual(kwargs["event_metadata"]["event_ready_delay_ms"], 0)
+        self.assertEqual(kwargs["event_metadata"]["event_ready_delay_ms"], 60_000.0)
+        self.assertEqual(kwargs["elapsed_s"], 12.0)
+        self.assertIsNone(kwargs["pyro_temp"])
+        self.assertEqual(
+            kwargs["classifier_snapshot"]["model_output_labels"],
+            ["HTR", "RT13", "Tw(2x1)", "c(6x2)"],
+        )
+        self.assertEqual(len(app.monitor.events_tab.refreshes), 1)
 
     def test_failed_auto_capture_decision_is_not_reported_as_saved(self):
         app = _AppHarness()

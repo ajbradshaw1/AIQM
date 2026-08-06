@@ -21,7 +21,11 @@ from PyQt6.QtCore import QEvent, pyqtSlot, Qt, QTimer
 
 log = logging.getLogger(__name__)
 
-from gui.auto_capture import AutoCaptureEngine, PixelDiffChangeDetector
+from gui.auto_capture import (
+    ReconstructionChangeCaptureEngine,
+    ReconstructionChangeEvent,
+    classifier_prediction_from_state,
+)
 from gui.equalizer_alignment import (
     BasisBundle,
     CalibrationRecord,
@@ -64,7 +68,8 @@ from gui.temporal_observability import (
 )
 
 
-# Tuned against Rahim's 2022_02_04 STO trajectory.
+# Historical pixel-detector tuning note (the detector remains available for
+# offline comparison, but it no longer drives production auto-capture).
 #
 # Rahim's data was captured at ~30 s cadence (manual). At our 1 Hz live
 # cadence, a 20-frame buffer covers 20 s — much shorter than Rahim's
@@ -79,11 +84,11 @@ from gui.temporal_observability import (
 # threshold of 2.0 sits ~3x above the expected baseline and below the
 # smallest expected event. First lab session is the real ground truth —
 # adjust after reviewing auto_capture_events.csv vs grower notes.
-AUTO_CAPTURE_THRESHOLD = 2.0
-AUTO_CAPTURE_BUFFER_SIZE = 20
-AUTO_CAPTURE_COOLDOWN_S = 10.0
-AUTO_CAPTURE_ADAPTIVE_SIGMA = 3.0
-AUTO_CAPTURE_ADAPTIVE_FLOOR = 0.5
+# Production model-transition capture settings.
+AUTO_CAPTURE_PRE_WINDOW_S = 60.0
+AUTO_CAPTURE_POST_WINDOW_S = 60.0
+AUTO_CAPTURE_SAMPLE_INTERVAL_S = 1.0
+AUTO_CAPTURE_STABLE_PREDICTIONS = 3
 
 
 def _sample_timing_snapshot(
@@ -264,27 +269,17 @@ class GrowthApp(QMainWindow):
         self._heartbeat_timer.setInterval(int(HEARTBEAT_INTERVAL_SECONDS * 1000))
         self._heartbeat_timer.timeout.connect(self._on_heartbeat)
 
-        # Auto-capture engine — shadow-mode pixel-diff change detection.
+        # Auto-capture engine — model-label transitions with 60 s context.
         # Engine is disarmed at construction; armed in _on_start, disarmed
         # in _on_stop. Frame ingestion happens in _on_camera_state.
-        self.auto_capture_engine = AutoCaptureEngine(
-            threshold=AUTO_CAPTURE_THRESHOLD,
-            cooldown_s=AUTO_CAPTURE_COOLDOWN_S,
-            warmup_frames=AUTO_CAPTURE_BUFFER_SIZE,
-            adaptive_sigma=AUTO_CAPTURE_ADAPTIVE_SIGMA,
-            adaptive_floor=AUTO_CAPTURE_ADAPTIVE_FLOOR,
+        self.auto_capture_engine = ReconstructionChangeCaptureEngine(
+            pre_window_s=AUTO_CAPTURE_PRE_WINDOW_S,
+            post_window_s=AUTO_CAPTURE_POST_WINDOW_S,
+            sample_interval_s=AUTO_CAPTURE_SAMPLE_INTERVAL_S,
+            stable_predictions=AUTO_CAPTURE_STABLE_PREDICTIONS,
         )
-        # Hardcoded opt-in for specular-anchored ROI + std-of-|diff|;
-        # remove these kwargs to fall back to full-frame mean-of-|diff|.
-        self.auto_capture_engine.set_detector(
-            PixelDiffChangeDetector(
-                buffer_size=AUTO_CAPTURE_BUFFER_SIZE,
-                score_metric="std",
-                roi_mode="specular",
-            ),
-        )
-        self.auto_capture_engine.frame_captured.connect(
-            self._on_auto_capture_event,
+        self.auto_capture_engine.event_ready.connect(
+            self._on_reconstruction_change_event,
         )
         self._auto_capture_event_count = 0
 
@@ -361,13 +356,8 @@ class GrowthApp(QMainWindow):
             self._on_auto_capture_decision,
         )
 
-        # Events tab listens to frame_captured AFTER GrowthApp's own
-        # handler, so the CSV row is already on disk when the tab re-reads
-        # it. Connection order is the synchronization mechanism — the
-        # engine emits to slots in the order they were connected.
-        self.auto_capture_engine.frame_captured.connect(
-            self.monitor.events_tab.on_frame_captured,
-        )
+        # The Events tab is refreshed explicitly after a completed 120-second
+        # model-change transaction commits; it must never race the CSV write.
         # Events tab also reflects banner Keep/Discard decisions in its
         # state column + unreviewed badge. Same connection-order reasoning:
         # GrowthApp's handler (above) writes the CSV first, the tab updates
@@ -881,13 +871,13 @@ class GrowthApp(QMainWindow):
         self._last_sensor_log_tick_ns = None
         self._sensor_log_timer.start()
 
-        # Arm shadow-mode auto-capture immediately. RHEED adjustment markers
-        # do not pause or re-arm this independent acquisition path.
+        # Arm model-driven evidence capture immediately. RHEED adjustment
+        # markers do not pause this independent acquisition path.
         self.auto_capture_engine.reset()
         self.auto_capture_engine.enabled = True
         self._auto_capture_event_count = 0
         self.monitor.set_auto_capture_status(
-            "Auto-capture: armed (warmup)"
+            "Auto-capture: armed (learning model baseline)"
         )
         self.monitor.set_auto_capture_pause_enabled(True)
 
@@ -942,6 +932,7 @@ class GrowthApp(QMainWindow):
         # Disarm auto-capture; engine state cleaned up so the next session
         # starts fresh in _on_start.
         self.auto_capture_engine.enabled = False
+        self.auto_capture_engine.reset()
         self.monitor.set_auto_capture_status(
             f"Auto-capture: idle "
             f"({self._auto_capture_event_count} events this session)"
@@ -2295,6 +2286,13 @@ class GrowthApp(QMainWindow):
 
         self._latest_classifier = state
         self.monitor.update_classifier_state(state)
+        if self.growth_log.active and self.auto_capture_engine.enabled:
+            prediction = classifier_prediction_from_state(state)
+            self.auto_capture_engine.observe_prediction(prediction)
+            self.monitor.set_auto_capture_status(
+                f"Auto-capture: {self.auto_capture_engine.status_text} | "
+                f"events: {self._auto_capture_event_count}"
+            )
         if self.growth_log.active:
             capture_to_complete_ms = None
             if (
@@ -2448,7 +2446,7 @@ class GrowthApp(QMainWindow):
                 else:
                     self.auto_capture_engine.enabled = True
                     self.monitor.set_auto_capture_status(
-                        "Auto-capture: armed (warmup after camera reconnect)"
+                        "Auto-capture: armed (learning baseline after reconnect)"
                     )
 
         # ``enabled`` is only one layer of the gate: an explicit active-session
@@ -2465,8 +2463,7 @@ class GrowthApp(QMainWindow):
             )
             if self.auto_capture_engine.enabled:
                 self.monitor.set_auto_capture_status(
-                    f"Auto-capture: armed | "
-                    f"score: {self.auto_capture_engine.latest_score:.2f} | "
+                    f"Auto-capture: {self.auto_capture_engine.status_text} | "
                     f"events: {self._auto_capture_event_count}"
                 )
 
@@ -2561,6 +2558,164 @@ class GrowthApp(QMainWindow):
         self.statusBar().showMessage(
             f"Heartbeat anchor saved (#{self.growth_log._heartbeat_counter})", 3000,
         )
+
+    @pyqtSlot(object)
+    def _on_reconstruction_change_event(self, event: object) -> None:
+        """Persist a completed model transition and its full 60 s + 60 s window."""
+        if not isinstance(event, ReconstructionChangeEvent):
+            log.error("Ignored invalid reconstruction-change event payload")
+            return
+        if self._shutdown_pending or not self.growth_log.active:
+            log.debug("Ignored completed model event without an active session")
+            return
+
+        payloads = event.capture_payloads()
+        if not payloads:
+            return
+        event_idx = self._auto_capture_event_count + 1
+        trigger_metadata = dict(event.trigger_capture.metadata)
+        prediction = event.prediction
+        ready_ns = time.perf_counter_ns()
+        event_ready_delay_ms = max(
+            0.0,
+            (
+                ready_ns - prediction.source_captured_monotonic_ns
+            ) / 1_000_000.0,
+        )
+        elapsed_s = max(
+            0.0,
+            self.monitor.get_elapsed_seconds()
+            - event_ready_delay_ms / 1000.0,
+        )
+        event_metadata = {
+            "trigger_source": prediction.source,
+            "model_version": prediction.model_version,
+            "model_input_mode": prediction.model_input_mode,
+            "model_output_labels": prediction.labels,
+            "model_supports_1x1": prediction.supports_1x1,
+            "model_change_from": event.previous_label,
+            "model_change_to": event.new_label,
+            "trigger_capture_sequence": prediction.source_capture_sequence,
+            "pre_window_s": event.pre_window_s,
+            "post_window_s": event.post_window_s,
+            "sample_interval_s": event.sample_interval_s,
+            "post_window_complete": True,
+            "event_ready_delay_ms": event_ready_delay_ms,
+        }
+        classifier_snapshot = GrowthApp._build_reconstruction_change_snapshot(
+            event=event,
+            event_idx=event_idx,
+            elapsed_s=elapsed_s,
+            capture_metadata=trigger_metadata,
+        )
+        try:
+            result = self.growth_log.record_auto_capture_event(
+                event_idx=event_idx,
+                score=event.change_score,
+                elapsed_s=elapsed_s,
+                # The current pyrometer value is ~60 s after the trigger.
+                # Leave it blank; sensor_log can be paired by trigger time.
+                pyro_temp=None,
+                frames=[frame for frame, _metadata in payloads],
+                frame_capture_metadata=[metadata for _frame, metadata in payloads],
+                event_capture_metadata=trigger_metadata,
+                classifier_snapshot=classifier_snapshot,
+                event_metadata=event_metadata,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            log.error(
+                "Model auto-capture transaction rejected event %d: %s",
+                event_idx,
+                exc,
+            )
+            result = None
+        if result is None or not result.committed:
+            self.statusBar().showMessage(
+                "Model auto-capture was not saved; transaction recovery is required.",
+                7000,
+            )
+            return
+
+        self._auto_capture_event_count = event_idx
+        if not result.writer_ready:
+            self.auto_capture_engine.enabled = False
+            self.auto_capture_engine.reset()
+            self.monitor.set_auto_capture_status(
+                "Auto-capture: ERROR (event saved, CSV writer unavailable)"
+            )
+        if result.buffer_count > 0:
+            self.monitor.show_auto_capture_event(
+                event_idx=event_idx,
+                score=event.change_score,
+                buffer_dir=result.buffer_dir,
+            )
+            self.monitor.events_tab.on_frame_captured(
+                event.trigger_capture.frame,
+                event.change_score,
+            )
+        if not result.writer_ready:
+            self.statusBar().showMessage(
+                "Auto-capture event saved, but further capture is disabled: "
+                "the event CSV could not be reopened.",
+                9000,
+            )
+
+    @staticmethod
+    def _build_reconstruction_change_snapshot(
+        *,
+        event: ReconstructionChangeEvent,
+        event_idx: int,
+        elapsed_s: float,
+        capture_metadata: dict,
+    ) -> dict:
+        """Serialize the exact trigger prediction, not a later cached state."""
+        from datetime import datetime as _dt
+
+        prediction = event.prediction
+        return {
+            "schema_version": 2,
+            "timestamp_iso": _dt.now().astimezone().isoformat(),
+            "event_idx": int(event_idx),
+            "event_score": float(event.change_score),
+            "elapsed_s": float(elapsed_s),
+            "trigger_kind": "stable_model_reconstruction_change",
+            "trigger_source": prediction.source,
+            "model_version": prediction.model_version,
+            "model_input_mode": prediction.model_input_mode,
+            "model_output_labels": list(prediction.labels),
+            "model_supports_1x1": prediction.supports_1x1,
+            "normalized_scores": prediction.score_dict(),
+            "predicted_class": prediction.predicted_label,
+            "change_from": event.previous_label,
+            "change_to": event.new_label,
+            "source_capture_sequence": prediction.source_capture_sequence,
+            "source_captured_monotonic_ns": (
+                prediction.source_captured_monotonic_ns
+            ),
+            "capture_backend": str(capture_metadata.get("capture_backend") or ""),
+            "captured_at_utc": str(capture_metadata.get("captured_at_utc") or ""),
+            "capture_sequence": int(capture_metadata.get("capture_sequence") or 0),
+            "source_hwnd": int(capture_metadata.get("source_hwnd") or 0),
+            "capture_geometry_id": str(
+                capture_metadata.get("capture_geometry_id") or ""
+            ),
+            "view_segment_id": prediction.view_segment_id,
+            "visual_history_generation": (
+                prediction.visual_history_generation
+            ),
+            "pre_window_s": event.pre_window_s,
+            "post_window_s": event.post_window_s,
+            "sample_interval_s": event.sample_interval_s,
+            "post_window_complete": True,
+            "buffer_count": len(event.captures),
+            "event_ready_delay_ms": max(
+                0.0,
+                (
+                    time.perf_counter_ns()
+                    - prediction.source_captured_monotonic_ns
+                ) / 1_000_000.0,
+            ),
+        }
 
     @pyqtSlot(np.ndarray, float)
     def _on_auto_capture_event(self, frame: np.ndarray, score: float):
@@ -2763,6 +2918,7 @@ class GrowthApp(QMainWindow):
         """
         if paused:
             self.auto_capture_engine.enabled = False
+            self.auto_capture_engine.reset()
             self.monitor.set_auto_capture_status(
                 f"Auto-capture: PAUSED "
                 f"({self._auto_capture_event_count} events this session)"
@@ -2792,7 +2948,7 @@ class GrowthApp(QMainWindow):
             else:
                 self.auto_capture_engine.enabled = True
                 self.monitor.set_auto_capture_status(
-                    "Auto-capture: armed (warmup)"
+                    "Auto-capture: armed (learning model baseline)"
                 )
                 self.statusBar().showMessage("Auto-capture resumed", 3000)
 

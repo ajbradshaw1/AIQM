@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 # auto_capture_events.csv). Set to PENDING at fire time; transitions to one
 # of the other three when the grower interacts with the AutoCaptureBanner or
 # the keep-default countdown fires. AUTO_SKIPPED is set at log time when
-# the quality gate rejected all 20 buffer frames — there's nothing to
+# the quality gate rejected all buffered frames — there's nothing to
 # review, so the event has no banner and no resolution path. Marking it
 # at log time gives the row a terminal state instead of leaving it as
 # pending forever.
@@ -100,7 +100,7 @@ class GrowthLogger:
     CALIBRATION_TRANSACTION_FILE = ".equalizer_calibration.pending.json"
     CALIBRATION_TRANSACTION_SCHEMA_VERSION = 1
     AUTO_CAPTURE_TRANSACTION_FILE = ".auto_capture_transaction.pending.json"
-    AUTO_CAPTURE_TRANSACTION_SCHEMA_VERSION = 2
+    AUTO_CAPTURE_TRANSACTION_SCHEMA_VERSION = 3
     HUMAN_LABELING_STATE_FILE = "human_labeling_state.json"
     HUMAN_LABELING_STATE_SCHEMA_VERSION = 1
 
@@ -264,6 +264,12 @@ class GrowthLogger:
         "event_state", "state_changed_at",
         "capture_backend", "captured_at_utc", "capture_sequence",
         "frame_age_ms", "source_hwnd", "capture_geometry_id",
+        "trigger_source", "model_version", "model_input_mode",
+        "model_output_labels", "model_supports_1x1",
+        "model_change_from", "model_change_to",
+        "trigger_capture_sequence",
+        "pre_window_s", "post_window_s", "sample_interval_s",
+        "post_window_complete", "event_ready_delay_ms",
     ]
     HEARTBEAT_FIELDS = [
         "timestamp", "elapsed_s", "heartbeat_idx",
@@ -415,6 +421,8 @@ class GrowthLogger:
         "session_id", "view_segment_id", "visual_history_generation",
         "gun_aligned", "realignment_active", "calibration_id",
         "basis_bundle_id",
+        "frame_role", "relative_to_trigger_s",
+        "trigger_capture_sequence",
     ]
 
     @staticmethod
@@ -3349,6 +3357,7 @@ class GrowthLogger:
         buffer_dir: str = "",
         event_state: str = EVENT_STATE_PENDING,
         capture_metadata: Optional[dict] = None,
+        event_metadata: Optional[Mapping[str, object]] = None,
         timestamp: Optional[str] = None,
     ) -> dict[str, str]:
         """Validate and stringify one row exactly as CSV reads it back."""
@@ -3372,6 +3381,38 @@ class GrowthLogger:
             EVENT_STATE_AUTO_SKIPPED,
         }:
             raise ValueError("invalid auto-capture event state")
+        details = dict(event_metadata or {})
+        labels_value = details.get("model_output_labels", ())
+        if isinstance(labels_value, str):
+            try:
+                decoded_labels = json.loads(labels_value)
+            except json.JSONDecodeError as exc:
+                raise ValueError("model output labels must be JSON or a sequence") from exc
+            if not isinstance(decoded_labels, list):
+                raise ValueError("model output labels JSON must be a list")
+            labels = tuple(str(label) for label in decoded_labels)
+        else:
+            labels = tuple(str(label) for label in labels_value)
+        if any(not label for label in labels) or len(set(labels)) != len(labels):
+            raise ValueError("model output labels must be unique and non-empty")
+        change_from = str(details.get("model_change_from") or "")
+        change_to = str(details.get("model_change_to") or "")
+        if labels and (change_from not in labels or change_to not in labels):
+            raise ValueError("model change labels must belong to the output contract")
+        if details.get("trigger_source"):
+            if int(details.get("trigger_capture_sequence") or 0) <= 0:
+                raise ValueError("model event requires a trigger capture sequence")
+            if details.get("post_window_complete") is not True:
+                raise ValueError("incomplete model post-window cannot be committed")
+        for field_name in (
+            "pre_window_s", "post_window_s", "sample_interval_s",
+            "event_ready_delay_ms",
+        ):
+            value = details.get(field_name)
+            if value not in (None, "") and (
+                not math.isfinite(float(value)) or float(value) < 0
+            ):
+                raise ValueError(f"{field_name} must be finite and non-negative")
         stamp = timestamp or datetime.now(timezone.utc).isoformat()
         raw = {
             "timestamp": stamp,
@@ -3388,6 +3429,29 @@ class GrowthLogger:
                 stamp if event_state != EVENT_STATE_PENDING else ""
             ),
             **self._capture_columns(capture_metadata),
+            "trigger_source": str(details.get("trigger_source") or ""),
+            "model_version": str(details.get("model_version") or ""),
+            "model_input_mode": str(details.get("model_input_mode") or ""),
+            "model_output_labels": (
+                json.dumps(labels, separators=(",", ":")) if labels else ""
+            ),
+            "model_supports_1x1": (
+                str(bool(details.get("model_supports_1x1")))
+                if "model_supports_1x1" in details else ""
+            ),
+            "model_change_from": change_from,
+            "model_change_to": change_to,
+            "trigger_capture_sequence": details.get(
+                "trigger_capture_sequence", "",
+            ),
+            "pre_window_s": details.get("pre_window_s", ""),
+            "post_window_s": details.get("post_window_s", ""),
+            "sample_interval_s": details.get("sample_interval_s", ""),
+            "post_window_complete": (
+                str(bool(details.get("post_window_complete")))
+                if "post_window_complete" in details else ""
+            ),
+            "event_ready_delay_ms": details.get("event_ready_delay_ms", ""),
         }
         return self._stringify_csv_row(raw, self.AUTO_CAPTURE_FIELDS)
 
@@ -3440,6 +3504,7 @@ class GrowthLogger:
         pyro_temp: Optional[float] = None,
         event_capture_metadata: Optional[dict] = None,
         classifier_snapshot: Optional[Mapping[str, object]] = None,
+        event_metadata: Optional[Mapping[str, object]] = None,
     ) -> AutoCaptureCommitResult:
         """Crash-transactionally persist one event row and its frame buffer."""
         if self._session_dir is None or not self._auto_capture_stream_ready():
@@ -3481,6 +3546,14 @@ class GrowthLogger:
                 and pos < len(frame_capture_metadata)
                 else {}
             )
+            frame_role = str(metadata.get("frame_role") or "")
+            if frame_role and frame_role not in {"pre", "trigger", "post"}:
+                raise ValueError("auto-capture frame role is invalid")
+            relative_value = metadata.get("relative_to_trigger_s", "")
+            if relative_value not in (None, "") and not math.isfinite(
+                float(relative_value)
+            ):
+                raise ValueError("relative trigger time must be finite")
             raw_manifest = {
                 "frame_path": f"buf_{pos:02d}_{ts_tag}.bmp",
                 **self._capture_columns(metadata),
@@ -3496,6 +3569,11 @@ class GrowthLogger:
                 "realignment_active": metadata.get("realignment_active", ""),
                 "calibration_id": metadata.get("calibration_id", ""),
                 "basis_bundle_id": metadata.get("basis_bundle_id", ""),
+                "frame_role": frame_role,
+                "relative_to_trigger_s": relative_value,
+                "trigger_capture_sequence": metadata.get(
+                    "trigger_capture_sequence", "",
+                ),
             }
             selected.append((
                 frame,
@@ -3551,6 +3629,7 @@ class GrowthLogger:
                 EVENT_STATE_PENDING if buffer_count else EVENT_STATE_AUTO_SKIPPED
             ),
             capture_metadata=event_capture_metadata,
+            event_metadata=event_metadata,
         )
         manifest_rows = [manifest for _frame, manifest in selected]
         try:

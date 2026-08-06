@@ -2,7 +2,17 @@
 
 **Status:** Draft for group review · Last updated 2026-04-28
 
-This document describes the algorithm behind the Growth Monitor's intelligent
+> **Production update (2026-08-06).** The live GUI now uses
+> `ReconstructionChangeCaptureEngine`. It learns a stable model-label
+> baseline, requires three consecutive unique capture sequences before
+> accepting a label change, and saves one full-resolution frame per second
+> from 60 seconds before through 60 seconds after the first candidate frame.
+> Bad/OOD output, camera discontinuity, model-version changes, and output-class
+> changes reset or suspend detection. The output contract is dynamic: models
+> with `1x1` retain it; models without it use only their actual labels. The
+> pixel method below remains an offline diagnostic and compatibility baseline.
+
+This document describes the historical algorithm behind the Growth Monitor's
 RHEED auto-capture (`gui/auto_capture.py::PixelDiffChangeDetector` and
 `AutoCaptureEngine`), the empirical evidence supporting its threshold and
 mode choices, and the limitations a reader should be aware of when
@@ -238,8 +248,8 @@ current), `EmbeddingChangeDetector` (Tier 2, planned), and
 
 | File | Role |
 |---|---|
-| `gui/auto_capture.py` | `ChangeDetector` ABC + 3 implementations + `AutoCaptureEngine` |
-| `gui/growth_app.py` | Wires `AutoCaptureEngine` to camera frames, arms/disarms with session lifecycle |
+| `gui/auto_capture.py` | Production model-transition engine plus legacy pixel detectors |
+| `gui/growth_app.py` | Binds classifier outputs to camera frames and session lifecycle |
 | `gui/growth_logger.py` | Schema and CSV writer for `auto_capture_events.csv` |
 | `scripts/rheed_change_detector.py` | Offline detector script — CSV + 1D plot, useful for quick threshold tuning |
 | `scripts/rheed_change_detector_report.py` | Offline detector report — full validation HTML |

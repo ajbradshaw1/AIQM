@@ -246,9 +246,13 @@ class EventsEqualizerAlignmentTests(unittest.TestCase):
     def test_manifest_routes_exact_frame_metadata_to_shared_panel(self) -> None:
         row = _manifest_row(self.frame_path.name)
         self._write_manifest(row)
-        self.assertEqual(
-            set(GrowthLogger.AUTO_CAPTURE_MANIFEST_FIELDS),
-            set(_EQUALIZER_MANIFEST_FIELDS),
+        # Model-change capture appends event-window fields that retrospective
+        # Equalizer does not consume; its required provenance remains a
+        # strict subset of the manifest schema.
+        self.assertTrue(
+            set(_EQUALIZER_MANIFEST_FIELDS).issubset(
+                GrowthLogger.AUTO_CAPTURE_MANIFEST_FIELDS,
+            ),
         )
 
         panel = self._open_with_fake_panel()

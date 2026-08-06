@@ -10,9 +10,11 @@ in without refactoring.
 from __future__ import annotations
 
 import collections
+import math
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Mapping
 
 import numpy as np
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -205,7 +207,7 @@ class ClassificationChangeDetector(ChangeDetector):
         self._current_scores = None
 
     def set_scores(self, scores: list[float]) -> None:
-        """Provide the latest Classifier2 win-rate scores (len 5)."""
+        """Provide scores in the loaded model's native class order."""
         self._current_scores = np.asarray(scores, dtype=np.float64)
 
     def compute_score(self, frame: np.ndarray) -> float:  # noqa: ARG002 — frame unused
@@ -251,6 +253,206 @@ class ClassificationChangeDetector(ChangeDetector):
 # Event confirmation — plateau-shift test (A: May 22 PI proposal, first cut)
 # ---------------------------------------------------------------------------
 
+# Model-driven reconstruction-change types and state adapter.
+@dataclass(frozen=True)
+class ReconstructionPrediction:
+    """One immutable prediction using the model's real output labels.
+
+    Four-output models do not acquire a synthetic ``1x1`` score; five-output
+    models retain it normally. ``scores`` is normalized only over ``labels``.
+    """
+
+    source: str
+    model_version: str
+    source_capture_sequence: int
+    source_captured_monotonic_ns: int
+    labels: tuple[str, ...]
+    scores: tuple[float, ...]
+    predicted_label: str
+    valid: bool = True
+    invalid_reason: str = ""
+    view_segment_id: int | None = None
+    visual_history_generation: int = 0
+    model_input_mode: str = "unknown"
+
+    @property
+    def supports_1x1(self) -> bool:
+        return any(_is_1x1_label(label) for label in self.labels)
+
+    def score_dict(self) -> dict[str, float]:
+        return dict(zip(self.labels, self.scores))
+
+
+@dataclass(frozen=True)
+class CapturedFrameSample:
+    """One full-resolution frame selected by the 1 Hz rolling sampler."""
+
+    frame: np.ndarray = field(repr=False, compare=False)
+    metadata: dict = field(repr=False, compare=False)
+    captured_monotonic_ns: int
+    capture_sequence: int
+
+
+@dataclass(frozen=True)
+class ReconstructionChangeEvent:
+    """A complete pre/post frame window around one stable label change."""
+
+    prediction: ReconstructionPrediction
+    previous_label: str
+    new_label: str
+    change_score: float
+    trigger_capture: CapturedFrameSample
+    captures: tuple[CapturedFrameSample, ...]
+    pre_window_s: float
+    post_window_s: float
+    sample_interval_s: float
+
+    def capture_payloads(self) -> list[tuple[np.ndarray, dict]]:
+        """Return logger-ready captures with relative time and frame role."""
+        payloads: list[tuple[np.ndarray, dict]] = []
+        trigger_ns = self.prediction.source_captured_monotonic_ns
+        trigger_sequence = self.prediction.source_capture_sequence
+        for sample in self.captures:
+            relative_s = (
+                sample.captured_monotonic_ns - trigger_ns
+            ) / 1_000_000_000.0
+            if sample.capture_sequence == self.trigger_capture.capture_sequence:
+                role = "trigger"
+            elif sample.captured_monotonic_ns < trigger_ns:
+                role = "pre"
+            else:
+                role = "post"
+            metadata = dict(sample.metadata)
+            metadata.update({
+                "frame_role": role,
+                "relative_to_trigger_s": relative_s,
+                "trigger_capture_sequence": trigger_sequence,
+            })
+            payloads.append((sample.frame, metadata))
+        return payloads
+
+
+@dataclass
+class _PendingReconstructionEvent:
+    prediction: ReconstructionPrediction
+    previous_label: str
+    new_label: str
+    change_score: float
+    trigger_capture: CapturedFrameSample
+    captures: list[CapturedFrameSample]
+    end_monotonic_ns: int
+
+
+def _is_1x1_label(label: str) -> bool:
+    token = str(label).lower().replace(" ", "").replace("×", "x")
+    return token in {"1x1", "(1x1)"}
+
+
+def _invalid_prediction(reason: str, state) -> ReconstructionPrediction:
+    return ReconstructionPrediction(
+        source="classifier",
+        model_version=str(getattr(state, "model_version", "") or ""),
+        source_capture_sequence=int(
+            getattr(state, "source_capture_sequence", 0) or 0
+        ),
+        source_captured_monotonic_ns=int(
+            getattr(state, "source_received_monotonic_ns", 0) or 0
+        ),
+        labels=(),
+        scores=(),
+        predicted_label="",
+        valid=False,
+        invalid_reason=reason,
+        view_segment_id=getattr(state, "view_segment_id", None),
+        visual_history_generation=int(
+            getattr(state, "visual_history_generation", 0) or 0
+        ),
+        model_input_mode=str(
+            getattr(state, "model_input_mode", "unknown") or "unknown"
+        ),
+    )
+
+
+def classifier_prediction_from_state(state) -> ReconstructionPrediction:
+    """Adapt ``ClassifierState`` without assuming four or five outputs.
+
+    This is an evidence-capture gate, not an advisory/control gate, so the
+    current single-frame runtime's ``prediction_actionable=False`` does not
+    suppress collection. Bad, OOD, unaligned, stale, or malformed outputs
+    are still rejected fail-closed.
+    """
+    if not bool(getattr(state, "ready", False)):
+        return _invalid_prediction("classifier_not_ready", state)
+    if str(getattr(state, "error", "") or ""):
+        return _invalid_prediction("classifier_error", state)
+    if int(getattr(state, "last_frame_number", -1)) < 0:
+        return _invalid_prediction("no_classified_frame", state)
+    if int(getattr(state, "source_capture_sequence", 0) or 0) <= 0:
+        return _invalid_prediction("missing_capture_sequence", state)
+    if int(getattr(state, "source_received_monotonic_ns", 0) or 0) <= 0:
+        return _invalid_prediction("missing_capture_time", state)
+    if getattr(state, "gun_aligned", None) is not True:
+        return _invalid_prediction("gun_not_aligned", state)
+    if bool(getattr(state, "is_bad", False)):
+        return _invalid_prediction("bad_frame", state)
+    if bool(getattr(state, "is_ood", False)):
+        return _invalid_prediction("out_of_distribution", state)
+    if not bool(getattr(state, "has_confident_data", False)):
+        return _invalid_prediction("no_confident_prediction", state)
+
+    raw = getattr(state, "raw_scores", None)
+    if not isinstance(raw, Mapping) or len(raw) < 2:
+        return _invalid_prediction("invalid_output_contract", state)
+    values: dict[str, float] = {}
+    try:
+        for raw_label, raw_value in raw.items():
+            label = str(raw_label).strip()
+            value = float(raw_value)
+            if not label or label in values or not math.isfinite(value) or value < 0:
+                raise ValueError
+            values[label] = value
+    except (TypeError, ValueError):
+        return _invalid_prediction("non_finite_model_scores", state)
+    total = sum(values.values())
+    if not math.isfinite(total) or total <= 0:
+        return _invalid_prediction("zero_model_score_sum", state)
+
+    labels = tuple(sorted(values))
+    scores = tuple(values[label] / total for label in labels)
+    predicted_label = max(labels, key=lambda label: (values[label], label))
+    return ReconstructionPrediction(
+        source="classifier",
+        model_version=str(getattr(state, "model_version", "") or "unknown"),
+        source_capture_sequence=int(state.source_capture_sequence),
+        source_captured_monotonic_ns=int(state.source_received_monotonic_ns),
+        labels=labels,
+        scores=scores,
+        predicted_label=predicted_label,
+        view_segment_id=getattr(state, "view_segment_id", None),
+        visual_history_generation=int(
+            getattr(state, "visual_history_generation", 0) or 0
+        ),
+        model_input_mode=str(
+            getattr(state, "model_input_mode", "unknown") or "unknown"
+        ),
+    )
+
+
+def _jensen_shannon(left: tuple[float, ...], right: tuple[float, ...]) -> float:
+    p = np.asarray(left, dtype=np.float64)
+    q = np.asarray(right, dtype=np.float64)
+    midpoint = 0.5 * (p + q)
+
+    def _kl(values: np.ndarray, reference: np.ndarray) -> float:
+        mask = values > 0
+        return float(np.sum(
+            values[mask] * np.log2(values[mask] / reference[mask]),
+        ))
+
+    return 0.5 * _kl(p, midpoint) + 0.5 * _kl(q, midpoint)
+
+
+# Event confirmation for the legacy pixel detector.
 @dataclass
 class ConfirmationResult:
     """Outcome of the plateau-shift confirmation test.
@@ -383,6 +585,385 @@ def confirm_event_by_plateau_shift(
 # AutoCaptureEngine
 # ---------------------------------------------------------------------------
 
+# Production engine.
+class ReconstructionChangeCaptureEngine(QObject):
+    """Capture one frame/second around stable model-label transitions.
+
+    Camera frames and classifier emissions arrive on separate Qt paths. This
+    engine binds them through capture sequence and monotonic receive time,
+    requires consecutive unique predictions, and emits only after the full
+    post-event window exists.
+    """
+
+    event_ready = pyqtSignal(object)
+
+    def __init__(
+        self,
+        *,
+        pre_window_s: float = 60.0,
+        post_window_s: float = 60.0,
+        sample_interval_s: float = 1.0,
+        stable_predictions: int = 3,
+        max_pending_events: int = 4,
+        parent=None,
+    ):
+        super().__init__(parent)
+        if pre_window_s < 0 or post_window_s < 0 or sample_interval_s <= 0:
+            raise ValueError("capture windows must be non-negative and cadence positive")
+        if stable_predictions < 1 or max_pending_events < 1:
+            raise ValueError("stability and pending-event limits must be positive")
+        self.pre_window_s = float(pre_window_s)
+        self.post_window_s = float(post_window_s)
+        self.sample_interval_s = float(sample_interval_s)
+        self.stable_predictions = int(stable_predictions)
+        self.max_pending_events = int(max_pending_events)
+        # A label change is confirmed a few classifier cycles after its first
+        # candidate frame. Retain a bounded grace period so those cycles do
+        # not consume the requested pre-trigger window.
+        self._confirmation_grace_s = max(
+            10.0,
+            self.stable_predictions * self.sample_interval_s,
+        )
+        retention_s = self.pre_window_s + self._confirmation_grace_s
+        max_samples = int(math.ceil(retention_s / sample_interval_s)) + 3
+        self._samples: collections.deque[CapturedFrameSample] = collections.deque(
+            maxlen=max_samples,
+        )
+        self._pending: list[_PendingReconstructionEvent] = []
+        self._enabled = False
+        self._last_sample_ns = 0
+        self._last_prediction_sequence = 0
+        self._capture_context: tuple | None = None
+        self._prediction_contract: tuple | None = None
+        self._baseline_label = ""
+        self._baseline_scores: tuple[float, ...] = ()
+        self._candidate_label = ""
+        self._candidate_count = 0
+        self._candidate_first: ReconstructionPrediction | None = None
+        self._latest_score = 0.0
+        self._last_invalid_reason = ""
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = bool(value)
+
+    @property
+    def latest_score(self) -> float:
+        return self._latest_score
+
+    @property
+    def baseline_label(self) -> str:
+        return self._baseline_label
+
+    @property
+    def pending_event_count(self) -> int:
+        return len(self._pending)
+
+    @property
+    def sampled_frame_count(self) -> int:
+        return len(self._samples)
+
+    @property
+    def status_text(self) -> str:
+        if not self._enabled:
+            return "stopped"
+        if self._pending:
+            return f"collecting post-window ({len(self._pending)} pending)"
+        if self._baseline_label:
+            if self._candidate_label:
+                return (
+                    f"baseline {self._baseline_label}; candidate "
+                    f"{self._candidate_label} {self._candidate_count}/"
+                    f"{self.stable_predictions}"
+                )
+            return f"baseline {self._baseline_label}"
+        if self._last_invalid_reason:
+            return f"waiting for valid model output ({self._last_invalid_reason})"
+        return "learning model baseline"
+
+    def get_recent_captures(self) -> list[tuple[np.ndarray, dict]]:
+        """Compatibility snapshot of the current pre-event ring."""
+        return [
+            (sample.frame.copy(), dict(sample.metadata))
+            for sample in self._samples
+        ]
+
+    def reset(self) -> None:
+        """Cancel incomplete events and release all retained frame copies."""
+        self._samples.clear()
+        self._pending.clear()
+        self._last_sample_ns = 0
+        self._last_prediction_sequence = 0
+        self._capture_context = None
+        self._prediction_contract = None
+        self._baseline_label = ""
+        self._baseline_scores = ()
+        self._clear_candidate()
+        self._latest_score = 0.0
+        self._last_invalid_reason = ""
+
+    def evaluate(
+        self,
+        frame: np.ndarray,
+        capture_metadata: dict | None = None,
+        *,
+        now_monotonic_ns: int | None = None,
+    ) -> None:
+        """Compatibility name for camera-path ingestion."""
+        self.ingest_capture(
+            frame,
+            capture_metadata,
+            now_monotonic_ns=now_monotonic_ns,
+        )
+
+    def ingest_capture(
+        self,
+        frame: np.ndarray,
+        capture_metadata: dict | None = None,
+        *,
+        now_monotonic_ns: int | None = None,
+    ) -> None:
+        if not self._enabled:
+            return
+        metadata = dict(capture_metadata or {})
+        try:
+            sequence = int(metadata.get("capture_sequence") or 0)
+            captured_ns = int(metadata.get("captured_monotonic_ns") or 0)
+        except (TypeError, ValueError):
+            return
+        if sequence <= 0:
+            return
+        if captured_ns <= 0:
+            captured_ns = int(now_monotonic_ns or time.perf_counter_ns())
+            metadata["captured_monotonic_ns"] = captured_ns
+        context = self._capture_context_token(metadata)
+        if self._capture_context is not None and context != self._capture_context:
+            self.reset()
+        self._capture_context = context
+        if captured_ns <= self._last_sample_ns:
+            return
+        cadence_ns = int(self.sample_interval_s * 1_000_000_000)
+        if (
+            self._last_sample_ns
+            and captured_ns - self._last_sample_ns < int(0.9 * cadence_ns)
+        ):
+            return
+
+        owned_frame = np.ascontiguousarray(frame).copy()
+        owned_frame.setflags(write=False)
+        sample = CapturedFrameSample(
+            frame=owned_frame,
+            metadata=metadata,
+            captured_monotonic_ns=captured_ns,
+            capture_sequence=sequence,
+        )
+        self._samples.append(sample)
+        self._last_sample_ns = captured_ns
+        cutoff = captured_ns - int(
+            (self.pre_window_s + self._confirmation_grace_s)
+            * 1_000_000_000
+        )
+        while self._samples and self._samples[0].captured_monotonic_ns < cutoff:
+            self._samples.popleft()
+        self._advance_pending(sample)
+
+    def observe_prediction(self, prediction: ReconstructionPrediction) -> None:
+        if not self._enabled:
+            return
+        if not prediction.valid:
+            self._last_invalid_reason = prediction.invalid_reason
+            self._clear_candidate()
+            return
+        self._last_invalid_reason = ""
+        if prediction.source_capture_sequence <= self._last_prediction_sequence:
+            return
+        self._last_prediction_sequence = prediction.source_capture_sequence
+        if not self._prediction_matches_capture_context(prediction):
+            self._clear_candidate()
+            self._last_invalid_reason = "capture_context_mismatch"
+            return
+
+        contract = (
+            prediction.source,
+            prediction.model_version,
+            prediction.labels,
+            prediction.view_segment_id,
+            prediction.visual_history_generation,
+        )
+        if contract != self._prediction_contract:
+            self._prediction_contract = contract
+            self._baseline_label = ""
+            self._baseline_scores = ()
+            self._clear_candidate()
+
+        label = prediction.predicted_label
+        if not self._baseline_label:
+            if label != self._candidate_label:
+                self._candidate_label = label
+                self._candidate_count = 1
+                self._candidate_first = prediction
+            else:
+                self._candidate_count += 1
+            if self._candidate_count >= self.stable_predictions:
+                self._baseline_label = label
+                self._baseline_scores = prediction.scores
+                self._clear_candidate()
+            return
+
+        if label == self._baseline_label:
+            self._baseline_scores = prediction.scores
+            self._clear_candidate()
+            self._latest_score = 0.0
+            return
+
+        if label != self._candidate_label:
+            self._candidate_label = label
+            self._candidate_count = 1
+            self._candidate_first = prediction
+        else:
+            self._candidate_count += 1
+        if self._candidate_count < self.stable_predictions:
+            return
+
+        trigger_prediction = self._candidate_first or prediction
+        score = _jensen_shannon(self._baseline_scores, prediction.scores)
+        self._latest_score = score
+        self._start_pending_event(
+            trigger_prediction,
+            previous_label=self._baseline_label,
+            new_label=label,
+            score=score,
+        )
+        self._baseline_label = label
+        self._baseline_scores = prediction.scores
+        self._clear_candidate()
+
+    def _start_pending_event(
+        self,
+        prediction: ReconstructionPrediction,
+        *,
+        previous_label: str,
+        new_label: str,
+        score: float,
+    ) -> None:
+        if len(self._pending) >= self.max_pending_events or not self._samples:
+            self._last_invalid_reason = "pending_event_limit_or_missing_frames"
+            return
+        trigger = next(
+            (
+                sample for sample in self._samples
+                if sample.capture_sequence == prediction.source_capture_sequence
+            ),
+            None,
+        )
+        if trigger is None:
+            trigger = min(
+                self._samples,
+                key=lambda sample: abs(
+                    sample.captured_monotonic_ns
+                    - prediction.source_captured_monotonic_ns
+                ),
+            )
+            if abs(
+                trigger.captured_monotonic_ns
+                - prediction.source_captured_monotonic_ns
+            ) > int(1.1 * self.sample_interval_s * 1_000_000_000):
+                self._last_invalid_reason = "trigger_frame_not_in_sample_window"
+                return
+        trigger_ns = prediction.source_captured_monotonic_ns
+        start_ns = trigger_ns - int(self.pre_window_s * 1_000_000_000)
+        end_ns = trigger_ns + int(self.post_window_s * 1_000_000_000)
+        captures = [
+            sample for sample in self._samples
+            if start_ns <= sample.captured_monotonic_ns <= end_ns
+        ]
+        pending = _PendingReconstructionEvent(
+            prediction=prediction,
+            previous_label=previous_label,
+            new_label=new_label,
+            change_score=score,
+            trigger_capture=trigger,
+            captures=captures,
+            end_monotonic_ns=end_ns,
+        )
+        self._pending.append(pending)
+        if self._last_sample_ns >= end_ns:
+            self._complete_pending(pending)
+
+    def _advance_pending(self, sample: CapturedFrameSample) -> None:
+        tolerance_ns = int(self.sample_interval_s * 500_000_000)
+        for pending in tuple(self._pending):
+            if (
+                sample.captured_monotonic_ns
+                <= pending.end_monotonic_ns + tolerance_ns
+                and all(
+                    prior.capture_sequence != sample.capture_sequence
+                    for prior in pending.captures
+                )
+            ):
+                pending.captures.append(sample)
+            if sample.captured_monotonic_ns >= pending.end_monotonic_ns:
+                self._complete_pending(pending)
+
+    def _complete_pending(self, pending: _PendingReconstructionEvent) -> None:
+        if pending not in self._pending:
+            return
+        self._pending.remove(pending)
+        captures = tuple(sorted(
+            pending.captures,
+            key=lambda sample: sample.captured_monotonic_ns,
+        ))
+        if not captures:
+            return
+        self.event_ready.emit(ReconstructionChangeEvent(
+            prediction=pending.prediction,
+            previous_label=pending.previous_label,
+            new_label=pending.new_label,
+            change_score=pending.change_score,
+            trigger_capture=pending.trigger_capture,
+            captures=captures,
+            pre_window_s=self.pre_window_s,
+            post_window_s=self.post_window_s,
+            sample_interval_s=self.sample_interval_s,
+        ))
+
+    def _prediction_matches_capture_context(
+        self,
+        prediction: ReconstructionPrediction,
+    ) -> bool:
+        if self._capture_context is None:
+            return False
+        _session, _backend, _hwnd, _geometry, view, generation, _width, _height = (
+            self._capture_context
+        )
+        if prediction.view_segment_id != view:
+            return False
+        return prediction.visual_history_generation == generation
+
+    @staticmethod
+    def _capture_context_token(metadata: Mapping[str, object]) -> tuple:
+        return (
+            str(metadata.get("session_id") or ""),
+            str(metadata.get("capture_backend") or ""),
+            int(metadata.get("source_hwnd") or 0),
+            str(metadata.get("capture_geometry_id") or ""),
+            metadata.get("view_segment_id"),
+            int(metadata.get("visual_history_generation") or 0),
+            int(metadata.get("camera_width") or 0),
+            int(metadata.get("camera_height") or 0),
+        )
+
+    def _clear_candidate(self) -> None:
+        self._candidate_label = ""
+        self._candidate_count = 0
+        self._candidate_first = None
+
+
+# Legacy pixel-driven engine retained for offline comparison.
 class AutoCaptureEngine(QObject):
     """Evaluates each camera frame and emits *frame_captured* when a
     significant change is detected (after debounce, respecting cooldown)."""

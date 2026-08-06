@@ -328,6 +328,9 @@ class CaptureProvenanceTests(unittest.TestCase):
                     "realignment_active": False,
                     "calibration_id": "cal-test-001",
                     "basis_bundle_id": "basis-test-sha256",
+                    "frame_role": "pre" if i == 0 else "trigger",
+                    "relative_to_trigger_s": -1.0 + i,
+                    "trigger_capture_sequence": 101,
                 }
                 for i in range(2)
             ]
@@ -339,6 +342,23 @@ class CaptureProvenanceTests(unittest.TestCase):
                 frame_capture_metadata=metadata,
                 event_capture_metadata=metadata[-1],
                 classifier_snapshot=_classifier_snapshot(),
+                event_metadata={
+                    "trigger_source": "classifier",
+                    "model_version": "model-five-output",
+                    "model_input_mode": "single_frame",
+                    "model_output_labels": [
+                        "1x1", "Tw(2x1)", "c(6x2)", "RT13", "HTR",
+                    ],
+                    "model_supports_1x1": True,
+                    "model_change_from": "1x1",
+                    "model_change_to": "RT13",
+                    "trigger_capture_sequence": 101,
+                    "pre_window_s": 60.0,
+                    "post_window_s": 60.0,
+                    "sample_interval_s": 1.0,
+                    "post_window_complete": True,
+                    "event_ready_delay_ms": 60_050.0,
+                },
             )
             event_dir = logger.session_dir / result.buffer_dir
             csv_path = logger.session_dir / "auto_capture_events.csv"
@@ -358,6 +378,16 @@ class CaptureProvenanceTests(unittest.TestCase):
             self.assertEqual(event_row["event_idx"], "1")
             self.assertEqual(event_row["buffer_count"], "2")
             self.assertEqual(event_row["buffer_dir"], result.buffer_dir)
+            self.assertEqual(event_row["trigger_source"], "classifier")
+            self.assertEqual(event_row["model_change_from"], "1x1")
+            self.assertEqual(event_row["model_change_to"], "RT13")
+            self.assertEqual(event_row["model_supports_1x1"], "True")
+            self.assertEqual(
+                json.loads(event_row["model_output_labels"]),
+                ["1x1", "Tw(2x1)", "c(6x2)", "RT13", "HTR"],
+            )
+            self.assertEqual(event_row["post_window_complete"], "True")
+            self.assertEqual(event_row["event_ready_delay_ms"], "60050.0")
             self.assertEqual(
                 json.loads((event_dir / "classifier_state.json").read_text()),
                 _classifier_snapshot(),
@@ -366,6 +396,14 @@ class CaptureProvenanceTests(unittest.TestCase):
             self.assertEqual(
                 [row["capture_sequence"] for row in rows],
                 ["100", "101"],
+            )
+            self.assertEqual(
+                [row["frame_role"] for row in rows],
+                ["pre", "trigger"],
+            )
+            self.assertEqual(
+                [row["trigger_capture_sequence"] for row in rows],
+                ["101", "101"],
             )
             for row in rows:
                 self.assertTrue((event_dir / row["frame_path"]).exists())
