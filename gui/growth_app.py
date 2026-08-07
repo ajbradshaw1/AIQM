@@ -55,6 +55,7 @@ from gui.movie_export import (
     MovieExportWorker,
 )
 from gui.rheed_intensity_window import RheedIntensityWindow
+from gui.rheed_intensity import RheedIntensitySample, RheedRoiDefinition
 from gui.pyrometer_window import PyrometerWindow
 from gui.temporal_observability import (
     process_metrics,
@@ -382,6 +383,12 @@ class GrowthApp(QMainWindow):
         # session restart without needing reconnection.
         self.rheed_intensity_window = RheedIntensityWindow()
         self.pyrometer_window = PyrometerWindow()
+        self.rheed_intensity_window.measurement_ready.connect(
+            self._on_rheed_roi_measurement,
+        )
+        self.rheed_intensity_window.roi_event.connect(
+            self._on_rheed_roi_event,
+        )
         self.monitor.open_rheed_trend_requested.connect(
             lambda: (
                 self.rheed_intensity_window.show(),
@@ -849,6 +856,12 @@ class GrowthApp(QMainWindow):
 
         # Clear trend window histories so a new growth starts fresh —
         # without this, a second growth inherits the first growth's trace.
+        if self.rheed_intensity_window.active_roi is not None:
+            self.growth_log.record_rheed_roi_definition(
+                "activated",
+                self.rheed_intensity_window.active_roi,
+                reason="active ROI carried into a new session",
+            )
         self.rheed_intensity_window.reset()
         self.pyrometer_window.reset()
 
@@ -2361,6 +2374,41 @@ class GrowthApp(QMainWindow):
                     previous_view_segment_id=updated.view_segment_id,
                     frame_role="history_ready",
                 )
+
+    @pyqtSlot(object)
+    def _on_rheed_roi_measurement(self, sample: object) -> None:
+        """Persist a capture-bound ROI sample without changing camera state."""
+        if not isinstance(sample, RheedIntensitySample):
+            log.warning("Ignored invalid RHEED ROI intensity signal payload")
+            return
+        if not self.growth_log.active:
+            return
+        qc = self._rheed_qc_state
+        self.growth_log.record_rheed_roi_intensity(
+            sample,
+            elapsed_s=self.monitor.get_elapsed_seconds(),
+            view_segment_id=qc.view_segment_id,
+            visual_history_generation=qc.visual_history_generation,
+        )
+
+    @pyqtSlot(str, object, str)
+    def _on_rheed_roi_event(
+        self,
+        event: str,
+        roi: object,
+        reason: str,
+    ) -> None:
+        """Journal ROI definitions and invalidations while a session runs."""
+        if not self.growth_log.active:
+            return
+        if not isinstance(roi, RheedRoiDefinition):
+            log.warning("Ignored invalid RHEED ROI definition signal payload")
+            return
+        self.growth_log.record_rheed_roi_definition(
+            event,
+            roi,
+            reason=reason,
+        )
 
     @pyqtSlot(CameraState)
     def _on_camera_state(self, state: CameraState):
