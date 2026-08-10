@@ -2456,6 +2456,9 @@ class GrowthApp(QMainWindow):
             self.monitor.set_auto_capture_status(
                 "Auto-capture: stopped (RHEED capture unavailable)"
             )
+            handled_pre_session_loss = self._return_to_idle_if_arm_failed(
+                state,
+            )
             if (
                 self._rheed_qc_state.session_active
                 and not self._camera_capture_interrupted
@@ -2477,10 +2480,15 @@ class GrowthApp(QMainWindow):
                     frame_role="camera_disconnect",
                     note=state.error,
                 )
-            self.statusBar().showMessage(
-                f"RHEED capture stopped: {state.error}",
-                10000,
-            )
+            if not handled_pre_session_loss:
+                # Suppressed after a pre-session teardown: that path has
+                # already said something more specific — either the reason
+                # for the failed arm, or _on_disarm's actionable warning
+                # that workers are still stopping.
+                self.statusBar().showMessage(
+                    f"RHEED capture stopped: {state.error}",
+                    10000,
+                )
         elif (
             state.connected
             and getattr(state, "valid", state.connected)
@@ -2535,6 +2543,55 @@ class GrowthApp(QMainWindow):
                     f"score: {self.auto_capture_engine.latest_score:.2f} | "
                     f"events: {self._auto_capture_event_count}"
                 )
+
+    def _return_to_idle_if_arm_failed(self, state) -> bool:
+        """Tear down an arm the camera cannot support. Returns True if it did.
+
+        Scope is broader than the name suggests, and deliberately so: this
+        fires on ANY camera loss while armed with no session started — a
+        refused connect, but equally a camera that connected and then
+        dropped during preview. Both leave the grower armed with no frames,
+        and in both the honest state is idle. It is named for the case that
+        motivated it; the tests cover both.
+
+        _on_arm sets `armed` before the camera thread answers, so a refused
+        or failed connect used to leave the GUI armed: config panel locked,
+        ARM button reading DISARM, after an arm that did not succeed. The
+        grower had to work out that the next click was a disarm.
+
+        This performs a REAL disarm rather than relabelling the state.
+        Flipping to `idle` alone would unlock the config panel while the
+        pyrometer, MISTRAL, evap and classifier workers — which arm
+        successfully and independently — still own the hardware they were
+        configured against. That is the exact condition _on_disarm's
+        "Disarm incomplete" guard exists to prevent, so the fix reuses it
+        and inherits that guard: if a worker will not stop, the app stays
+        armed and says so.
+
+        Deliberately scoped to a failure DURING ARM. Losing the camera
+        mid-session must not tear the session down — sensor logging
+        continues so the record still shows when capture was lost, which is
+        why growth_log.active is checked rather than the state alone.
+        """
+        if (
+            self.monitor._state != "armed"
+            or self.growth_log.active
+            or self._shutdown_pending
+        ):
+            return False
+        log.error("Camera lost before the session started: %s", state.error)
+        self._on_disarm()
+        if self.monitor._state != "idle":
+            # _on_disarm refused: a worker would not stop, so it stayed
+            # armed and posted "Disarm incomplete — wait and press DISARM
+            # again". That message is ACTIONABLE and this one is not, so it
+            # has to be the one left on screen. Returning True suppresses
+            # the caller's trailing message too.
+            return True
+        self.statusBar().showMessage(
+            f"Camera did not connect — disarmed: {state.error}", 10000,
+        )
+        return True
 
     def _announce_camera_exposure(self, state) -> None:
         """Tell the grower the exposure the camera actually confirmed.

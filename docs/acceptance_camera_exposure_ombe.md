@@ -166,20 +166,25 @@ and *Keep current*, so the value has to be set before arming. Setting it
 before opening kSA is not required by the GUI, but it keeps the refusal the
 only variable under test.
 
-> **The GUI stays ARMED after a refused connect.** `_on_arm` sets the state
-> to `armed` before the camera thread reports back, and the async error path
-> stops automation without returning to `idle` — the only `set_state("idle")`
-> is in the DISARM handler. So after the expected refusal the config panel is
-> still locked and the ARM button now reads DISARM. Press it once before
-> continuing. This is pre-existing behaviour, not something this branch
-> introduced; see the follow-up note at the end of this document.
+> **On `feat/ombe-exposure-integration` the GUI stays ARMED after a refused
+> connect** — `_on_arm` sets `armed` before the camera thread answers, and
+> the error path never returns to `idle`. Press DISARM once before
+> continuing.
+>
+> **On `fix/arm-state-on-camera-failure` and later this is fixed**: a
+> refused ARM disarms itself and the status bar names the camera's reason.
+> Expect to be idle already and skip the DISARM step below. If instead you
+> see "Disarm incomplete — wait and press DISARM again", a worker has not
+> stopped: wait and press DISARM, exactly as that message says.
 
 - [ ] Uncheck *Keep current*, set 100 ms (while disarmed)
 - [ ] Open kSA and let it take the camera
 - [ ] Press ARM
 - [ ] The GUI **refuses** with "Manual exposure requires Full camera
       access", rather than connecting in Read mode and pretending
-- [ ] The GUI is still **armed** — the button reads DISARM. Press **DISARM**
+- [ ] `feat/ombe-exposure-integration`: still **armed** — press **DISARM**.
+      `fix/arm-state-on-camera-failure`+: already idle, with the reason in
+      the status bar
 - [ ] Check *Keep current*, then ARM: Read mode succeeds and frames flow
 - [ ] **DISARM**, close kSA
 
@@ -270,14 +275,16 @@ what lands in the archive.
 §8 stays conditional on the device range and is not a blocker — its logic
 is covered by unit tests.
 
-## Follow-up noticed while writing this
+## Follow-up — FIXED on the stacked branch
 
-A refused camera connect leaves the GUI in the `armed` state. `_on_arm`
-sets `armed` before the camera thread answers, and the async error branch
-in `_on_camera_state` stops the heartbeat, auto-capture and classifier but
-never calls `set_state("idle")`. The grower is left with a locked config
-panel and an ARM button reading DISARM, after an arm that did not succeed.
+A refused camera connect used to leave the GUI `armed`: locked config
+panel, ARM button reading DISARM, after an arm that did not succeed.
 
-Pre-existing, not introduced by this branch, and deliberately not fixed
-here — a state-machine change wants its own review rather than riding along
-with an exposure feature. Worth raising as a separate issue.
+Fixed on `fix/arm-state-on-camera-failure`, which performs a real disarm
+rather than relabelling the state — the other workers arm independently and
+succeed, so unlocking the config panel while they still own their hardware
+was the condition _on_disarm's "Disarm incomplete" guard exists to prevent.
+Mid-session camera loss is deliberately untouched: the session survives and
+sensor logging continues.
+
+If that branch has merged, §7 above is simpler than written.
