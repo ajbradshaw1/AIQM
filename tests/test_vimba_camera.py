@@ -29,6 +29,7 @@ import threading
 import time
 import types
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
@@ -40,13 +41,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # ---------------------------------------------------------------------------
 
 class FakeFrame:
-    """Fake vmbpy Frame — mimics ``as_numpy_ndarray()`` returning a 2D view."""
+    """Fake vmbpy Frame — mimics ``as_numpy_ndarray()`` returning a 2D view.
 
-    def __init__(self, img: np.ndarray):
+    ``frame_id`` mirrors vmbpy's ``get_id()``. Pass ``None`` to model a
+    firmware that exposes no frame ID, which must degrade to the driver's
+    local ordinal rather than losing the frame.
+    """
+
+    def __init__(self, img: np.ndarray, frame_id: Optional[int] = None):
         self._img = img
+        self._frame_id = frame_id
 
     def as_numpy_ndarray(self) -> np.ndarray:
         return self._img
+
+    def get_id(self):
+        if self._frame_id is None:
+            raise AttributeError("this firmware exposes no frame ID")
+        return self._frame_id
 
 
 class FakeVmbCameraError(Exception):
@@ -127,8 +139,16 @@ class FakeTriggerSoftware:
         img = np.full(
             self._camera.frame_shape, self._camera.frame_value, dtype=np.uint16,
         )
+        if self._camera.expose_frame_id:
+            if not self._camera.repeat_next_frame:
+                self._camera.next_frame_id += 1
+            frame_id = self._camera.next_frame_id
+        else:
+            frame_id = None
         if self._camera.handler is not None:
-            self._camera.handler(self._camera, None, FakeFrame(img))
+            self._camera.handler(
+                self._camera, None, FakeFrame(img, frame_id=frame_id),
+            )
 
 
 class FakeCamera:
@@ -173,6 +193,17 @@ class FakeCamera:
         # Frame shape + fill value — tests can override before triggering.
         self.frame_shape = (492, 656)
         self.frame_value = 2048  # mid-12-bit value
+
+        # Camera-side frame ID, as vmbpy's Frame.get_id() reports it. Starts
+        # at a non-zero, non-one value so a test cannot pass by accidentally
+        # matching a local counter. `expose_frame_id=False` models firmware
+        # that provides no ID at all.
+        self.next_frame_id = 5000
+        self.expose_frame_id = True
+        # When set, run() re-dispatches the PREVIOUS frame id instead of
+        # advancing — the over-trigger case, where the camera has not
+        # completed a new exposure and the same image is served again.
+        self.repeat_next_frame = False
 
         # Modes: silent → run() doesn't dispatch to handler
         self.silent = False
@@ -382,6 +413,151 @@ def test_connect_then_read_frame() -> None:
         cam.disconnect()
         assert not cam.connected
         assert fake_cam.stop_streaming_calls >= 1, "stop_streaming was not called"
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def _wait_for_first_frame(cam, timeout_s: float = 0.5) -> None:
+    """Block until the handler has stored a frame, or give up."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        with cam._frame_lock:
+            if cam._latest_frame is not None:
+                return
+        time.sleep(0.005)
+    raise AssertionError("no frame arrived within timeout")
+
+
+def _read_sequences(cam, fake_cam, count: int) -> list[int]:
+    """Return last_capture.sequence for `count` successive reads.
+
+    Each read is preceded by one explicit trigger so the pairing between
+    trigger and observed sequence is deterministic, rather than depending
+    on how many times the background loop happened to fire.
+    """
+    sequences = []
+    for _ in range(count):
+        fake_cam.TriggerSoftware.run()
+        cam.read_frame()
+        sequences.append(cam.last_capture.sequence)
+    return sequences
+
+
+def test_last_capture_reports_camera_frame_id() -> None:
+    """last_capture carries the camera's own frame ID, not a read counter."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=100.0)
+        cam.connect()
+        _wait_for_first_frame(cam)
+        rgb = cam.read_frame()
+
+        capture = cam.last_capture
+        assert capture is not None, "last_capture is None after a successful read"
+        assert capture.backend == "vimba", f"backend: {capture.backend!r}"
+        # FakeCamera starts its IDs at 5000 and pre-increments, so any real
+        # camera-sourced value is > 5000. A local read counter would be a
+        # small integer — this is what distinguishes the two.
+        assert capture.sequence > 5000, (
+            f"sequence {capture.sequence} looks like a local counter, "
+            "not the camera's frame ID"
+        )
+        assert (capture.height, capture.width) == rgb.shape[:2]
+        assert capture.source_hwnd == 0, "Vimba path has no owning window"
+        assert capture.age_ms() >= 0.0
+        assert capture.captured_at_utc.endswith("Z")
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_repeated_exposure_is_visible_in_sequence() -> None:
+    """A re-served cached frame repeats its sequence instead of advancing.
+
+    This is the regression test for the silent over-trigger failure: at the
+    300 ms exposure measured on the Ch-MBE Manta the camera cannot exceed
+    ~3.33 fps, so polling faster re-serves the same exposure. Previously the
+    worker stamped those with capture_sequence = frame_count, which advances
+    unconditionally and made duplicates indistinguishable from new frames.
+    """
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=100.0)
+        cam.connect()
+        _wait_for_first_frame(cam)
+
+        # Baseline: a camera completing a new exposure per trigger.
+        advancing = _read_sequences(cam, fake_cam, 3)
+        assert all(b > a for a, b in zip(advancing, advancing[1:])), (
+            f"fresh exposures must strictly increase, got {advancing}"
+        )
+
+        # Over-trigger: the camera has not finished a new exposure.
+        fake_cam.repeat_next_frame = True
+        repeated = _read_sequences(cam, fake_cam, 3)
+        assert len(set(repeated)) == 1, (
+            f"a re-served exposure must repeat its id, got {repeated}"
+        )
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_missing_frame_id_falls_back_without_losing_the_frame() -> None:
+    """Firmware with no get_id() degrades to a local ordinal, keeps the frame."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        fake_cam.expose_frame_id = False
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=100.0)
+        cam.connect()
+        _wait_for_first_frame(cam)
+
+        sequences = _read_sequences(cam, fake_cam, 3)
+        assert all(b > a for a, b in zip(sequences, sequences[1:])), (
+            f"fallback ordinal must still advance, got {sequences}"
+        )
+        # The frame itself must survive the missing accessor.
+        assert cam.read_frame().shape == (492, 656, 3)
+        with cam._error_lock:
+            assert cam._last_frame_error is None, (
+                f"absent get_id() was treated as an error: "
+                f"{cam._last_frame_error!r}"
+            )
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_last_capture_cleared_on_disconnect() -> None:
+    """Stale provenance must not survive a disconnect."""
+    try:
+        install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=100.0)
+        cam.connect()
+        _wait_for_first_frame(cam)
+        cam.read_frame()
+        assert cam.last_capture is not None
+        cam.disconnect()
+        assert cam.last_capture is None, "provenance survived disconnect"
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_capture_geometry_id_tracks_pixel_policy() -> None:
+    """Geometry id changes when the sensor→array mapping changes."""
+    try:
+        install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        palette = VmbCamera(apply_palette=True).capture_geometry_id
+        plain = VmbCamera(apply_palette=False).capture_geometry_id
+        deeper = VmbCamera(apply_palette=True, bit_depth=8).capture_geometry_id
+        assert palette != plain, "palette choice must change the geometry id"
+        assert palette != deeper, "bit depth must change the geometry id"
+        assert palette.startswith("vimba:"), palette
     finally:
         uninstall_fake_vmbpy()
 

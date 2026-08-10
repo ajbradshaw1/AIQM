@@ -21,7 +21,9 @@ where a kSA tooltip appeared inside a captured RHEED frame).
 
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -245,6 +247,24 @@ class VmbCamera(RheedCamera):
         self._ready_event = threading.Event()
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
+        # Provenance for the frame in _latest_frame, recorded in the same
+        # handler invocation that produced the image. Without this the
+        # worker falls through to its synthetic branch and stamps every
+        # direct-path frame with capture_sequence = frame_count and
+        # frame_age_ms = 0.0, so a re-served cached image is indistinguishable
+        # from a genuinely new one. See _frame_handler.
+        self._latest_capture: Optional[CapturedFrame] = None
+        # Provenance of the frame most recently *returned* by read_frame,
+        # which is what `last_capture` reports. Distinct from
+        # _latest_capture: the handler may overwrite the latest frame
+        # between two reads, and the caller's provenance must describe the
+        # image it actually received.
+        self._last_capture: Optional[CapturedFrame] = None
+        # Fallback ordinal for firmwares whose Frame exposes no usable
+        # frame ID. Only ever used when get_id() is absent or unusable;
+        # the camera's own ID is always preferred because it is the thing
+        # that makes a duplicate detectable.
+        self._fallback_sequence = 0
         # Any exception that terminated the stream thread. Populated by
         # _stream_loop's ``except`` block, read by ``read_frame`` so
         # mid-session stream death surfaces to the caller with its real
@@ -511,19 +531,60 @@ class VmbCamera(RheedCamera):
         Copies the frame out, recycles the buffer, converts to the GUI's
         RGB-uint8 contract, and stores it as the latest frame. A failure
         here must not kill the stream: a bad frame is recorded and skipped.
+
+        Provenance is captured HERE, in the same invocation as the image,
+        because this is the only moment the two are known to belong
+        together. ``sequence`` prefers the camera's own frame ID: the
+        device increments it per exposure, so two reads that return the
+        same cached image carry the same ordinal and the duplicate becomes
+        visible downstream. A counter incremented per read cannot express
+        that — it advances whether or not a new exposure occurred.
         """
         try:
+            monotonic_ns = time.monotonic_ns()
+            captured_at_utc = (
+                datetime.now(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            )
             try:
                 # as_numpy_ndarray() is a view into the frame buffer — copy
                 # it out BEFORE queue_frame() hands the buffer back.
                 img = frame.as_numpy_ndarray().copy().squeeze()
+                # get_id() must also be read before the buffer is recycled.
+                # It is absent on some firmwares and may return None, so
+                # every failure mode falls back to the local ordinal rather
+                # than costing us the frame.
+                try:
+                    frame_id = frame.get_id()
+                except Exception:  # noqa: BLE001
+                    frame_id = None
             finally:
                 # Always recycle: a leaked buffer shrinks the pool and,
                 # once it is exhausted, silently halts capture.
                 cam.queue_frame(frame)
             rgb = self._to_rgb_uint8(img)
+            if frame_id is None:
+                self._fallback_sequence += 1
+                sequence = self._fallback_sequence
+            else:
+                sequence = int(frame_id)
+            height, width = rgb.shape[:2]
+            capture = CapturedFrame(
+                image=rgb,
+                captured_at_utc=captured_at_utc,
+                captured_monotonic_ns=monotonic_ns,
+                sequence=sequence,
+                # Not a window capture — there is no owning HWND. Zero is
+                # the same sentinel the worker's synthetic branch used.
+                source_hwnd=0,
+                width=width,
+                height=height,
+                backend="vimba",
+            )
             with self._frame_lock:
                 self._latest_frame = rgb
+                self._latest_capture = capture
         except Exception as exc:  # noqa: BLE001
             # Record but don't kill the stream — one bad frame shouldn't
             # take down the whole session. Guarded by _error_lock so
@@ -582,6 +643,12 @@ class VmbCamera(RheedCamera):
             raise RuntimeError("Camera not connected.")
         with self._frame_lock:
             latest = self._latest_frame
+            capture = self._latest_capture
+            # Publish the provenance of the frame being returned inside the
+            # same lock acquisition that read it, so `last_capture` can
+            # never describe a different frame than the one handed back.
+            if capture is not None:
+                self._last_capture = capture
         if latest is None:
             if self._active_access_mode == "read":
                 raise FrameNotYetAvailableError(
@@ -610,10 +677,40 @@ class VmbCamera(RheedCamera):
             self._stream_thread = None
         with self._frame_lock:
             self._latest_frame = None
+            self._latest_capture = None
+            self._last_capture = None
 
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def last_capture(self) -> Optional[CapturedFrame]:
+        """Provenance of the frame most recently returned by read_frame.
+
+        ``None`` before the first successful read and after disconnect.
+        ``sequence`` is the camera's own frame ID where the firmware
+        provides one, so a repeated value across two reads means the same
+        exposure was served twice — the signature of polling faster than
+        the exposure time allows. At the 300 ms exposure measured on the
+        Ch-MBE Manta (2026-08-06) the camera cannot exceed ~3.33 fps
+        regardless of trigger rate.
+        """
+        with self._frame_lock:
+            return self._last_capture
+
+    @property
+    def capture_geometry_id(self) -> str:
+        """Stable identity for the pixel-space policy of returned frames.
+
+        Any change here means frames before and after are not directly
+        comparable, so it must cover everything that alters the mapping
+        from sensor to returned array: the bit-depth denominator used by
+        ``_to_rgb_uint8`` and whether the kSA BGW palette was applied.
+        Frame dimensions are deliberately excluded — they belong to the
+        per-frame record in ``CapturedFrame``, not to the policy.
+        """
+        return f"vimba:{self._bit_depth}bit:palette{int(self._apply_palette)}"
 
     @property
     def access_mode(self) -> str:
