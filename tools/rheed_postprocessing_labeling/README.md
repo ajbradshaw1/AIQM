@@ -39,6 +39,29 @@ does not support.
 
 ## Build a report
 
+### Desktop launcher (recommended on Windows)
+
+Double-click `Start RHEED Post-processing Labeler.cmd` in the repository root,
+or install the desktop icons once with `Install AI4MBE Desktop Shortcuts.cmd`.
+The launcher keeps each prediction CSV explicitly paired with its model-spec
+JSON, runs report generation in a separate process, and opens the report only
+after a successful build. Choose a new output directory outside the Git clone;
+the desktop workflow never overwrites an existing non-empty directory.
+
+The same launcher is available from PowerShell:
+
+```powershell
+python -m tools.rheed_postprocessing_labeling desktop
+```
+
+The PDF operator guide is
+[`docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf`](../../docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf).
+Its reproducible ReportLab source is
+`tools/rheed_postprocessing_labeling/manual/generate_manual.py`; all figures it
+creates are explicitly synthetic and contain no laboratory data.
+
+### Command line
+
 Run from the GUI repository root in PowerShell:
 
 ```powershell
@@ -144,9 +167,13 @@ needed. It serves the report from an ephemeral loopback-only HTTP endpoint,
 blocks every external request, and checks editing, overlap rejection, export,
 playhead synchronization, and 1024/736/360-pixel layouts.
 
-`--overwrite` replaces the selected output directory. It refuses filesystem
-roots, repository/source ancestors, the current working directory, and any
-directory containing an input file. Still use a dedicated output directory.
+`--overwrite` is an advanced CLI-only option. It accepts only a previous
+output from this tool with the expected manifest and generated top-level
+contents; unexpected files cause a refusal. New inputs and the staged report
+are validated completely before the old report is transactionally replaced.
+Filesystem roots, repository/source ancestors, the current working directory,
+and directories containing an input file are always refused. Still use a
+dedicated output directory and keep annotation exports elsewhere.
 
 Keep generated reports, exported annotations, screenshots, raw sessions, and
 predictions outside the repository (for example under `D:\RHEED-local`). They

@@ -5,13 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+from typing import Sequence
 
 from .annotation_validation import validate_annotation_document
 from .report_builder import build_report, load_report_payload
 
 
-def _build(args: argparse.Namespace) -> None:
+def _build(args: argparse.Namespace) -> int:
     report = build_report(
         args.session,
         args.predictions,
@@ -22,9 +24,10 @@ def _build(args: argparse.Namespace) -> None:
         overwrite=args.overwrite,
     )
     print(report)
+    return 0
 
 
-def _validate(args: argparse.Namespace) -> None:
+def _validate(args: argparse.Namespace) -> int:
     payload = load_report_payload(args.report)
     document = json.loads(args.annotations.read_text(encoding="utf-8"))
     validated = validate_annotation_document(document, payload)
@@ -33,9 +36,17 @@ def _validate(args: argparse.Namespace) -> None:
         "dataset_id": validated["dataset"]["dataset_id"],
         "segment_count": len(validated["segments"]),
     }, indent=2))
+    return 0
 
 
-def main() -> None:
+def _desktop(_args: argparse.Namespace) -> int:
+    # Keep PyQt6 out of build/validate startup and headless environments.
+    from .desktop_launcher import main as desktop_main
+
+    return desktop_main()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -54,11 +65,18 @@ def main() -> None:
     validate.add_argument("--annotations", type=Path, required=True)
     validate.set_defaults(func=_validate)
 
-    args = parser.parse_args()
+    desktop = subparsers.add_parser("desktop", help="Open the PyQt6 report launcher")
+    desktop.set_defaults(func=_desktop)
+
+    args = parser.parse_args(argv)
     if args.command == "build" and len(args.predictions) != len(args.model_spec):
         parser.error("--predictions and --model-spec must contain the same number of paths")
-    args.func(args)
+    try:
+        return int(args.func(args) or 0)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

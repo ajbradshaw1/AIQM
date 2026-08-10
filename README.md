@@ -16,11 +16,30 @@ The overlay pins the WGC package used by `screengrab`. Vimba direct-camera
 mode still requires the vendor Vimba X SDK and its matching `vmbpy` package.
 Classifier2 has its own PyTorch/checkpoint installation requirements.
 
+## Double-click launch on Windows
+
+After cloning or updating the repository, double-click
+`Install AI4MBE Desktop Shortcuts.cmd` once. It creates two desktop shortcuts:
+
+- **Ch-MBE Growth Monitor** starts the live acquisition GUI with the chamber
+  fixed to Ch-MBE and prevents a second competing instance.
+- **RHEED Post-processing Labeler** opens a file-selection window for building,
+  reviewing, and validating offline temporal labels.
+
+The launcher discovers the existing `ai4mbe-gui` interpreter, starts from the
+repository root, and writes diagnostics under
+`%LOCALAPPDATA%\AI4MBE\LauncherLogs`. It never installs packages or changes
+instrument settings. The two root-level `Start *.cmd` files can also be
+double-clicked directly. See
+[`docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf`](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
+for the operator workflow and troubleshooting guide.
+
 ## Two GUI Applications
 
 | Product | Launch | Window title | Tabs |
 |---|---|---|---|
 | **OMBE Growth Monitor** (primary product) | `python growth_monitor_app.py` | "OMBE Growth Monitor" | Monitor / Events / Session |
+| **Ch-MBE Growth Monitor** | double-click `Start Ch-MBE Growth Monitor.cmd` | "Chalcogenide MBE Growth Monitor" | Monitor / Events / Session |
 | **Hardware Control Dashboard** (dummy-loop heater control) | `python gui.py` | "Hardware Control Dashboard" | RHEED / Pyrometer / PSU / Thermocouple / Dashboard / Visuals / Config / PID / Action Log |
 
 The two apps share only `gui/state.py`, `gui/widgets.py`, and
@@ -157,7 +176,7 @@ diagnostic charts and reports after the fact — no lab PC required.
 | `scripts/plot_temperature.py` | Single T-vs-t PNG | Quick temperature-trace view of one session |
 | `scripts/growth_profile_explorer.py` | 5 PNGs + self-contained HTML report in `<session>/analysis/` | Full session review: T + std band + event overlays + classifier trajectory + auto-capture score distribution + grower-vs-classifier agreement scatter. HTML wraps all 5 with base64-embedded PNGs and a session metadata header — emailable, no external dependencies |
 | `scripts/validate_angle_robustness.py` | HTML report + CSV | Classifier sensitivity to camera-angle rotations against an archived session |
-| `python -m tools.rheed_postprocessing_labeling` | Offline interactive HTML + JSON/CSV labels | Review archived RHEED timelines and annotate frame-anchored temporal segments; see `tools/rheed_postprocessing_labeling/README.md` |
+| `python -m tools.rheed_postprocessing_labeling desktop` | Offline interactive HTML + JSON/CSV labels | Open the desktop report builder and validator; see `tools/rheed_postprocessing_labeling/README.md` |
 
 ```bash
 # Five-chart + HTML report

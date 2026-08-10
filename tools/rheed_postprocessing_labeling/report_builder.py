@@ -27,6 +27,166 @@ from .session_archive import (
 
 
 PACKAGE = Path(__file__).resolve().parent
+REPOSITORY_ROOT = PACKAGE.parents[1]
+
+
+def validate_output_destination(
+    output_dir: str | Path,
+    input_paths: Sequence[str | Path] = (),
+    *,
+    repository_root: str | Path = REPOSITORY_ROOT,
+) -> Path:
+    """Resolve a report output directory and reject dangerous targets.
+
+    Generated reports are intentionally kept outside the GUI checkout.  This
+    guard is shared by the CLI/API and the desktop launcher so ``--overwrite``
+    can never remove source code, a filesystem root, or an input file's parent
+    tree.
+    """
+    destination = Path(output_dir).resolve()
+    repository = Path(repository_root).resolve()
+    working_directory = Path.cwd().resolve()
+    volume_root = Path(destination.anchor).resolve()
+    sources = tuple(Path(path).resolve() for path in input_paths)
+
+    if destination == volume_root or destination.parent == volume_root:
+        raise ValueError(f"Refusing broad output directory: {destination}")
+    if working_directory == destination or working_directory.is_relative_to(destination):
+        raise ValueError(f"Output directory contains the current working directory: {destination}")
+    if destination == repository or destination.is_relative_to(repository):
+        raise ValueError(f"Output directory must be outside the repository: {destination}")
+    if repository.is_relative_to(destination):
+        raise ValueError(f"Output directory contains the repository: {destination}")
+    if any(source.is_relative_to(destination) for source in sources):
+        raise ValueError(f"Output directory contains an input file: {destination}")
+    return destination
+
+
+def validate_existing_report_destination(
+    output_dir: str | Path,
+    *,
+    overwrite: bool,
+) -> Path:
+    """Validate existing output state, with overwrite limited to our reports."""
+    destination = Path(output_dir).resolve()
+    if not destination.exists():
+        return destination
+    if not destination.is_dir():
+        raise ValueError(f"Output path exists but is not a directory: {destination}")
+    if not any(destination.iterdir()):
+        return destination
+    if not overwrite:
+        raise ValueError(f"Output directory is not empty: {destination}")
+    allowed_names = {
+        "interactive_report.html",
+        "run_manifest.json",
+        "images",
+        "vendor",
+    }
+    entries = {path.name: path for path in destination.iterdir()}
+    if set(entries) != allowed_names or any(path.is_symlink() for path in entries.values()):
+        raise ValueError(
+            "Overwrite is limited to an unmodified generated report directory; "
+            "move annotations or other files elsewhere and choose a new output directory"
+        )
+    if (
+        not entries["interactive_report.html"].is_file()
+        or not entries["run_manifest.json"].is_file()
+        or not entries["images"].is_dir()
+        or not entries["vendor"].is_dir()
+    ):
+        raise ValueError("Existing report output types are invalid; refusing overwrite")
+    image_entries = list(entries["images"].iterdir())
+    if not image_entries or any(
+        path.is_symlink()
+        or not path.is_file()
+        or re.fullmatch(r"frame_\d+\.webp", path.name) is None
+        for path in image_entries
+    ):
+        raise ValueError("Existing report images are not an unmodified generated set")
+    vendor_names = {path.name for path in entries["vendor"].iterdir()}
+    if vendor_names != {"d3.v7.9.0.min.js", "THIRD_PARTY_NOTICES.md"} or any(
+        path.is_symlink() or not path.is_file()
+        for path in entries["vendor"].iterdir()
+    ):
+        raise ValueError("Existing report vendor assets are not an unmodified generated set")
+    try:
+        manifest = json.loads(entries["run_manifest.json"].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Existing report manifest is not valid JSON; refusing overwrite") from exc
+    expected_outputs = {
+        "interactive_report": "interactive_report.html",
+        "images": "images/",
+        "vendor": "vendor/",
+        "third_party_notices": "vendor/THIRD_PARTY_NOTICES.md",
+    }
+    expected_policy = {
+        "annotation_mode": "model_assisted_review",
+        "model_outputs_visible": True,
+        "eligible_for_gold": False,
+    }
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 1
+        or manifest.get("outputs") != expected_outputs
+        or manifest.get("annotation_policy") != expected_policy
+    ):
+        raise ValueError("Existing report manifest does not identify a compatible generated report")
+    return destination
+
+
+def _install_staged_report(stage: Path, destination: Path) -> None:
+    """Atomically install a complete report while preserving an old report on failure."""
+    backup_root: Path | None = None
+    backup: Path | None = None
+    if destination.exists():
+        backup_root = Path(tempfile.mkdtemp(
+            prefix=f".{destination.name}.backup-",
+            dir=destination.parent,
+        ))
+        backup = backup_root / "previous"
+        try:
+            destination.rename(backup)
+        except Exception:
+            shutil.rmtree(backup_root, ignore_errors=True)
+            raise
+        try:
+            # Close the build-time validation race. Files such as exported
+            # annotations may have appeared while the replacement report was
+            # being staged, so inspect the directory again only after it has
+            # moved out of the writer-visible destination path.
+            validate_existing_report_destination(backup, overwrite=True)
+        except Exception:
+            try:
+                backup.rename(destination)
+            except Exception as restore_error:
+                raise RuntimeError(
+                    "Existing report changed during the build and could not be "
+                    f"restored automatically; it remains at {backup}"
+                ) from restore_error
+            shutil.rmtree(backup_root, ignore_errors=True)
+            raise
+    try:
+        stage.rename(destination)
+    except Exception as install_error:
+        if backup is not None and backup.exists():
+            if destination.exists():
+                raise RuntimeError(
+                    "Report destination changed during installation; the previous "
+                    f"report remains at {backup}"
+                ) from install_error
+            try:
+                backup.rename(destination)
+            except Exception as restore_error:
+                raise RuntimeError(
+                    "Report installation failed and the previous report could not be "
+                    f"restored automatically; it remains at {backup}"
+                ) from restore_error
+        if backup_root is not None and (backup is None or not backup.exists()):
+            shutil.rmtree(backup_root, ignore_errors=True)
+        raise
+    if backup_root is not None:
+        shutil.rmtree(backup_root, ignore_errors=True)
 
 
 def _parse_utc(value: str) -> datetime:
@@ -126,24 +286,13 @@ def build_report(
 ) -> Path:
     if len(predictions_paths) != len(model_spec_paths) or not predictions_paths:
         raise ValueError("Provide one prediction CSV per model spec")
-    destination = Path(output_dir).resolve()
     input_paths = [Path(session_zip).resolve()]
     input_paths.extend(Path(path).resolve() for path in predictions_paths)
     input_paths.extend(Path(path).resolve() for path in model_spec_paths)
-    protected_paths = (PACKAGE.resolve(), PACKAGE.parent.resolve(), Path.cwd().resolve())
-    volume_root = Path(destination.anchor)
-    if destination == volume_root or destination.parent == volume_root:
-        raise ValueError(f"Refusing broad output directory: {destination}")
-    if any(protected.is_relative_to(destination) for protected in protected_paths):
-        raise ValueError(f"Output directory contains source code or the working directory: {destination}")
-    if any(source.is_relative_to(destination) for source in input_paths):
-        raise ValueError(f"Output directory contains an input file: {destination}")
+    destination = validate_output_destination(output_dir, input_paths)
     if review_quality < 25 or review_quality > 100:
         raise ValueError("review_quality must be between 25 and 100")
-    if destination.exists() and any(destination.iterdir()) and not overwrite:
-        raise ValueError(f"Output directory is not empty: {destination}")
-    if destination.exists() and overwrite:
-        shutil.rmtree(destination)
+    validate_existing_report_destination(destination, overwrite=overwrite)
     destination.parent.mkdir(parents=True, exist_ok=True)
     specs = [ModelSpec.load(path) for path in model_spec_paths]
     if len({spec.key for spec in specs}) != len(specs):
@@ -267,8 +416,7 @@ def build_report(
                                   "model_outputs_visible": True, "eligible_for_gold": False},
         }
         (stage / "run_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        if destination.exists(): destination.rmdir()
-        stage.rename(destination)
+        _install_staged_report(stage, destination)
         return destination / "interactive_report.html"
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)
