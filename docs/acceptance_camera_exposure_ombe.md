@@ -86,6 +86,16 @@ reconfiguring a grower's camera.
 
 ## 3. Applied exposure is visibly correct — **WRITES**
 
+**DISARM first, then close kSA.** Everything from here to §6 needs Full
+access. With kSA holding the camera the driver lands in Read mode and
+correctly *refuses* every write in this section — which looks like a
+failure of the exposure feature rather than the coexistence rule working
+as designed. (Provoking that refusal deliberately is §7's job.)
+
+- [ ] DISARMed
+- [ ] kSA closed
+- [ ] Vimba X Viewer closed
+
 Uncheck *Keep current*. For each value: set it, ARM, observe, DISARM.
 
 | Requested | Status bar shows | Image vs previous | Probe readback |
@@ -137,14 +147,29 @@ This is the O-MBE-specific one: growers normally have kSA open.
 - [ ] With *Keep current* checked, ARM in Read mode still succeeds and
       frames flow
 
-## 8. Failure is legible
+## 8. Failure is legible — CONDITIONAL, not a merge blocker
 
-- [ ] Enter a value the camera rejects (try 1 ms if below the device
-      minimum): the error names the camera range
-- [ ] After any failed ARM, re-probe: exposure is back at its **original**
-      value, not the rejected one
+Only runnable if §1's `ExposureTimeAbs` range has a **minimum above 1 ms**
+or a **maximum below 999 ms**. The k700-12 spec puts the Manta's range at
+0.026–60,000 ms, so every value the 1–999 ms GUI can produce is very
+likely in range and there is no way to inject an out-of-range request
+through the UI at all.
+
+Device range from §1: `________` – `________` us
+Reachable through the GUI? `____`
+
+If reachable:
+
+- [ ] Request the out-of-range value: the error names the camera range
+- [ ] Re-probe: exposure is back at its **original** value
 
 RESULT after failure: `________` us — matches §1? `____`
+
+If not reachable, mark N/A. The restoration and range-rejection paths are
+covered by `test_out_of_range_exposure_fails_without_writing` and
+`test_bad_readback_restores_the_original_exposure` in
+`tests/test_vimba_camera.py`, which drive those branches directly. Do not
+hold the merge on a step the hardware makes unreachable.
 
 ## 9. Disarm / re-arm is clean
 
@@ -194,5 +219,6 @@ RESULT: `________`
 | Blocking issues | `________________________` |
 | Operator / date | `________________________` |
 
-Do not merge the PR until §2, §7 and §8 pass — those are the three that
-protect a grower's camera from the GUI.
+Do not merge the PR until §2 and §7 pass — those two are what protect a
+grower's camera from the GUI. §8 is conditional on the device range and is
+not a blocker; its logic is covered by unit tests.

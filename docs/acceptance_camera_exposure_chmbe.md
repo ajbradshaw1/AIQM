@@ -136,13 +136,27 @@ kSA is off on this chamber, so force the condition deliberately:
       did not set
 - [ ] Close the Viewer, re-ARM: succeeds
 
-## 8. Failure restores the original — **WRITES**
+## 8. Failure restores the original — CONDITIONAL, not a merge blocker
 
-- [ ] Request a value the device rejects (below its minimum, from §1's
-      range): the error names the camera range
+Only runnable if §1's `ExposureTimeAbs` range excludes part of the 1–999 ms
+span the GUI can produce. The k700-12 spec puts the Manta at
+0.026–60,000 ms, so in all likelihood every selectable value is valid and
+no out-of-range request can be made through the UI.
+
+Device range from §1: `________` – `________` us
+Reachable through the GUI? `____`
+
+If reachable:
+
+- [ ] Request the out-of-range value: the error names the camera range
 - [ ] Re-probe after the failure
 
 RESULT: `________` us — back to the §1 baseline? `____`
+
+If not reachable, mark N/A —
+`test_out_of_range_exposure_fails_without_writing` and
+`test_bad_readback_restores_the_original_exposure` drive these branches
+directly. Do not hold the merge on an unreachable step.
 
 ## 9. Disarm / re-arm
 
@@ -182,12 +196,18 @@ RESULT: `________`
 
 ## 12. Pyrometer regression check
 
-The RTS polarity disagreement between `main` (`4de79a4`, RTS de-asserted)
-and Yao's branch (`60ce781`, reversed) is **unresolved** and this branch
-sits on Yao's line. Confirm the pyrometer still reads on this chamber
-before trusting any session recorded here.
+Earlier drafts of this document called the RTS polarity "unresolved". That
+was wrong: `60ce781` reversed it and `45a98af` put it back, so this branch
+and `main` **agree** at `pyrometer_rts=False`, hardware-verified 2026-08-05.
 
-- [ ] Pyrometer connects on COM3 at 115200
+The check is still worth running, for a different reason. This branch
+carries Yao's `pyrometer_modbus_backend="raw_serial"` for Ch-MBE, where
+`main` uses the default `pymodbus`. That is a different transport reading
+the same probe, it has not been exercised alongside the exposure work, and
+`drivers/config.py` still conflicts textually with `main`. Confirm the
+pyrometer reads here before trusting any session recorded on this branch.
+
+- [ ] Pyrometer connects on COM3 at 115200 via the `raw_serial` backend
 - [ ] Live temperature is plausible and non-zero
 - [ ] `heartbeat_log.csv` `pyrometer_temp_C` is populated
 
@@ -205,6 +225,7 @@ RESULT: `________` °C
 | Blocking issues | `________________________` |
 | Operator / date | `________________________` |
 
-Do not merge until §3, §7 and §8 pass. Ch-MBE writes to the camera by
-default, so the guarantees that matter most are the ones proving it stops
-when told to and puts things back when it fails.
+Do not merge until §3 and §7 pass. Ch-MBE writes to the camera by
+default, so the guarantee that matters most is that it stops when told to.
+§8 is conditional on the device range and is not a blocker; its logic is
+covered by unit tests.
