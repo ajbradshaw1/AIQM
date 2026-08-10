@@ -525,6 +525,9 @@ class VmbCamera(RheedCamera):
         ("pixel_format", ("PixelFormat",)),
         ("width", ("Width",)),
         ("height", ("Height",)),
+        # Needed to interpret Frame.get_timestamp() at all; without it
+        # the device ticks are an uninterpretable counter.
+        ("timestamp_tick_frequency_hz", ("GevTimestampTickFrequency",)),
         ("device_serial", ("DeviceSerialNumber",)),
         ("device_firmware", ("DeviceFirmwareVersion",)),
     )
@@ -669,12 +672,15 @@ class VmbCamera(RheedCamera):
         offline labeling tool treats as grounds to reject the whole
         session.
 
-        The timestamps are likewise two different things. captured_at_utc
-        is when Python entered this callback (host arrival), which is the
-        best wall-clock available but includes transport and scheduling
-        delay. camera_timestamp_ns is the device's own clock where the
-        firmware provides it — better for inter-frame intervals, but on an
-        arbitrary epoch that cannot be turned into wall time.
+        The timestamps are two different things. captured_at_utc is when
+        Python entered this callback (host arrival) — the best wall clock
+        available, but including transport and scheduling delay.
+        camera_timestamp_ticks is the device's own counter, in TICKS on an
+        undocumented timebase: vmbpy's get_timestamp() returns a bare
+        integer and does not specify a unit, so it cannot be read as
+        nanoseconds or turned into an interval without the camera's tick
+        frequency. Both the id and the ticks are driver-local diagnostics
+        — neither reaches CameraState or any archive.
         """
         try:
             monotonic_ns = time.monotonic_ns()
@@ -695,33 +701,41 @@ class VmbCamera(RheedCamera):
                 except Exception:  # noqa: BLE001
                     camera_frame_id = None
                 try:
-                    camera_timestamp_ns = int(frame.get_timestamp())
+                    camera_timestamp_ticks = int(frame.get_timestamp())
                 except Exception:  # noqa: BLE001
-                    camera_timestamp_ns = None
+                    camera_timestamp_ticks = None
             finally:
                 # Always recycle: a leaked buffer shrinks the pool and,
                 # once it is exhausted, silently halts capture.
                 cam.queue_frame(frame)
             rgb = self._to_rgb_uint8(img)
-            self._delivered_count += 1
             height, width = rgb.shape[:2]
-            capture = CapturedFrame(
-                image=rgb,
-                captured_at_utc=captured_at_utc,
-                captured_monotonic_ns=monotonic_ns,
-                sequence=self._delivered_count,
-                # Not a window capture — there is no owning HWND. Zero is
-                # the same sentinel the worker's synthetic branch used.
-                source_hwnd=0,
-                width=width,
-                height=height,
-                backend="vimba",
-                camera_frame_id=camera_frame_id,
-                camera_timestamp_ns=camera_timestamp_ns,
-            )
+            # Assign the ordinal and publish under ONE lock hold. vmbpy
+            # gives no guarantee that callbacks are serialised, and split
+            # across two critical sections two overlapping callbacks could
+            # take ordinals 1 and 2 and publish them in the order 2 then 1
+            # — leaving _latest_capture holding 1 after 2 was already read,
+            # which breaks the strictly-increasing contract the offline
+            # labeling tool enforces. Assignment and publication are one
+            # operation, so they take one lock.
             with self._frame_lock:
+                self._delivered_count += 1
                 self._latest_frame = rgb
-                self._latest_capture = capture
+                self._latest_capture = CapturedFrame(
+                    image=rgb,
+                    captured_at_utc=captured_at_utc,
+                    captured_monotonic_ns=monotonic_ns,
+                    sequence=self._delivered_count,
+                    # Not a window capture — there is no owning HWND. Zero
+                    # is the same sentinel the worker's synthetic branch
+                    # used.
+                    source_hwnd=0,
+                    width=width,
+                    height=height,
+                    backend="vimba",
+                    camera_frame_id=camera_frame_id,
+                    camera_timestamp_ticks=camera_timestamp_ticks,
+                )
         except Exception as exc:  # noqa: BLE001
             # Record but don't kill the stream — one bad frame shouldn't
             # take down the whole session. Guarded by _error_lock so

@@ -46,13 +46,19 @@ class CapturedFrame:
     width: int
     height: int
     backend: str = "wgc"
-    # The device's own frame id and timestamp, where the backend exposes
-    # them. Recorded for corroboration and diagnostics only — never as the
-    # ordering key. Neither is guaranteed by GenICam to be monotonic across
-    # a reconnect or free of wraparound, so `sequence` stays the contract
-    # and these stay evidence.
+    # DRIVER-LOCAL DIAGNOSTICS. The device's own frame id and timestamp
+    # where the backend exposes them, for live debugging only. Neither is
+    # propagated to CameraState or written to any archive, so do not treat
+    # them as recorded provenance — `sequence` is the only ordering
+    # contract, and the only one that reaches disk.
+    #
+    # camera_timestamp_ticks is in DEVICE TICKS, not nanoseconds. vmbpy's
+    # get_timestamp() returns an integer on the camera's own timebase and
+    # does not document a unit; converting to wall time or intervals needs
+    # the tick frequency (GevTimestampTickFrequency), which is recorded
+    # separately in the connect-time settings snapshot when readable.
     camera_frame_id: Optional[int] = None
-    camera_timestamp_ns: Optional[int] = None
+    camera_timestamp_ticks: Optional[int] = None
 
     def with_image(self, image: np.ndarray) -> "CapturedFrame":
         """Return the same provenance paired with a transformed image."""

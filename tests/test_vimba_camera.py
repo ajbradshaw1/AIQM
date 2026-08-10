@@ -494,6 +494,10 @@ def _read_sequences(cam, fake_cam, count: int) -> list[int]:
 def test_sequence_is_application_owned_camera_id_is_evidence() -> None:
     """capture_sequence is the driver's own counter; the camera id rides along.
 
+    The id and ticks are DRIVER-LOCAL DIAGNOSTICS — deliberately not
+    propagated to CameraState or any archive. test_camera_id_stays_out_of
+    _the_archive pins that boundary.
+
     The ordering contract cannot be the camera's frame id: GenICam does not
     guarantee it survives a reconnect without resetting, and the offline
     labeling tool rejects a session whose capture_sequence ever fails to
@@ -519,7 +523,8 @@ def test_sequence_is_application_owned_camera_id_is_evidence() -> None:
         assert capture.camera_frame_id > 5000, (
             f"camera id {capture.camera_frame_id} was not recorded from the device"
         )
-        assert capture.camera_timestamp_ns == 7_000_000_000
+        # Device ticks on an undocumented timebase, not nanoseconds.
+        assert capture.camera_timestamp_ticks == 7_000_000_000
         assert (capture.height, capture.width) == rgb.shape[:2]
         assert capture.source_hwnd == 0, "Vimba path has no owning window"
         assert capture.age_ms() >= 0.0
@@ -527,6 +532,29 @@ def test_sequence_is_application_owned_camera_id_is_evidence() -> None:
         cam.disconnect()
     finally:
         uninstall_fake_vmbpy()
+
+
+def test_camera_id_stays_out_of_the_archive() -> None:
+    """The device id and ticks are driver-local, not recorded provenance.
+
+    They are useful live (corroborating that the driver's own ordinals
+    track the device, spotting a camera-side reset) but nothing carries
+    them to disk. Pinning the boundary keeps the docs honest: an earlier
+    revision described them as "recorded evidence" while they existed only
+    in transient memory. If they are ever wanted in the archive, that is a
+    schema change to CameraState and the heartbeat log, and this test is
+    the thing that should fail first.
+    """
+    from gui.state import CameraState
+
+    fields = set(CameraState.__dataclass_fields__)
+    leaked = fields & {
+        "camera_frame_id", "camera_timestamp_ticks", "camera_timestamp_ns",
+    }
+    assert not leaked, (
+        f"{sorted(leaked)} reached CameraState — either finish propagating "
+        "to the heartbeat schema, or keep them driver-local and update this"
+    )
 
 
 def test_sequence_keeps_increasing_when_camera_id_resets() -> None:
