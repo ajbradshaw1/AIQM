@@ -21,6 +21,21 @@ never called — so a power-cycle restores the stored user set.
 Camera identity for this chamber: serial **50-0503464907**, device
 **DEV_000F314E8D67**, Manta G-033B, firmware 00.01.44.18241.
 
+## State discipline — read before starting
+
+**The config panel is locked while ARMed.** `_apply_state` disables every
+config widget on entering the armed state, so exposure cannot be changed
+without disarming first. Every value change in this document therefore
+follows:
+
+```
+DISARM  →  set the control  →  ARM  →  observe  →  DISARM
+```
+
+If a control is greyed out and you did not expect it, check the ARM state
+before concluding the feature is broken. Sections below assume you arrive
+**disarmed** unless they say otherwise.
+
 ---
 
 ## Setup
@@ -77,18 +92,30 @@ Launch the GUI. The exposure control should already show **300 ms with
 - [ ] ARM succeeds
 - [ ] Status bar: "Direct camera exposure confirmed: 300 ms"
 - [ ] Re-probe: `ExposureTimeAbs` reads 300000
+- [ ] **DISARM** before continuing
 
 This is a no-op write in practice — the camera is already at 300 ms — which
 makes it the safest possible first exercise of the write path.
 
 ## 3. *Keep current* still writes nothing
 
-- [ ] Check *Keep current*, DISARM, re-ARM
-- [ ] Slider and textbox grey out
-- [ ] Re-probe: exposure unchanged
-- [ ] Confirm no "exposure confirmed" status message for a fresh value
+Order matters: the checkbox cannot be touched while armed.
+
+```
+DISARM  →  check Keep current  →  ARM
+```
+
+- [ ] DISARMed after §2
+- [ ] Check *Keep current* — slider and textbox grey out immediately
+- [ ] ARM
+- [ ] Re-probe: exposure unchanged from §2
+- [ ] No "exposure confirmed" status message for a new value
+- [ ] **DISARM** before continuing
 
 ## 4. Two or three values visibly change brightness — **WRITES**
+
+For each row: `DISARM → uncheck Keep current → set value → ARM → observe →
+DISARM`. The value cannot be changed while armed.
 
 | Requested | Status bar | Image vs previous | Probe readback |
 |---|---|---|---|
@@ -109,12 +136,17 @@ makes it the safest possible first exercise of the write path.
 
 ## 6. The ceiling, and the frame-rate reality check
 
+Arrive **disarmed** — the slider must be editable to reach 901 ms.
+
 Ch-MBE is where `AcquisitionFrameRateLimit` was observed at **3.3323 fps**
 against a 300 ms exposure — the cleanest place to test the policy.
 
 - [ ] 901 ms: warning appears, **ARM greys out**, tooltip names 900 ms
 - [ ] Re-check *Keep current*: ARM available again
+- [ ] **Uncheck *Keep current* again** — the previous check left it on, and
+      899 ms cannot be requested while it is checked
 - [ ] 899 ms, ARM: does 1 Hz hold?
+- [ ] **DISARM** before continuing
 
 RESULT at 899 ms — worker FPS `________` · duplicates seen? `____` ·
 `AcquisitionFrameRateLimit` now reads `________`
@@ -127,14 +159,17 @@ RESULT at 899 ms — worker FPS `________` · duplicates seen? `____` ·
 
 ## 7. Read-access refusal
 
-kSA is off on this chamber, so force the condition deliberately:
+kSA is off on this chamber, so force the condition deliberately. Arrive
+**disarmed** so the exposure value can still be set.
 
+- [ ] Uncheck *Keep current*, set 100 ms (while still disarmed)
 - [ ] Open the Vimba X Viewer (it takes Full access)
-- [ ] Uncheck Keep current, choose 100 ms, ARM
+- [ ] Press ARM
 - [ ] The GUI **refuses** with "Manual exposure requires Full camera
       access" — it must not connect in Read mode and report an exposure it
       did not set
-- [ ] Close the Viewer, re-ARM: succeeds
+- [ ] Close the Viewer, ARM again: succeeds
+- [ ] **DISARM** before continuing
 
 ## 8. Failure restores the original — CONDITIONAL, not a merge blocker
 
@@ -225,7 +260,18 @@ RESULT: `________` °C
 | Blocking issues | `________________________` |
 | Operator / date | `________________________` |
 
-Do not merge until §3 and §7 pass. Ch-MBE writes to the camera by
-default, so the guarantee that matters most is that it stops when told to.
-§8 is conditional on the device range and is not a blocker; its logic is
-covered by unit tests.
+**Merge gates: §2, §3, §4, §7 — and §10 if this is the chamber used for
+final acceptance.**
+
+An earlier revision gated only on §3 and §7, which is to say only on the
+feature declining to act. That would have let the branch merge without any
+evidence that a new exposure is ever successfully applied, confirmed by
+readback, or visible in the image — the entire point of the change. §2 and
+§4 are the positive path and are now required alongside the refusals.
+
+§10 is a gate on the acceptance chamber because this branch also changes
+what lands in the archive; shipping it without once confirming the
+metadata is written would leave that untested on hardware.
+
+§8 stays conditional on the device range and is not a blocker — its logic
+is covered by unit tests.

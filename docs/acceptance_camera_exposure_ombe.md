@@ -30,6 +30,21 @@ grower's stored user set.
 The 900 ms ceiling at 1 Hz is **our 90%-of-period safety policy**, not a
 measured Manta limit. Step 6 is the first time it is probed on hardware.
 
+## State discipline — read before starting
+
+**The config panel is locked while ARMed.** `_apply_state` disables every
+config widget on entering the armed state, so exposure cannot be changed
+without disarming first. Every value change in this document therefore
+follows:
+
+```
+DISARM  →  set the control  →  ARM  →  observe  →  DISARM
+```
+
+If a control is greyed out and you did not expect it, check the ARM state
+before concluding the feature is broken. Sections below assume you arrive
+**disarmed** unless they say otherwise.
+
 ---
 
 ## Setup
@@ -78,6 +93,7 @@ Launch the GUI, leave **Keep current** checked, press **ARM**.
 - [ ] Slider and textbox are greyed out while Keep current is checked
 - [ ] ARM succeeds, live frames appear
 - [ ] Re-run step 1's probe: `ExposureTimeAbs` is **unchanged** from §1
+- [ ] **DISARM** before continuing
 
 RESULT: `________` us — matches §1? `____`
 
@@ -96,7 +112,8 @@ as designed. (Provoking that refusal deliberately is §7's job.)
 - [ ] kSA closed
 - [ ] Vimba X Viewer closed
 
-Uncheck *Keep current*. For each value: set it, ARM, observe, DISARM.
+Uncheck *Keep current*. For each row:
+`DISARM → set value → ARM → observe → DISARM`.
 
 | Requested | Status bar shows | Image vs previous | Probe readback |
 |---|---|---|---|
@@ -124,10 +141,15 @@ Uncheck *Keep current*. For each value: set it, ARM, observe, DISARM.
 
 ## 6. The ceiling — first hardware probe of the 90% policy
 
+Arrive **disarmed** — the slider must be editable to reach 901 ms.
+
 - [ ] Set 901 ms: inline warning appears, **ARM greys out**
 - [ ] ARM tooltip names the 900 ms limit
 - [ ] Re-check *Keep current*: ARM becomes available again
-- [ ] Set 899 ms and ARM: does the camera actually sustain 1 Hz?
+- [ ] **Uncheck *Keep current* again** — the previous check left it on, and
+      899 ms cannot be requested while it is checked
+- [ ] Set 899 ms, ARM: does the camera actually sustain 1 Hz?
+- [ ] **DISARM** before continuing
 
 RESULT at 899 ms — worker FPS `________` · duplicate frames seen? `____`
 
@@ -138,14 +160,17 @@ RESULT at 899 ms — worker FPS `________` · duplicate frames seen? `____`
 
 ## 7. Read-access refusal — **the kSA coexistence case**
 
-This is the O-MBE-specific one: growers normally have kSA open.
+This is the O-MBE-specific one: growers normally have kSA open. Arrive
+**disarmed** so the exposure value can still be set.
 
+- [ ] Uncheck *Keep current*, set 100 ms (while still disarmed)
 - [ ] Open kSA and let it take the camera
-- [ ] Uncheck Keep current, choose 100 ms, press ARM
+- [ ] Press ARM
 - [ ] The GUI **refuses** with "Manual exposure requires Full camera
       access", rather than connecting in Read mode and pretending
-- [ ] With *Keep current* checked, ARM in Read mode still succeeds and
-      frames flow
+- [ ] Still disarmed after the refusal — check *Keep current*, ARM again:
+      Read mode succeeds and frames flow
+- [ ] **DISARM**, close kSA
 
 ## 8. Failure is legible — CONDITIONAL, not a merge blocker
 
@@ -219,6 +244,17 @@ RESULT: `________`
 | Blocking issues | `________________________` |
 | Operator / date | `________________________` |
 
-Do not merge the PR until §2 and §7 pass — those two are what protect a
-grower's camera from the GUI. §8 is conditional on the device range and is
-not a blocker; its logic is covered by unit tests.
+**Merge gates: §2, §3, §7 — and §10 if this is the chamber used for final
+acceptance.**
+
+An earlier revision gated only on §2 and §7, which is to say only on the
+feature declining to act. That would have let the branch merge without any
+evidence that a new exposure is ever successfully applied, confirmed by
+readback, or visible in the image. §3 is the positive path and is now
+required alongside the refusals.
+
+§10 is a gate on the acceptance chamber because this branch also changes
+what lands in the archive.
+
+§8 stays conditional on the device range and is not a blocker — its logic
+is covered by unit tests.
