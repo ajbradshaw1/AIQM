@@ -160,15 +160,28 @@ RESULT at 899 ms — worker FPS `________` · duplicates seen? `____` ·
 ## 7. Read-access refusal
 
 kSA is off on this chamber, so force the condition deliberately. Arrive
-**disarmed** so the exposure value can still be set.
+**disarmed** — the exposure controls are gated by ARM state, camera mode
+and *Keep current*, so the value has to be set before arming. Setting it
+before opening the Viewer is not required by the GUI, but it keeps the
+refusal the only variable under test.
 
-- [ ] Uncheck *Keep current*, set 100 ms (while still disarmed)
+> **The GUI stays ARMED after a refused connect.** `_on_arm` sets the state
+> to `armed` before the camera thread reports back, and the async error path
+> stops automation without returning to `idle` — the only `set_state("idle")`
+> is in the DISARM handler. So after the expected refusal the config panel is
+> still locked and the ARM button now reads DISARM. Press it once before
+> continuing. This is pre-existing behaviour, not something this branch
+> introduced; see the follow-up note at the end of this document.
+
+- [ ] Uncheck *Keep current*, set 100 ms (while disarmed)
 - [ ] Open the Vimba X Viewer (it takes Full access)
 - [ ] Press ARM
 - [ ] The GUI **refuses** with "Manual exposure requires Full camera
       access" — it must not connect in Read mode and report an exposure it
       did not set
-- [ ] Close the Viewer, ARM again: succeeds
+- [ ] The GUI is still **armed** — the button reads DISARM. Press **DISARM**
+- [ ] Close the Viewer
+- [ ] ARM: succeeds, 100 ms confirmed in the status bar
 - [ ] **DISARM** before continuing
 
 ## 8. Failure restores the original — CONDITIONAL, not a merge blocker
@@ -275,3 +288,15 @@ metadata is written would leave that untested on hardware.
 
 §8 stays conditional on the device range and is not a blocker — its logic
 is covered by unit tests.
+
+## Follow-up noticed while writing this
+
+A refused camera connect leaves the GUI in the `armed` state. `_on_arm`
+sets `armed` before the camera thread answers, and the async error branch
+in `_on_camera_state` stops the heartbeat, auto-capture and classifier but
+never calls `set_state("idle")`. The grower is left with a locked config
+panel and an ARM button reading DISARM, after an arm that did not succeed.
+
+Pre-existing, not introduced by this branch, and deliberately not fixed
+here — a state-machine change wants its own review rather than riding along
+with an exposure feature. Worth raising as a separate issue.
