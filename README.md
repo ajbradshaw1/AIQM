@@ -47,6 +47,13 @@ Configure in the Session tab → Config form before ARM/START:
 Direct-read modes avoid the window-positioning fragility of screengrab
 (grower can't multitask during a growth) and the OCR mis-read failure mode.
 
+For the direct Vimba camera, the Session tab also provides a manual exposure
+setting in milliseconds. It is applied on **ARM**, verified by camera
+readback, and recorded in `session_metadata.json`. The setting is volatile
+(the application never saves a camera user set), requires Full camera access
+and `ExposureAuto=Off`, and is locked with the other hardware configuration
+while armed or running. Select **Keep current** to perform no exposure write.
+
 ### Output per session
 
 Each session creates a directory containing:

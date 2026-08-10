@@ -646,6 +646,7 @@ class ConfigLockTests(unittest.TestCase):
             self.monitor.config_browse_btn,
             self.monitor.config_prefix,
             self.monitor.config_camera_mode,
+            self.monitor.config_camera_exposure_ms,
             self.monitor.config_pyrometer_mode,
             self.monitor.config_exactus_port,
             self.monitor.config_exactus_baud,

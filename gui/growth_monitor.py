@@ -976,6 +976,29 @@ class GrowthMonitor(QWidget):
         self.config_camera_mode.addItems(["dummy", "screengrab", "vimba"])
         config_form.addRow("Camera mode:", self.config_camera_mode)
 
+        self.config_camera_exposure_ms = QDoubleSpinBox()
+        safe_exposure_max_ms = (
+            900.0 / self._cfg.camera_fps
+            if self._cfg.camera_fps > 0 else 900.0
+        )
+        self.config_camera_exposure_ms.setRange(0.0, safe_exposure_max_ms)
+        self.config_camera_exposure_ms.setDecimals(0)
+        self.config_camera_exposure_ms.setSingleStep(10.0)
+        self.config_camera_exposure_ms.setSuffix(" ms")
+        self.config_camera_exposure_ms.setSpecialValueText("Keep current")
+        configured_exposure = self._cfg.camera_exposure_us
+        self.config_camera_exposure_ms.setValue(
+            configured_exposure / 1000.0 if configured_exposure else 0.0
+        )
+        self.config_camera_exposure_ms.setToolTip(
+            "Manual exposure for direct Vimba mode. 'Keep current' performs "
+            f"no camera write. The {safe_exposure_max_ms:.0f} ms ceiling "
+            f"preserves headroom for the {self._cfg.camera_fps:g} Hz "
+            "acquisition loop. Applied when ARM is pressed and recorded in "
+            "session metadata; it does not modify the camera user set."
+        )
+        config_form.addRow("Direct exposure:", self.config_camera_exposure_ms)
+
         self.config_pyrometer_mode = QComboBox()
         self.config_pyrometer_mode.addItems(["dummy", "exactus", "modbus", "screengrab"])
         config_form.addRow("Pyrometer mode:", self.config_pyrometer_mode)
@@ -1052,6 +1075,7 @@ class GrowthMonitor(QWidget):
                 self.config_browse_btn,
                 self.config_prefix,
                 self.config_camera_mode,
+                self.config_camera_exposure_ms,
                 self.config_pyrometer_mode,
                 self.config_exactus_port,
                 self.config_exactus_baud,
@@ -1402,6 +1426,10 @@ class GrowthMonitor(QWidget):
             # build).
             if hasattr(self, "live_equalizer_tab"):
                 self.live_equalizer_tab.update_camera_frame(state.frame)
+
+    def clear_camera_provenance(self) -> None:
+        """Drop the prior arm cycle's camera readback before reconnecting."""
+        self._latest_camera = None
 
     # Value-label style presets. Kept as constants so update_classifier_state
     # doesn't allocate style strings per emission (5-slider hot path at 2 Hz).
@@ -2235,12 +2263,28 @@ class GrowthMonitor(QWidget):
     def get_session_metadata(self) -> dict:
         """Return session metadata for growth log export."""
         mistral_mode = self.config_mistral_mode.currentText()
+        direct_camera = self.config_camera_mode.currentText() in (
+            "vimba", "direct",
+        )
         metadata = {
             "date": datetime.now().strftime("%Y-%m-%d"),
             "grower": self.grower_input.text(),
             "sample_id": self.sample_id_input.text(),
             "chamber_id": self._cfg.chamber_id,
             "camera_mode": self.config_camera_mode.currentText(),
+            "camera_exposure_requested_ms": (
+                self.config_camera_exposure_ms.value()
+                if direct_camera
+                and self.config_camera_exposure_ms.value() > 0
+                else None
+            ),
+            "camera_exposure_readback_ms": (
+                self._latest_camera.exposure_us / 1000.0
+                if direct_camera
+                and self._latest_camera is not None
+                and self._latest_camera.exposure_us is not None
+                else None
+            ),
             "mistral_mode": mistral_mode,
             "evap_mode": self.config_evap_mode.currentText(),
             "pyrometer_mode": self.config_pyrometer_mode.currentText(),

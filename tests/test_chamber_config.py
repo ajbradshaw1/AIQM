@@ -73,6 +73,10 @@ class TestGetActiveConfig(unittest.TestCase):
 
 class TestOmbConfig(unittest.TestCase):
 
+    def test_exposure_is_not_exported_from_chmbe(self):
+        # The writable 300 ms finding was measured on Ch-MBE only.
+        self.assertIsNone(OXIDE_MBE.camera_exposure_us)
+
     def test_mistral_mode_default(self):
         # Switched from "screengrab" to "ads" Jul 27 2026 after
         # direct pyads to Bulbasaur PLC validated. Fallback modes
@@ -110,6 +114,9 @@ class TestOmbConfig(unittest.TestCase):
 
 
 class TestChMbeConfig(unittest.TestCase):
+
+    def test_verified_camera_exposure_default(self):
+        self.assertEqual(CHALCOGENIDE_MBE.camera_exposure_us, 300_000.0)
 
     def test_mistral_mode_default(self):
         self.assertEqual(CHALCOGENIDE_MBE.mistral_mode_default, "ads")

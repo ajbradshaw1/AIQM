@@ -49,6 +49,7 @@ class CameraState:
     connected: bool = False
     error: str = ""
     mode: str = ""  # "direct", "screengrab", or "dummy"
+    exposure_us: Optional[float] = None  # confirmed direct-camera readback
 
 
 @dataclass

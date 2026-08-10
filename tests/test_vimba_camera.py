@@ -86,12 +86,17 @@ class FakeSettable:
         readable: bool = True,
         writable: bool = True,
         get_access_mode_raises: Exception | None = None,
+        initial_value=None,
+        value_range: tuple[float, float] | None = None,
+        increment: float | None = None,
     ):
-        self.value: object = None
+        self.value: object = initial_value
         self.set_call_count = 0
         self._readable = readable
         self._writable = writable
         self._get_access_mode_raises = get_access_mode_raises
+        self._value_range = value_range
+        self._increment = increment
 
     def set(self, value) -> None:  # noqa: A003
         self.value = value
@@ -101,6 +106,15 @@ class FakeSettable:
         if self._get_access_mode_raises is not None:
             raise self._get_access_mode_raises
         return (self._readable, self._writable)
+
+    def get(self):
+        return self.value
+
+    def get_range(self):
+        return self._value_range
+
+    def get_increment(self):
+        return self._increment
 
 
 class FakeTriggerSoftware:
@@ -161,6 +175,13 @@ class FakeCamera:
         self.TriggerSelector = FakeSettable(writable=trigger_selector_writable)
         self.TriggerMode = FakeSettable(writable=trigger_mode_writable)
         self.AcquisitionMode = FakeSettable(writable=acquisition_mode_writable)
+        self.ExposureTimeAbs = FakeSettable(
+            initial_value=300_000.0,
+            value_range=(100.0, 900_000.0),
+            increment=1.0,
+        )
+        self.ExposureAuto = FakeSettable(initial_value="Off")
+        self.AcquisitionFrameRateLimit = FakeSettable(initial_value=3.3323)
         self.TriggerSoftware = FakeTriggerSoftware(self)
 
         self.handler = None
@@ -802,6 +823,103 @@ def test_invalid_access_mode_raises_value_error_at_init() -> None:
     raise AssertionError("expected ValueError, none raised")
 
 
+def test_manual_exposure_applied_and_read_back_in_full_mode() -> None:
+    """A validated manual exposure is applied before streaming starts."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(
+            trigger_hz=1.0,
+            access_mode="full",
+            exposure_us=250_000.0,
+        )
+        cam.connect()
+        assert fake_cam.ExposureTimeAbs.value == 250_000.0
+        assert fake_cam.ExposureTimeAbs.set_call_count == 1
+        assert cam.exposure_us == 250_000.0
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_manual_exposure_refuses_read_mode() -> None:
+    """The GUI must not claim an exposure was applied without Full access."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(
+            trigger_hz=1.0,
+            access_mode="read",
+            exposure_us=250_000.0,
+        )
+        try:
+            cam.connect()
+        except RuntimeError as exc:
+            assert "requires Full camera access" in str(exc)
+            assert fake_cam.ExposureTimeAbs.set_call_count == 0
+            return
+        raise AssertionError("manual exposure unexpectedly succeeded in Read mode")
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_manual_exposure_requires_auto_off() -> None:
+    """A running auto-exposure loop would race and overwrite the request."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        fake_cam.ExposureAuto.value = "Continuous"
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(
+            trigger_hz=1.0,
+            access_mode="full",
+            exposure_us=250_000.0,
+        )
+        try:
+            cam.connect()
+        except RuntimeError as exc:
+            assert "ExposureAuto=Off" in str(exc)
+            assert fake_cam.ExposureTimeAbs.set_call_count == 0
+            return
+        raise AssertionError("manual exposure unexpectedly raced ExposureAuto")
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_manual_exposure_rejects_unsafe_trigger_pair_at_init() -> None:
+    """Exposure must retain timing headroom within the trigger period."""
+    from drivers.rheed_camera import VmbCamera
+    try:
+        VmbCamera(trigger_hz=1.0, exposure_us=950_000.0)
+    except ValueError as exc:
+        assert "10% acquisition headroom" in str(exc)
+        return
+    raise AssertionError("unsafe exposure/trigger pair was accepted")
+
+
+def test_cached_vimba_frame_is_not_delivered_twice() -> None:
+    """One SDK callback represents exactly one downstream acquisition."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera, FrameNotYetAvailableError
+        cam = VmbCamera(trigger_hz=1.0, access_mode="read")
+        cam.connect()
+        frame = FakeFrame(np.full((12, 16), 2048, dtype=np.uint16))
+        assert fake_cam.handler is not None
+        fake_cam.handler(fake_cam, None, frame)
+        first = cam.read_frame()
+        assert first.shape == (12, 16, 3)
+        try:
+            cam.read_frame()
+        except FrameNotYetAvailableError as exc:
+            assert "cached image was not re-served" in str(exc)
+            cam.disconnect()
+            return
+        cam.disconnect()
+        raise AssertionError("cached Vimba frame was delivered twice")
+    finally:
+        uninstall_fake_vmbpy()
+
+
 def test_read_mode_frame_not_yet_error_includes_read_context() -> None:
     """(i) In Read mode, FrameNotYetAvailableError includes Read-mode context."""
     try:
@@ -961,6 +1079,11 @@ TESTS = [
     test_read_mode_never_calls_trigger_software_run,
     test_access_mode_property_matches_negotiated_mode,
     test_invalid_access_mode_raises_value_error_at_init,
+    test_manual_exposure_applied_and_read_back_in_full_mode,
+    test_manual_exposure_refuses_read_mode,
+    test_manual_exposure_requires_auto_off,
+    test_manual_exposure_rejects_unsafe_trigger_pair_at_init,
+    test_cached_vimba_frame_is_not_delivered_twice,
     test_read_mode_frame_not_yet_error_includes_read_context,
     test_full_mode_get_access_mode_raise_propagates,
     test_read_mode_get_access_mode_raise_is_logged_and_skipped,

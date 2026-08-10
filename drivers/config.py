@@ -105,6 +105,10 @@ class MBESystemConfig:
     # Camera settings
     camera_index: int = 0
     camera_fps: float = 1.0
+    # Optional manual exposure for the direct Vimba path. ``None`` leaves
+    # the camera's current volatile setting untouched. Exposure is in
+    # microseconds to match the GenICam feature (ExposureTimeAbs).
+    camera_exposure_us: Optional[float] = None
 
     # MISTRAL ADS backend config — per-chamber Beckhoff PLC endpoint.
     # Empty ads_netid disables the "ads" MistralWorker mode for the chamber.
@@ -208,6 +212,11 @@ CHALCOGENIDE_MBE = MBESystemConfig(
     pyrometer_port="COM3",
     single_images_folder=r"C:\Dropbox\Data\RHEED\RHEED_YangGroup\FeSeTe_STO",
     stream_images_folder=r"C:\Dropbox\Data\RHEED\RHEED_YangGroup\FeSeTe_STO",
+    # VERIFIED 2026-08-06 on the Ch-MBE Manta G-033B (serial
+    # 50-0503464907): ExposureTimeAbs is writable and reads 300000 us with
+    # ExposureAuto=Off. This remains a per-arm volatile write; UserSetSave is
+    # never called.
+    camera_exposure_us=300_000.0,
     # ADS: 7 cells on Ch-MBE (Task #191 validated Jul 22 2026).
     # ads_display_confirmed=True because cell_display uses numeric
     # labels aligned with ADS Cell{N} (Cell1=Substrate, Cell2-7 by

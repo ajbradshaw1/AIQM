@@ -141,6 +141,7 @@ class GrowthApp(QMainWindow):
         self.setMinimumSize(1000, 700)
 
         self.camera_worker: Optional[RheedCameraWorker] = None
+        self._reported_camera_exposure_us: Optional[float] = None
         self.pyrometer_worker: Optional[PyrometerWorker] = None
         self.mistral_worker: Optional[MistralWorker] = None
         self.evap_worker: Optional[EvapControlWorker] = None
@@ -280,13 +281,25 @@ class GrowthApp(QMainWindow):
     def _on_arm(self):
         """Connect camera, pyrometer, MISTRAL, and Evap Control workers."""
         camera_mode = self.monitor.config_camera_mode.currentText()
+        self._reported_camera_exposure_us = None
+        exposure_ms = self.monitor.config_camera_exposure_ms.value()
+        exposure_us = (
+            exposure_ms * 1000.0
+            if camera_mode in ("vimba", "direct") and exposure_ms > 0
+            else None
+        )
+        self.monitor.clear_camera_provenance()
         pyrometer_mode = self.monitor.config_pyrometer_mode.currentText()
         mistral_mode = self.monitor.config_mistral_mode.currentText()
         evap_mode = self.monitor.config_evap_mode.currentText()
 
         if not self.camera_worker or not self.camera_worker.isRunning():
             self.camera_worker = RheedCameraWorker(
-                mode=camera_mode, poll_interval=1.0,
+                mode=camera_mode,
+                poll_interval=1.0,
+                camera_index=self._chamber_config.camera_index,
+                trigger_hz=self._chamber_config.camera_fps,
+                exposure_us=exposure_us,
             )
             self.camera_worker.state_updated.connect(self._on_camera_state)
             self.camera_worker.start()
@@ -832,6 +845,18 @@ class GrowthApp(QMainWindow):
     def _on_camera_state(self, state: CameraState):
         self.monitor.update_camera_state(state)
         self.rheed_intensity_window.on_camera_state(state)
+
+        if (
+            state.connected
+            and state.exposure_us is not None
+            and state.exposure_us != self._reported_camera_exposure_us
+        ):
+            self._reported_camera_exposure_us = state.exposure_us
+            self.statusBar().showMessage(
+                f"Direct camera exposure confirmed: "
+                f"{state.exposure_us / 1000.0:.0f} ms",
+                5000,
+            )
 
         # Feed the auto-capture engine. Engine internally guards on `enabled`,
         # so this is a no-op outside an active session.

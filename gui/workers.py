@@ -9,6 +9,8 @@ from typing import Optional
 import numpy as np
 from PyQt6.QtCore import QMutex, QThread, pyqtSignal
 
+from drivers.rheed_camera import FrameNotYetAvailableError
+
 log = logging.getLogger(__name__)
 
 
@@ -306,10 +308,21 @@ class RheedCameraWorker(QThread):
 
     state_updated = pyqtSignal(CameraState)
 
-    def __init__(self, mode: str = "dummy", poll_interval: float = 1.0):
+    def __init__(
+        self,
+        mode: str = "dummy",
+        poll_interval: float = 1.0,
+        *,
+        camera_index: int = 0,
+        trigger_hz: float = 1.0,
+        exposure_us: Optional[float] = None,
+    ):
         super().__init__()
         self.mode = mode
         self.poll_interval = poll_interval
+        self.camera_index = camera_index
+        self.trigger_hz = trigger_hz
+        self.exposure_us = exposure_us
         # True from __init__ to close the stop()-before-run race
         # (see PowerSupplyWorker for the full comment).
         self.running = True
@@ -324,6 +337,7 @@ class RheedCameraWorker(QThread):
             self._camera = self._create_camera()
             self._camera.connect()
             state.connected = True
+            state.exposure_us = getattr(self._camera, "exposure_us", None)
         except Exception as e:
             state.connected = False
             state.error = str(e)
@@ -354,6 +368,13 @@ class RheedCameraWorker(QThread):
                 state.connected = True
                 state.error = ""
 
+            except FrameNotYetAvailableError:
+                # Direct Vimba reads are edge-triggered: an SDK callback must
+                # have delivered a new frame since the previous read. Quietly
+                # wait instead of emitting the cached frame again with an
+                # inflated frame number/FPS.
+                time.sleep(self.poll_interval)
+                continue
             except Exception as e:
                 state.error = str(e)
                 state.frame = None
@@ -372,7 +393,11 @@ class RheedCameraWorker(QThread):
         """Factory method — import and instantiate camera driver."""
         if self.mode in ("vimba", "direct"):
             from drivers.rheed_camera import VmbCamera
-            return VmbCamera()
+            return VmbCamera(
+                camera_index=self.camera_index,
+                trigger_hz=self.trigger_hz,
+                exposure_us=self.exposure_us,
+            )
         elif self.mode == "screengrab":
             from drivers.rheed_camera import ScreenGrabCamera
             return ScreenGrabCamera()

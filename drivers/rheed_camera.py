@@ -134,6 +134,14 @@ class VmbCamera(RheedCamera):
     # Valid access_mode values. Kept as a class-level constant so tests
     # can introspect the accepted set without importing the module twice.
     _ACCESS_MODE_CHOICES = ("auto", "full", "read")
+    _EXPOSURE_FEATURE_CANDIDATES = (
+        "ExposureTimeAbs",  # confirmed on Ch-MBE Manta G-033B
+        "ExposureTime",     # SFNC spelling on newer Allied Vision cameras
+    )
+    # Preserve at least 10% timing headroom between integration time and the
+    # software-trigger period. Camera transport/readout overhead makes an
+    # exposure equal to the entire period unsafe even if 1/exposure looks OK.
+    _MAX_EXPOSURE_PERIOD_FRACTION = 0.90
 
     def __init__(
         self,
@@ -142,14 +150,33 @@ class VmbCamera(RheedCamera):
         bit_depth: int = 12,
         apply_palette: bool = True,
         access_mode: str = "auto",
+        exposure_us: Optional[float] = None,
     ):
         if access_mode not in self._ACCESS_MODE_CHOICES:
             raise ValueError(
                 f"access_mode must be one of {self._ACCESS_MODE_CHOICES}, "
                 f"got {access_mode!r}"
             )
+        if trigger_hz <= 0:
+            raise ValueError("trigger_hz must be positive")
+        if exposure_us is not None:
+            exposure_us = float(exposure_us)
+            if exposure_us <= 0:
+                raise ValueError("exposure_us must be positive when provided")
+            safe_max_us = (
+                1_000_000.0 / trigger_hz
+                * self._MAX_EXPOSURE_PERIOD_FRACTION
+            )
+            if exposure_us > safe_max_us:
+                raise ValueError(
+                    f"exposure_us={exposure_us:.0f} is too long for "
+                    f"trigger_hz={trigger_hz:.3g}; use <= {safe_max_us:.0f} us "
+                    "to preserve 10% acquisition headroom"
+                )
         self._camera_index = camera_index
         self._trigger_hz = trigger_hz
+        self._requested_exposure_us = exposure_us
+        self._exposure_us: Optional[float] = None
         self._bit_depth = bit_depth
         # Fixed normalization denominator (4095 for 12-bit Manta G-033B).
         # Used to map raw uint16 ADC samples into the uint8 range while
@@ -177,6 +204,8 @@ class VmbCamera(RheedCamera):
         self._ready_event = threading.Event()
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
+        self._latest_frame_sequence = 0
+        self._last_delivered_sequence = 0
         # Any exception that terminated the stream thread. Populated by
         # _stream_loop's ``except`` block, read by ``read_frame`` so
         # mid-session stream death surfaces to the caller with its real
@@ -206,8 +235,11 @@ class VmbCamera(RheedCamera):
         with self._error_lock:
             self._stream_error = None
             self._last_frame_error = None
+        self._exposure_us = None
         with self._frame_lock:
             self._latest_frame = None
+            self._latest_frame_sequence = 0
+            self._last_delivered_sequence = 0
 
         self._stream_thread = threading.Thread(
             target=self._stream_loop, name="VmbCameraStream", daemon=True,
@@ -231,6 +263,128 @@ class VmbCamera(RheedCamera):
             "VmbCamera connected: camera_index=%d, trigger_hz=%.2f, bit_depth=%d",
             self._camera_index, self._trigger_hz, self._bit_depth,
         )
+
+    @staticmethod
+    def _optional_feature_call(feature, method_name: str, default=None):
+        method = getattr(feature, method_name, None)
+        if method is None or not callable(method):
+            return default
+        return method()
+
+    def _configure_exposure(self, cam, mode: str) -> None:
+        """Read or apply the requested manual exposure before streaming.
+
+        A requested write is fail-closed: it requires Full access,
+        ExposureAuto=Off, a writable numeric feature, valid device range, an
+        exact readback, and an achievable frame-rate limit. If validation
+        after ``set`` fails, the original value is restored before raising.
+        No user-set save command is issued, so the change remains volatile.
+        """
+        feature_name = next(
+            (
+                name for name in self._EXPOSURE_FEATURE_CANDIDATES
+                if getattr(cam, name, None) is not None
+            ),
+            None,
+        )
+        if feature_name is None:
+            if self._requested_exposure_us is None:
+                return
+            raise RuntimeError(
+                "Manual exposure requested, but neither ExposureTimeAbs nor "
+                "ExposureTime exists on this camera"
+            )
+
+        feature = getattr(cam, feature_name)
+        current = self._optional_feature_call(feature, "get", None)
+        if isinstance(current, (int, float)):
+            self._exposure_us = float(current)
+        if self._requested_exposure_us is None:
+            return
+        if mode != "full":
+            raise RuntimeError(
+                "Manual exposure requires Full camera access. Close kSA or "
+                "Vimba X Viewer, then disarm and arm again; the GUI refused "
+                "to pretend the requested exposure was applied in Read mode."
+            )
+
+        auto_feature = getattr(cam, "ExposureAuto", None)
+        auto_value = self._optional_feature_call(auto_feature, "get", None)
+        if auto_value is not None and not str(auto_value).lower().endswith("off"):
+            raise RuntimeError(
+                f"Manual exposure requires ExposureAuto=Off; camera reports "
+                f"{auto_value!r}"
+            )
+
+        access = self._optional_feature_call(feature, "get_access_mode", None)
+        if not (
+            isinstance(access, tuple)
+            and len(access) == 2
+            and bool(access[1])
+        ):
+            raise RuntimeError(
+                f"{feature_name} is not writable in Full camera access"
+            )
+        if not isinstance(current, (int, float)):
+            raise RuntimeError(f"Could not read the original {feature_name}")
+
+        requested = float(self._requested_exposure_us)
+        bounds = self._optional_feature_call(feature, "get_range", None)
+        if isinstance(bounds, tuple) and len(bounds) == 2:
+            low, high = float(bounds[0]), float(bounds[1])
+            if not low <= requested <= high:
+                raise RuntimeError(
+                    f"Requested exposure {requested:.0f} us is outside the "
+                    f"camera range [{low:.0f}, {high:.0f}] us"
+                )
+        else:
+            low = 0.0
+        increment = self._optional_feature_call(feature, "get_increment", None)
+        if isinstance(increment, (int, float)) and increment > 0:
+            requested = low + round((requested - low) / increment) * increment
+
+        wrote = False
+        try:
+            feature.set(requested)
+            wrote = True
+            readback = float(feature.get())
+            tolerance = max(
+                float(increment)
+                if isinstance(increment, (int, float)) else 0.0,
+                1.0,
+            )
+            if abs(readback - requested) > tolerance:
+                raise RuntimeError(
+                    f"{feature_name} readback {readback:.0f} us does not "
+                    f"match requested {requested:.0f} us"
+                )
+
+            limit_feature = getattr(cam, "AcquisitionFrameRateLimit", None)
+            limit = self._optional_feature_call(limit_feature, "get", None)
+            if isinstance(limit, (int, float)) and self._trigger_hz > float(limit):
+                raise RuntimeError(
+                    f"Camera reports a {float(limit):.3f} fps limit at "
+                    f"{readback:.0f} us, below the requested "
+                    f"{self._trigger_hz:.3f} Hz trigger rate"
+                )
+            self._exposure_us = readback
+            log.info(
+                "VmbCamera manual exposure applied: %s=%.0f us "
+                "(requested %.0f us, volatile)",
+                feature_name, readback, self._requested_exposure_us,
+            )
+        except Exception:
+            if wrote:
+                try:
+                    feature.set(current)
+                    self._exposure_us = float(feature.get())
+                except Exception as restore_exc:  # noqa: BLE001
+                    log.critical(
+                        "VmbCamera could not restore exposure after a failed "
+                        "configuration: %s. Power-cycle the camera.",
+                        restore_exc,
+                    )
+            raise
 
     def _stream_loop(self) -> None:
         """Background thread — owns every vmbpy call for one connect cycle.
@@ -332,6 +486,7 @@ class VmbCamera(RheedCamera):
         try:
             with cam:
                 past_open = True
+                self._configure_exposure(cam, mode)
                 # Gate every feature write on the writable bit (constraint 3).
                 # In Full mode: writable=True → set() fires as before.
                 # In Read mode: writable=False → skip with an INFO log.
@@ -456,6 +611,7 @@ class VmbCamera(RheedCamera):
             rgb = self._to_rgb_uint8(img)
             with self._frame_lock:
                 self._latest_frame = rgb
+                self._latest_frame_sequence += 1
         except Exception as exc:  # noqa: BLE001
             # Record but don't kill the stream — one bad frame shouldn't
             # take down the whole session. Guarded by _error_lock so
@@ -513,21 +669,32 @@ class VmbCamera(RheedCamera):
         if not self._connected:
             raise RuntimeError("Camera not connected.")
         with self._frame_lock:
-            latest = self._latest_frame
-        if latest is None:
-            if self._active_access_mode == "read":
-                raise FrameNotYetAvailableError(
-                    "Connected in AccessMode.Read; no frame arrived yet. "
-                    "Frames flow only if another consumer (e.g. kSA Live "
-                    "Video) is triggering, camera multicast is enabled "
-                    "(Vimba X Viewer → user set), and external triggering "
-                    "is producing frames."
-                )
+            if self._latest_frame is not None:
+                if self._latest_frame_sequence <= self._last_delivered_sequence:
+                    raise FrameNotYetAvailableError(
+                        "No new Vimba frame has arrived since the previous "
+                        "read; the cached image was not re-served as a new "
+                        "acquisition."
+                    )
+                # Copy and mark consumed under the same lock as the callback's
+                # update so a new arrival cannot race sequence bookkeeping.
+                result = self._latest_frame.copy()
+                self._last_delivered_sequence = self._latest_frame_sequence
+                return result
+
+        # No frame has arrived in this connect cycle.
+        if self._active_access_mode == "read":
             raise FrameNotYetAvailableError(
-                "Vimba camera is streaming but no frame has arrived yet — "
-                "expected within one trigger period after connect."
+                "Connected in AccessMode.Read; no frame arrived yet. "
+                "Frames flow only if another consumer (e.g. kSA Live "
+                "Video) is triggering, camera multicast is enabled "
+                "(Vimba X Viewer → user set), and external triggering "
+                "is producing frames."
             )
-        return latest.copy()
+        raise FrameNotYetAvailableError(
+            "Vimba camera is streaming but no frame has arrived yet — "
+            "expected within one trigger period after connect."
+        )
 
     def disconnect(self) -> None:
         self._connected = False
@@ -558,6 +725,11 @@ class VmbCamera(RheedCamera):
         `access_mode="auto"`.
         """
         return self._active_access_mode
+
+    @property
+    def exposure_us(self) -> Optional[float]:
+        """Confirmed camera exposure readback for the active connect cycle."""
+        return self._exposure_us
 
 
 class ScreenGrabCamera(RheedCamera):
