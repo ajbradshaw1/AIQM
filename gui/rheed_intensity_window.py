@@ -53,8 +53,9 @@ class RheedIntensityWindow(QMainWindow):
         # A re-served frame is not a new measurement. Appending it would
         # add the identical intensity at a later time, so the trace would
         # report the poll rate as if it were the acquisition rate and
-        # flatten any real change across the repeat. Above the camera's
-        # exposure-limited frame rate that is most of the trace.
+        # flatten any real change across the repeat. Not the common case at
+        # the current 1 Hz poll against a ~3.33 fps ceiling — this matters
+        # for stalls, misconfiguration, and any faster future cadence.
         if not state.connected or not state.valid or math.isnan(state.intensity):
             return
         if getattr(state, "is_duplicate", False):

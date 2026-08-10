@@ -43,14 +43,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 class FakeFrame:
     """Fake vmbpy Frame — mimics ``as_numpy_ndarray()`` returning a 2D view.
 
-    ``frame_id`` mirrors vmbpy's ``get_id()``. Pass ``None`` to model a
-    firmware that exposes no frame ID, which must degrade to the driver's
-    local ordinal rather than losing the frame.
+    ``frame_id`` mirrors vmbpy's ``get_id()`` and ``timestamp_ns`` its
+    ``get_timestamp()``. Pass ``None`` for either to model a firmware that
+    does not expose it — the driver must lose only that field, never the
+    frame, and never its own capture_sequence.
     """
 
-    def __init__(self, img: np.ndarray, frame_id: Optional[int] = None):
+    def __init__(
+        self,
+        img: np.ndarray,
+        frame_id: Optional[int] = None,
+        timestamp_ns: Optional[int] = 7_000_000_000,
+    ):
         self._img = img
         self._frame_id = frame_id
+        self._timestamp_ns = timestamp_ns
 
     def as_numpy_ndarray(self) -> np.ndarray:
         return self._img
@@ -59,6 +66,11 @@ class FakeFrame:
         if self._frame_id is None:
             raise AttributeError("this firmware exposes no frame ID")
         return self._frame_id
+
+    def get_timestamp(self):
+        if self._timestamp_ns is None:
+            raise AttributeError("this firmware exposes no frame timestamp")
+        return self._timestamp_ns
 
 
 class FakeVmbCameraError(Exception):
@@ -479,10 +491,18 @@ def _read_sequences(cam, fake_cam, count: int) -> list[int]:
     return sequences
 
 
-def test_last_capture_reports_camera_frame_id() -> None:
-    """last_capture carries the camera's own frame ID, not a read counter."""
+def test_sequence_is_application_owned_camera_id_is_evidence() -> None:
+    """capture_sequence is the driver's own counter; the camera id rides along.
+
+    The ordering contract cannot be the camera's frame id: GenICam does not
+    guarantee it survives a reconnect without resetting, and the offline
+    labeling tool rejects a session whose capture_sequence ever fails to
+    increase. FakeCamera issues ids from 5000 so the two are trivially
+    distinguishable — a sequence in that range would mean the device's
+    numbering had become the contract again.
+    """
     try:
-        fake_cam = install_fake_vmbpy()
+        install_fake_vmbpy()
         from drivers.rheed_camera import VmbCamera
         cam = VmbCamera(trigger_hz=100.0)
         cam.connect()
@@ -492,13 +512,14 @@ def test_last_capture_reports_camera_frame_id() -> None:
         capture = cam.last_capture
         assert capture is not None, "last_capture is None after a successful read"
         assert capture.backend == "vimba", f"backend: {capture.backend!r}"
-        # FakeCamera starts its IDs at 5000 and pre-increments, so any real
-        # camera-sourced value is > 5000. A local read counter would be a
-        # small integer — this is what distinguishes the two.
-        assert capture.sequence > 5000, (
-            f"sequence {capture.sequence} looks like a local counter, "
-            "not the camera's frame ID"
+        assert 0 < capture.sequence < 100, (
+            f"sequence {capture.sequence} is not the driver's own counter"
         )
+        assert capture.camera_frame_id is not None
+        assert capture.camera_frame_id > 5000, (
+            f"camera id {capture.camera_frame_id} was not recorded from the device"
+        )
+        assert capture.camera_timestamp_ns == 7_000_000_000
         assert (capture.height, capture.width) == rgb.shape[:2]
         assert capture.source_hwnd == 0, "Vimba path has no owning window"
         assert capture.age_ms() >= 0.0
@@ -508,14 +529,13 @@ def test_last_capture_reports_camera_frame_id() -> None:
         uninstall_fake_vmbpy()
 
 
-def test_repeated_exposure_is_visible_in_sequence() -> None:
-    """A re-served cached frame repeats its sequence instead of advancing.
+def test_sequence_keeps_increasing_when_camera_id_resets() -> None:
+    """A camera-side id reset must not make capture_sequence go backwards.
 
-    This is the regression test for the silent over-trigger failure: at the
-    300 ms exposure measured on the Ch-MBE Manta the camera cannot exceed
-    ~3.33 fps, so polling faster re-serves the same exposure. Previously the
-    worker stamped those with capture_sequence = frame_count, which advances
-    unconditionally and made duplicates indistinguishable from new frames.
+    This is the failure Codex flagged: a reconnect or wraparound that
+    restarts the device's numbering would, if the id were the contract,
+    produce a session the labeling tool refuses to load. The driver's own
+    counter is immune by construction.
     """
     try:
         fake_cam = install_fake_vmbpy()
@@ -524,25 +544,67 @@ def test_repeated_exposure_is_visible_in_sequence() -> None:
         cam.connect()
         _wait_for_first_frame(cam)
 
-        # Baseline: a camera completing a new exposure per trigger.
-        advancing = _read_sequences(cam, fake_cam, 3)
-        assert all(b > a for a, b in zip(advancing, advancing[1:])), (
-            f"fresh exposures must strictly increase, got {advancing}"
-        )
+        before = _read_sequences(cam, fake_cam, 2)
+        # The device restarts its numbering, as after a reconnect.
+        fake_cam.next_frame_id = 0
+        after = _read_sequences(cam, fake_cam, 2)
 
-        # Over-trigger: the camera has not finished a new exposure.
-        fake_cam.repeat_next_frame = True
-        repeated = _read_sequences(cam, fake_cam, 3)
-        assert len(set(repeated)) == 1, (
-            f"a re-served exposure must repeat its id, got {repeated}"
+        combined = before + after
+        assert all(b > a for a, b in zip(combined, combined[1:])), (
+            f"capture_sequence went backwards across an id reset: {combined}"
+        )
+        assert cam.last_capture.camera_frame_id < 100, (
+            "the fake did not actually reset its ids; test proves nothing"
         )
         cam.disconnect()
     finally:
         uninstall_fake_vmbpy()
 
 
-def test_missing_frame_id_falls_back_without_losing_the_frame() -> None:
-    """Firmware with no get_id() degrades to a local ordinal, keeps the frame."""
+def test_repeated_exposure_is_visible_in_sequence() -> None:
+    """Reading faster than frames arrive repeats the sequence.
+
+    Over-triggering does not mean the camera delivers a frame with a stale
+    id — it means no frame is delivered at all and read_frame re-serves
+    what it already holds. So the faithful model is extra reads without an
+    intervening trigger, not a trigger that reuses an id.
+
+    At the 300 ms exposure measured on the Ch-MBE Manta the camera cannot
+    exceed ~3.33 fps, so any faster poll lands here. Previously the worker
+    stamped these with capture_sequence = frame_count, which advances per
+    read and so made a re-serve indistinguishable from a new frame.
+    """
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        # No background triggering: this test owns frame delivery entirely,
+        # so a repeat cannot be papered over by the idle loop firing.
+        cam = VmbCamera(trigger_hz=100.0, access_mode="read")
+        cam.connect()
+        fake_cam.TriggerSoftware.run()
+        _wait_for_first_frame(cam)
+
+        # One delivered frame, read three times.
+        repeated = [cam.read_frame() is not None and cam.last_capture.sequence
+                    for _ in range(3)]
+        assert len(set(repeated)) == 1, (
+            f"a re-served frame must keep its ordinal, got {repeated}"
+        )
+
+        # A genuinely new delivery advances it.
+        fake_cam.TriggerSoftware.run()
+        cam.read_frame()
+        assert cam.last_capture.sequence > repeated[0], (
+            f"new delivery did not advance: {cam.last_capture.sequence} "
+            f"after {repeated[0]}"
+        )
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_missing_frame_id_costs_only_the_evidence() -> None:
+    """Firmware with no get_id() keeps working; only the corroboration is lost."""
     try:
         fake_cam = install_fake_vmbpy()
         fake_cam.expose_frame_id = False
@@ -553,7 +615,10 @@ def test_missing_frame_id_falls_back_without_losing_the_frame() -> None:
 
         sequences = _read_sequences(cam, fake_cam, 3)
         assert all(b > a for a, b in zip(sequences, sequences[1:])), (
-            f"fallback ordinal must still advance, got {sequences}"
+            f"sequence must advance without a camera id, got {sequences}"
+        )
+        assert cam.last_capture.camera_frame_id is None, (
+            "camera id was invented for a firmware that has none"
         )
         # The frame itself must survive the missing accessor.
         assert cam.read_frame().shape == (492, 656, 3)
@@ -583,17 +648,17 @@ def test_last_capture_cleared_on_disconnect() -> None:
         uninstall_fake_vmbpy()
 
 
-def test_sensor_settings_recorded_at_connect() -> None:
+def test_sensor_settings_at_connect_recorded() -> None:
     """Exposure/gain/black-level are captured so a session is self-describing."""
     try:
         install_fake_vmbpy()
         from drivers.rheed_camera import VmbCamera
         cam = VmbCamera(trigger_hz=100.0)
-        assert cam.sensor_settings == {}, "settings existed before connect"
+        assert cam.sensor_settings_at_connect == {}, "settings existed before connect"
         cam.connect()
         _wait_for_first_frame(cam)
 
-        settings = cam.sensor_settings
+        settings = cam.sensor_settings_at_connect
         assert settings["exposure_us"] == 300000.0
         assert settings["exposure_auto"] == "Off"
         assert settings["exposure_mode"] == "Timed"
@@ -616,7 +681,7 @@ def test_sensor_settings_recorded_at_connect() -> None:
         uninstall_fake_vmbpy()
 
 
-def test_sensor_settings_survive_disconnect() -> None:
+def test_sensor_settings_at_connect_survive_disconnect() -> None:
     """The record outlives the connection — metadata is written at session end."""
     try:
         install_fake_vmbpy()
@@ -625,7 +690,7 @@ def test_sensor_settings_survive_disconnect() -> None:
         cam.connect()
         _wait_for_first_frame(cam)
         cam.disconnect()
-        assert cam.sensor_settings["exposure_us"] == 300000.0, (
+        assert cam.sensor_settings_at_connect["exposure_us"] == 300000.0, (
             "settings were cleared on disconnect; session metadata is "
             "written after the camera stops, so they must persist"
         )
@@ -646,7 +711,7 @@ def test_unreadable_feature_does_not_break_connect() -> None:
         _wait_for_first_frame(cam)
 
         assert cam.connected, "a bad feature read killed the connection"
-        settings = cam.sensor_settings
+        settings = cam.sensor_settings_at_connect
         assert "exposure_us" not in settings, "a failed read was recorded anyway"
         # Everything else must still have been collected.
         assert settings["black_level"] == 35.0
@@ -656,22 +721,22 @@ def test_unreadable_feature_does_not_break_connect() -> None:
         uninstall_fake_vmbpy()
 
 
-def test_worker_sensor_settings_empty_without_a_sensor() -> None:
+def test_worker_sensor_settings_at_connect_empty_without_a_sensor() -> None:
     """screengrab/dummy drivers report no settings rather than failing."""
     from gui.workers import RheedCameraWorker
 
     worker = RheedCameraWorker(mode="dummy")
     # Before run(), and for any driver that records nothing.
-    assert worker.sensor_settings == {}
+    assert worker.sensor_settings_at_connect == {}
 
     class _DriverWithSettings:
-        sensor_settings = {"exposure_us": 300000.0}
+        sensor_settings_at_connect = {"exposure_us": 300000.0}
 
     worker._camera = _DriverWithSettings()
-    assert worker.sensor_settings == {"exposure_us": 300000.0}
+    assert worker.sensor_settings_at_connect == {"exposure_us": 300000.0}
     # Must be a copy — a caller mutating it cannot corrupt the driver record.
-    worker.sensor_settings["exposure_us"] = 1.0
-    assert worker.sensor_settings["exposure_us"] == 300000.0
+    worker.sensor_settings_at_connect["exposure_us"] = 1.0
+    assert worker.sensor_settings_at_connect["exposure_us"] == 300000.0
 
 
 def test_capture_geometry_id_tracks_pixel_policy() -> None:
@@ -1238,35 +1303,14 @@ def test_frame_luminance_rgb_includes_r_and_b() -> None:
     assert abs(_frame_luminance(frame) - expected) < 0.5
 
 
+# Discovered rather than hand-listed. The previous explicit list silently
+# fell 10 tests behind the module — the direct runner reported 27/27 while
+# skipping every provenance and sensor-setting test in the file. pytest
+# collects by name and never had that gap; this makes the direct runner
+# agree with it by construction instead of by diligence.
 TESTS = [
-    test_palette_intensity_in_all_channels,
-    test_palette_bgw_output,
-    test_normalization_fixed_denominator,
-    test_frame_luminance_2d_frame,
-    test_frame_luminance_rgb_bt601_weights,
-    test_frame_luminance_rgb_includes_r_and_b,
-    test_connect_then_read_frame,
-    test_connect_no_cameras_raises,
-    test_connect_import_error_raises_early,
-    test_read_frame_before_any_frame_raises_specific_error,
-    test_read_frame_before_connect_generic_runtime_error,
-    test_stream_error_propagates_to_read_frame,
-    test_disconnect_idempotent_when_never_connected,
-    test_reconnect_after_disconnect,
-    test_bad_frame_recorded_but_stream_survives,
-    test_trigger_backoff_after_consecutive_fails,
-    # Access-mode fallback (Jul 27 2026 refactor)
-    test_auto_full_succeeds_records_access_mode,
-    test_auto_full_denied_at_enter_falls_back_to_read,
-    test_auto_full_denied_at_set_access_mode_falls_back_to_read,
-    test_auto_full_and_read_both_denied_raises_combined_error,
-    test_read_mode_skips_writes_when_feature_not_writable,
-    test_read_mode_never_calls_trigger_software_run,
-    test_access_mode_property_matches_negotiated_mode,
-    test_invalid_access_mode_raises_value_error_at_init,
-    test_read_mode_frame_not_yet_error_includes_read_context,
-    test_full_mode_get_access_mode_raise_propagates,
-    test_read_mode_get_access_mode_raise_is_logged_and_skipped,
+    value for name, value in sorted(globals().items())
+    if name.startswith("test_") and callable(value)
 ]
 
 

@@ -1127,12 +1127,21 @@ class GrowthApp(QMainWindow):
         guards it; a session can end without one. Screengrab and dummy have
         no sensor to interrogate and report {}, so the key is omitted
         rather than written empty.
+
+        The key says "at_connect" because that is literally what it is: the
+        camera is opened at ARM, a session may START well afterwards, and
+        an external holder such as kSA can change exposure mid-session. It
+        carries its own read_at_utc so a reader can judge the gap. Do not
+        promote this to a session-wide claim without per-frame or
+        per-change logging behind it.
         """
         metadata = self.monitor.get_session_metadata()
         worker = self.camera_worker
-        settings = worker.sensor_settings if worker is not None else {}
+        settings = (
+            worker.sensor_settings_at_connect if worker is not None else {}
+        )
         if settings:
-            metadata["camera_sensor_settings"] = settings
+            metadata["camera_sensor_settings_at_connect"] = settings
         return metadata
 
     def _current_auto_capture_metadata(self) -> dict:

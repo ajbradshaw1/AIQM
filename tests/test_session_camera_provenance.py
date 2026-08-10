@@ -28,7 +28,7 @@ class _Monitor:
 
 class _Worker:
     def __init__(self, settings: dict):
-        self.sensor_settings = settings
+        self.sensor_settings_at_connect = settings
 
 
 def _app(worker) -> GrowthApp:
@@ -46,7 +46,7 @@ def _app(worker) -> GrowthApp:
 def test_settings_recorded_when_present() -> None:
     settings = {"exposure_us": 300000.0, "gain": 0, "black_level": 35.0}
     metadata = _app(_Worker(settings))._session_metadata_with_camera()
-    assert metadata["camera_sensor_settings"] == settings
+    assert metadata["camera_sensor_settings_at_connect"] == settings
     # The base metadata must survive intact.
     assert metadata["grower"] == "AJ"
 
@@ -59,14 +59,14 @@ def test_missing_worker_does_not_raise() -> None:
     it — a session's records lost to a null check.
     """
     metadata = _app(None)._session_metadata_with_camera()
-    assert "camera_sensor_settings" not in metadata
+    assert "camera_sensor_settings_at_connect" not in metadata
     assert metadata["grower"] == "AJ"
 
 
 def test_sensorless_backend_omits_the_key() -> None:
     """screengrab/dummy report {} — omitted rather than written empty."""
     metadata = _app(_Worker({}))._session_metadata_with_camera()
-    assert "camera_sensor_settings" not in metadata
+    assert "camera_sensor_settings_at_connect" not in metadata
 
 
 def test_both_session_end_paths_use_the_helper() -> None:

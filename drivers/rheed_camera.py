@@ -260,11 +260,23 @@ class VmbCamera(RheedCamera):
         # between two reads, and the caller's provenance must describe the
         # image it actually received.
         self._last_capture: Optional[CapturedFrame] = None
-        # Fallback ordinal for firmwares whose Frame exposes no usable
-        # frame ID. Only ever used when get_id() is absent or unusable;
-        # the camera's own ID is always preferred because it is the thing
-        # that makes a duplicate detectable.
-        self._fallback_sequence = 0
+        # Count of frames DELIVERED to the handler, which is the driver's
+        # capture-sequence contract. The handler runs once per frame the
+        # camera actually hands over, so a counter incremented there is
+        # both strictly increasing and duplicate-revealing: a re-served
+        # frame does not re-enter the handler, so it carries the ordinal it
+        # was first assigned.
+        #
+        # Deliberately NOT the camera's own Frame.get_id(). GenICam does not
+        # guarantee that id is monotonic across a reconnect or free of
+        # wraparound, and tools/rheed_postprocessing_labeling rejects a
+        # session whose capture_sequence ever fails to increase — so a
+        # camera-side reset would invalidate an otherwise good session. The
+        # camera id is still recorded, as evidence rather than as the key.
+        #
+        # Not reset by disconnect: a reconnect within one driver lifetime
+        # must not restart the ordinals it already issued.
+        self._delivered_count = 0
         # Acquisition settings read once per open, before streaming starts.
         # Deliberately NOT cleared on disconnect: this describes the
         # conditions a session's frames were taken under, and the session
@@ -533,7 +545,17 @@ class VmbCamera(RheedCamera):
         returns enums for some features and numbers for others, and the
         record only needs to be faithful and JSON-safe, not typed.
         """
-        settings: dict = {}
+        settings: dict = {
+            # When this snapshot was taken, which is camera-open time — not
+            # session start. The GUI connects the camera at ARM and a
+            # session may START well afterwards, so a reader needs the
+            # timestamp to know how far ahead of the frames this is.
+            "read_at_utc": (
+                datetime.now(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            ),
+        }
         missing: list[str] = []
         for key, candidates in self._SENSOR_SETTING_CANDIDATES:
             for name in candidates:
@@ -560,13 +582,23 @@ class VmbCamera(RheedCamera):
         self._sensor_settings = settings
 
     @property
-    def sensor_settings(self) -> dict:
-        """Acquisition settings recorded at the most recent open.
+    def sensor_settings_at_connect(self) -> dict:
+        """Acquisition settings as they read at the most recent camera open.
+
+        A POINT-IN-TIME SNAPSHOT, not a session-constant. The GUI connects
+        the camera at ARM and a session may START well afterwards, and
+        nothing here prevents another application — kSA holding the camera,
+        or the Vimba X Viewer — from changing exposure while a session
+        runs. Treat this as "the settings when the link came up", carried
+        with read_at_utc so a reader can see how far ahead of the frames it
+        was taken.
+
+        Making the record authoritative for a whole session needs per-frame
+        or per-change logging, which is a prerequisite for the exposure
+        controls rather than something they can be bolted onto.
 
         Empty before the first successful connect. Survives disconnect on
-        purpose — it describes the session, which outlives the connection,
-        and the GUI writes session_metadata.json after the camera has
-        already been stopped.
+        purpose — session_metadata.json is written after the camera stops.
         """
         return dict(self._sensor_settings)
 
@@ -623,11 +655,26 @@ class VmbCamera(RheedCamera):
 
         Provenance is captured HERE, in the same invocation as the image,
         because this is the only moment the two are known to belong
-        together. ``sequence`` prefers the camera's own frame ID: the
-        device increments it per exposure, so two reads that return the
-        same cached image carry the same ordinal and the duplicate becomes
-        visible downstream. A counter incremented per read cannot express
-        that — it advances whether or not a new exposure occurred.
+        together — and because this callback runs exactly once per frame
+        the camera delivers. That is what makes ``sequence`` work: it is
+        an application-owned counter incremented here, so it is strictly
+        increasing by construction, while a re-served frame keeps the
+        ordinal it was first assigned because it never re-enters this
+        function.
+
+        The camera's own Frame.get_id() and Frame.get_timestamp() are
+        recorded alongside, but neither is the ordering key. GenICam does
+        not guarantee they survive a reconnect without resetting, and a
+        reset would make capture_sequence non-increasing — which the
+        offline labeling tool treats as grounds to reject the whole
+        session.
+
+        The timestamps are likewise two different things. captured_at_utc
+        is when Python entered this callback (host arrival), which is the
+        best wall-clock available but includes transport and scheduling
+        delay. camera_timestamp_ns is the device's own clock where the
+        firmware provides it — better for inter-frame intervals, but on an
+        arbitrary epoch that cannot be turned into wall time.
         """
         try:
             monotonic_ns = time.monotonic_ns()
@@ -640,36 +687,37 @@ class VmbCamera(RheedCamera):
                 # as_numpy_ndarray() is a view into the frame buffer — copy
                 # it out BEFORE queue_frame() hands the buffer back.
                 img = frame.as_numpy_ndarray().copy().squeeze()
-                # get_id() must also be read before the buffer is recycled.
-                # It is absent on some firmwares and may return None, so
-                # every failure mode falls back to the local ordinal rather
-                # than costing us the frame.
+                # Both device accessors must also be read before the buffer
+                # is recycled. Each is optional on a given firmware, and
+                # neither is worth losing a frame over.
                 try:
-                    frame_id = frame.get_id()
+                    camera_frame_id = int(frame.get_id())
                 except Exception:  # noqa: BLE001
-                    frame_id = None
+                    camera_frame_id = None
+                try:
+                    camera_timestamp_ns = int(frame.get_timestamp())
+                except Exception:  # noqa: BLE001
+                    camera_timestamp_ns = None
             finally:
                 # Always recycle: a leaked buffer shrinks the pool and,
                 # once it is exhausted, silently halts capture.
                 cam.queue_frame(frame)
             rgb = self._to_rgb_uint8(img)
-            if frame_id is None:
-                self._fallback_sequence += 1
-                sequence = self._fallback_sequence
-            else:
-                sequence = int(frame_id)
+            self._delivered_count += 1
             height, width = rgb.shape[:2]
             capture = CapturedFrame(
                 image=rgb,
                 captured_at_utc=captured_at_utc,
                 captured_monotonic_ns=monotonic_ns,
-                sequence=sequence,
+                sequence=self._delivered_count,
                 # Not a window capture — there is no owning HWND. Zero is
                 # the same sentinel the worker's synthetic branch used.
                 source_hwnd=0,
                 width=width,
                 height=height,
                 backend="vimba",
+                camera_frame_id=camera_frame_id,
+                camera_timestamp_ns=camera_timestamp_ns,
             )
             with self._frame_lock:
                 self._latest_frame = rgb

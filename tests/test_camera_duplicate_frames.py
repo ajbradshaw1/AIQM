@@ -7,18 +7,28 @@ is ~3.33 fps, and VmbCamera.read_frame() re-serves its cached frame for
 any poll above it — silently, with no exception and no fault indicator
 (27b010c).
 
-Three consumers were named as receiving those duplicates: the heartbeat
-log, the classifier, and the change detector. The first two already held
-capture-identity guards, but on the direct path their keys were built
-from synthesised values that changed every read, so the guards could
-never fire. These tests pin both halves: that the guards now see repeating
-identities, and that the change detector — which had no guard — is skipped
-explicitly.
+Four consumers receive those duplicates: the heartbeat log, the
+classifier, the change detector and the intensity trace. The first two
+already held capture-identity guards, but on the direct path their keys
+were built from synthesised values that changed every read, so the guards
+could never fire; the other two had no guard at all.
+
+The heartbeat and classifier cases are behavioural — they drive the real
+handler and the real run loop and count disk writes and inference calls,
+rather than reconstructing a key and asserting it repeats. A token-shaped
+test would pass against a consumer that computed the right key and then
+ignored it.
+
+Note on rates: production polls at 1 Hz against a ~3.33 fps ceiling, so
+the default configuration does not normally over-poll. These paths matter
+for stalls, misconfiguration, and any future faster cadence — not because
+the current GUI is saturating the camera.
 """
 
 from __future__ import annotations
 
 import sys
+import threading
 import time as _real_time
 from pathlib import Path
 
@@ -191,54 +201,162 @@ def test_backend_without_provenance_never_claims_duplicate() -> None:
     )
 
 
-def test_classifier_guard_sees_a_repeating_key() -> None:
-    """The classifier's existing skip-guard now actually fires.
+class _StubBridge:
+    """Counts inference calls; returns a well-formed score dict."""
 
-    on_rheed_state builds ("capture", capture_sequence,
-    captured_monotonic_ns). Before real provenance both components were
-    minted fresh per read, so the key never repeated and the guard at
-    `frame_key == self._last_classified_frame_key` was dead code.
+    def __init__(self):
+        self.calls = 0
+
+    def classify(self, frame):
+        from gui.recon_labels import RECON_LABELS
+        self.calls += 1
+        return {
+            label: (100.0 if index == 0 else 0.0)
+            for index, label in enumerate(RECON_LABELS)
+        }
+
+
+def _settled(predicate, timeout_s: float = 2.0) -> None:
+    """Wait until predicate() holds, or fail with the deadline."""
+    deadline = _real_time.monotonic() + timeout_s
+    while _real_time.monotonic() < deadline:
+        if predicate():
+            return
+        _real_time.sleep(0.01)
+    raise AssertionError("condition not reached within timeout")
+
+
+def test_classifier_runs_inference_once_per_exposure() -> None:
+    """The classifier infers per exposure, not per delivered state.
+
+    Behavioural: this drives the real run loop with a stub bridge and
+    counts classify() calls. Its guard compares
+    ("capture", capture_sequence, captured_monotonic_ns) against the last
+    classified key — both components used to be minted fresh per read on
+    the direct path, so the key never repeated and the guard was dead
+    code. Inference is the most expensive thing in the pipeline, so a
+    duplicate cost a full model pass to reproduce a result already held.
     """
     worker = ClassifierWorker(ai_repo_root="/nowhere")
-    duplicate = dict(
-        frame=_frame(), frame_number=1,
-        capture_sequence=5001, captured_monotonic_ns=1_000,
-    )
-    worker.on_rheed_state(CameraState(**duplicate))
-    first_key = worker._latest_frame_key
-    # Same exposure re-served: frame_number advances (it counts reads) but
-    # the capture identity does not.
-    worker.on_rheed_state(CameraState(**{**duplicate, "frame_number": 2}))
-    assert worker._latest_frame_key == first_key, (
-        f"key changed across a duplicate: {first_key} -> "
-        f"{worker._latest_frame_key}"
-    )
-    worker.on_rheed_state(CameraState(
-        frame=_frame(), frame_number=3,
-        capture_sequence=5002, captured_monotonic_ns=2_000,
-    ))
-    assert worker._latest_frame_key != first_key, (
-        "key did not change across a genuinely new exposure"
-    )
+    worker.POLL_INTERVAL_S = 0.01
+    bridge = _StubBridge()
+    worker._create_bridge = lambda: bridge
 
+    thread = threading.Thread(target=worker.run, daemon=True)
+    thread.start()
+    try:
+        def feed(sequence: int, monotonic_ns: int, number: int) -> None:
+            worker.on_rheed_state(CameraState(
+                frame=_frame(), frame_number=number, connected=True,
+                valid=True, capture_sequence=sequence,
+                captured_monotonic_ns=monotonic_ns,
+            ))
 
-def test_heartbeat_token_repeats_for_a_duplicate() -> None:
-    """The heartbeat dedup token is stable across a re-served frame.
-
-    Mirrors the tuple built in GrowthApp._on_heartbeat. Its
-    captured_at_utc component used to be datetime.now() per read on the
-    direct path, so the token always differed and the guard never fired.
-    """
-    def token(state: CameraState) -> tuple:
-        return (
-            state.capture_backend, state.source_hwnd,
-            state.capture_sequence, state.captured_at_utc,
+        # One exposure, delivered four times.
+        for number in range(1, 5):
+            feed(5001, 1_000, number)
+        _settled(lambda: bridge.calls >= 1)
+        _real_time.sleep(0.1)     # give a wrong implementation time to add more
+        assert bridge.calls == 1, (
+            f"{bridge.calls} inferences for a single exposure"
         )
 
-    first = _capture(5001, 1_000)
-    states = _run(lambda w: _ScriptedCamera(w, [first, first, _capture(5002, 2_000)]))
-    assert token(states[0]) == token(states[1]), "token differed across a duplicate"
-    assert token(states[1]) != token(states[2]), "token stable across a new exposure"
+        # Three genuinely new exposures.
+        for offset in range(1, 4):
+            feed(5001 + offset, 1_000 * (offset + 1), 4 + offset)
+            _settled(lambda o=offset: bridge.calls >= 1 + o)
+        assert bridge.calls == 4, (
+            f"expected 4 inferences across 4 exposures, got {bridge.calls}"
+        )
+    finally:
+        worker.stop()
+        thread.join(timeout=2.0)
+
+
+class _GrowthLogStub:
+    def __init__(self):
+        self.active = True
+        self.saved_frames = 0
+        self.logged_heartbeats = 0
+        self._heartbeat_counter = 0
+
+    def save_heartbeat_frame(self, frame):
+        self.saved_frames += 1
+        self._heartbeat_counter += 1
+        return f"/tmp/frame_{self.saved_frames:03d}.bmp"
+
+    def log_heartbeat(self, **kwargs):
+        self.logged_heartbeats += 1
+
+
+class _MonitorStub:
+    def __init__(self):
+        self.frame = _frame()
+        self.metadata: dict = {}
+        self._latest_pyro = None
+        self.capture_count = 0
+
+    def get_current_frame(self):
+        return self.frame
+
+    def get_current_capture_metadata(self) -> dict:
+        return dict(self.metadata)
+
+    def get_elapsed_seconds(self) -> float:
+        return 1.0
+
+    def increment_continuous_capture_count(self) -> None:
+        self.capture_count += 1
+
+
+class _StatusBar:
+    def showMessage(self, *args) -> None:
+        return None
+
+
+def test_heartbeat_writes_once_per_exposure() -> None:
+    """_on_heartbeat writes one frame per exposure, not per tick.
+
+    Behavioural rather than token-shaped: this drives the real handler and
+    counts disk writes. Its dedup token includes captured_at_utc, which on
+    the direct path used to be datetime.now() per read — so the token
+    always differed, the guard never fired, and every tick wrote a fresh
+    copy of the same image.
+    """
+    from gui.growth_app import GrowthApp
+
+    app = GrowthApp.__new__(GrowthApp)
+    app.growth_log = _GrowthLogStub()
+    app.monitor = _MonitorStub()
+    app._last_heartbeat_capture_token = None
+    app.statusBar = lambda: _StatusBar()
+
+    def metadata_for(capture: CapturedFrame) -> dict:
+        return {
+            "capture_backend": capture.backend,
+            "source_hwnd": capture.source_hwnd,
+            "capture_sequence": capture.sequence,
+            "captured_at_utc": capture.captured_at_utc,
+            "captured_monotonic_ns": capture.captured_monotonic_ns,
+        }
+
+    first = _capture(1, 1_000)
+    app.monitor.metadata = metadata_for(first)
+    app._on_heartbeat()
+    app._on_heartbeat()          # same exposure, re-served
+    app._on_heartbeat()
+    assert app.growth_log.saved_frames == 1, (
+        f"{app.growth_log.saved_frames} writes for one exposure"
+    )
+    assert app.growth_log.logged_heartbeats == 1
+
+    # A genuinely new exposure must still be written.
+    app.monitor.metadata = metadata_for(_capture(2, 2_000))
+    app._on_heartbeat()
+    assert app.growth_log.saved_frames == 2, (
+        "a new exposure was suppressed as a duplicate"
+    )
+    assert app.growth_log.logged_heartbeats == 2
 
 
 def test_intensity_trace_ignores_duplicates() -> None:
@@ -275,14 +393,10 @@ def test_intensity_trace_ignores_duplicates() -> None:
     )
 
 
+# Discovered, not hand-listed — a list that drifts silently under-reports.
 TESTS = [
-    test_intensity_trace_ignores_duplicates,
-    test_reserved_frame_is_marked_duplicate,
-    test_distinct_exposures_are_not_duplicates,
-    test_fps_counts_exposures_not_reads,
-    test_backend_without_provenance_never_claims_duplicate,
-    test_classifier_guard_sees_a_repeating_key,
-    test_heartbeat_token_repeats_for_a_duplicate,
+    value for name, value in sorted(globals().items())
+    if name.startswith("test_") and callable(value)
 ]
 
 

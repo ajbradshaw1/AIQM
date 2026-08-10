@@ -46,6 +46,13 @@ class CapturedFrame:
     width: int
     height: int
     backend: str = "wgc"
+    # The device's own frame id and timestamp, where the backend exposes
+    # them. Recorded for corroboration and diagnostics only — never as the
+    # ordering key. Neither is guaranteed by GenICam to be monotonic across
+    # a reconnect or free of wraparound, so `sequence` stays the contract
+    # and these stay evidence.
+    camera_frame_id: Optional[int] = None
+    camera_timestamp_ns: Optional[int] = None
 
     def with_image(self, image: np.ndarray) -> "CapturedFrame":
         """Return the same provenance paired with a transformed image."""
