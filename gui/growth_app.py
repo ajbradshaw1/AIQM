@@ -949,19 +949,7 @@ class GrowthApp(QMainWindow):
         )
         self.monitor.set_auto_capture_pause_enabled(False)
 
-        metadata = self.monitor.get_session_metadata()
-        # Camera acquisition provenance, in the same spirit as the ADS
-        # profile block in get_session_metadata: record what produced this
-        # session's frames so old archives stay auditable. Exposure and gain
-        # come from the camera's persistent user set, which the GUI does not
-        # set and nothing has been recording — so without this, two sessions
-        # can feed the classifier different intensity distributions with no
-        # way to tell after the fact. Namespaced to keep it obviously
-        # acquisition-side. Empty on screengrab and dummy, which have no
-        # sensor to interrogate.
-        camera_settings = self.camera_worker.sensor_settings
-        if camera_settings:
-            metadata["camera_sensor_settings"] = camera_settings
+        metadata = self._session_metadata_with_camera()
 
         # Save session metadata
         self.growth_log.save_session_metadata(metadata)
@@ -1118,6 +1106,34 @@ class GrowthApp(QMainWindow):
     def _equalizer_session_id(self) -> str:
         session_dir = self.growth_log.session_dir
         return session_dir.name if session_dir is not None else ""
+
+    def _session_metadata_with_camera(self) -> dict:
+        """Session metadata plus the camera's acquisition provenance.
+
+        In the same spirit as the ADS profile block in
+        get_session_metadata: record what produced this session's frames so
+        old archives stay auditable. Exposure and gain come from the
+        camera's persistent user set, which the GUI does not set and
+        nothing was recording — without this, two sessions can feed the
+        classifier different intensity distributions with no way to tell
+        after the fact.
+
+        Shared by both session-ending paths. A session closed by shutting
+        the window is exactly as much a session as one ended with STOP, and
+        the two writing different metadata would be a silent gap in the
+        archive rather than a visible bug.
+
+        camera_worker is Optional and every other access in this class
+        guards it; a session can end without one. Screengrab and dummy have
+        no sensor to interrogate and report {}, so the key is omitted
+        rather than written empty.
+        """
+        metadata = self.monitor.get_session_metadata()
+        worker = self.camera_worker
+        settings = worker.sensor_settings if worker is not None else {}
+        if settings:
+            metadata["camera_sensor_settings"] = settings
+        return metadata
 
     def _current_auto_capture_metadata(self) -> dict:
         """Bind each buffered frame to its session, basis, and calibration."""
@@ -2981,7 +2997,7 @@ class GrowthApp(QMainWindow):
         # before either accepting the window close or showing an explicit
         # fail-closed shutdown-pending state.
         if self.growth_log.active:
-            metadata = self.monitor.get_session_metadata()
+            metadata = self._session_metadata_with_camera()
             self.growth_log.save_session_metadata(metadata)
             self._invalidate_equalizer_calibration("GUI closed")
             self.growth_log.end_session()

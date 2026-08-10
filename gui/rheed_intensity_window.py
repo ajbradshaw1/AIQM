@@ -50,7 +50,14 @@ class RheedIntensityWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def on_camera_state(self, state: CameraState) -> None:
+        # A re-served frame is not a new measurement. Appending it would
+        # add the identical intensity at a later time, so the trace would
+        # report the poll rate as if it were the acquisition rate and
+        # flatten any real change across the repeat. Above the camera's
+        # exposure-limited frame rate that is most of the trace.
         if not state.connected or not state.valid or math.isnan(state.intensity):
+            return
+        if getattr(state, "is_duplicate", False):
             return
         now = time.monotonic()
         if self._t0 is None:

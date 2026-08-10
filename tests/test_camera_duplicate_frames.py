@@ -241,7 +241,42 @@ def test_heartbeat_token_repeats_for_a_duplicate() -> None:
     assert token(states[1]) != token(states[2]), "token stable across a new exposure"
 
 
+def test_intensity_trace_ignores_duplicates() -> None:
+    """The intensity trace records measurements, not poll ticks.
+
+    A duplicate would append the identical value at a later timestamp,
+    making the trace report the poll rate as the acquisition rate and
+    flattening real change across the repeat.
+    """
+    from gui.rheed_intensity_window import RheedIntensityWindow
+
+    window = RheedIntensityWindow.__new__(RheedIntensityWindow)
+    window._t0 = None
+    window._times = []
+    window._intensities = []
+
+    class _Curve:
+        def setData(self, *args) -> None:
+            return None
+
+    window._curve = _Curve()
+
+    def state(intensity: float, duplicate: bool) -> CameraState:
+        return CameraState(
+            frame=_frame(), connected=True, valid=True,
+            intensity=intensity, is_duplicate=duplicate,
+        )
+
+    window.on_camera_state(state(10.0, False))
+    window.on_camera_state(state(10.0, True))
+    window.on_camera_state(state(20.0, False))
+    assert window._intensities == [10.0, 20.0], (
+        f"duplicate entered the trace: {window._intensities}"
+    )
+
+
 TESTS = [
+    test_intensity_trace_ignores_duplicates,
     test_reserved_frame_is_marked_duplicate,
     test_distinct_exposures_are_not_duplicates,
     test_fps_counts_exposures_not_reads,
