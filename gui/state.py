@@ -56,6 +56,12 @@ class CameraState:
     source_hwnd: int = 0
     captured_monotonic_ns: int = 0  # internal age calculation, not serialized
     capture_geometry_id: str = ""  # ROI/chrome-crop identity
+    # True when this read returned an image the camera had already
+    # delivered — the signature of polling faster than the exposure time
+    # allows. Only meaningful on backends that report real capture
+    # provenance; stays False where duplicates are undetectable rather
+    # than claiming a frame is fresh.
+    is_duplicate: bool = False
     acquire_started_monotonic_ns: Optional[int] = field(
         default=None, repr=False, compare=False,
     )

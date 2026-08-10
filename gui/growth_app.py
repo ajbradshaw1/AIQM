@@ -2469,11 +2469,19 @@ class GrowthApp(QMainWindow):
 
         # ``enabled`` is only one layer of the gate: an explicit active-session
         # check prevents stale UI/QC state from feeding the engine after STOP.
+        # A re-served frame is not new evidence. The change detector scores
+        # std-of-|diff| against the previous frame, so a duplicate scores a
+        # structural zero — it does not merely add a neutral sample, it
+        # drags the score down and biases the engine against firing on a
+        # real transition. Heartbeat saving and the classifier already skip
+        # repeats via their own capture-identity guards; this is the third
+        # consumer named in 27b010c and the one with no guard of its own.
         if (
             self.growth_log.active
             and state.frame is not None
             and state.connected
             and getattr(state, "valid", state.connected)
+            and not getattr(state, "is_duplicate", False)
         ):
             self.auto_capture_engine.evaluate(
                 state.frame,

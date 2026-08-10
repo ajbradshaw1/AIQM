@@ -446,20 +446,15 @@ class RheedCameraWorker(QThread):
         frame_count = 0
         fps_start = time.time()
         fps_frame_count = 0
+        # Identity of the previous read, for duplicate detection. See the
+        # is_duplicate block below.
+        last_capture_identity: Optional[tuple] = None
 
         while self.running:
             read_started_ns = time.perf_counter_ns()
             try:
                 frame = self._camera.read_frame()
                 frame_count += 1
-                fps_frame_count += 1
-
-                # Compute FPS over a rolling 1-second window
-                elapsed = time.time() - fps_start
-                if elapsed >= 1.0:
-                    state.fps = fps_frame_count / elapsed
-                    fps_start = time.time()
-                    fps_frame_count = 0
 
                 state.frame = frame
                 state.frame_number = frame_count
@@ -493,6 +488,36 @@ class RheedCameraWorker(QThread):
                     state.frame_age_ms = 0.0
                     state.source_hwnd = 0
                     state.captured_monotonic_ns = time.perf_counter_ns()
+
+                # A backend with real provenance re-serves its cached image
+                # with the SAME identity when no new exposure has completed;
+                # at the Ch-MBE Manta's 300 ms exposure that happens for any
+                # poll above ~3.33 Hz. The synthetic branch above mints a
+                # fresh timestamp per read and so can never repeat — there
+                # we genuinely cannot tell, and must not claim either way.
+                capture_identity = (
+                    state.capture_backend,
+                    state.source_hwnd,
+                    state.capture_sequence,
+                    state.captured_at_utc,
+                )
+                state.is_duplicate = (
+                    capture is not None
+                    and capture_identity == last_capture_identity
+                )
+                last_capture_identity = capture_identity
+
+                # FPS counts delivered exposures, not read attempts.
+                # Counting re-served frames made the displayed rate track
+                # the poll interval instead of the camera, hiding exactly
+                # the over-trigger condition the number should expose.
+                if not state.is_duplicate:
+                    fps_frame_count += 1
+                elapsed = time.time() - fps_start
+                if elapsed >= 1.0:
+                    state.fps = fps_frame_count / elapsed
+                    fps_start = time.time()
+                    fps_frame_count = 0
 
                 read_finished_ns = time.perf_counter_ns()
                 state.acquire_started_monotonic_ns = read_started_ns
