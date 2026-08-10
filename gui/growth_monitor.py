@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLineEdit, QTextEdit, QSizePolicy, QFrame,
     QDoubleSpinBox, QComboBox, QFormLayout, QFileDialog,
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QGroupBox, QSlider, QCheckBox,
+    QAbstractItemView, QGroupBox, QSlider, QCheckBox, QSpinBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QFont, QShortcut, QKeySequence
@@ -303,6 +303,12 @@ class AutoCaptureBanner(QFrame):
 
 class GrowthMonitor(QWidget):
     """Main growth monitoring widget — OMBE growth log assistant."""
+
+    # kSA's exposure range. The slider spans all of it; whether a given
+    # value is achievable also depends on the trigger rate, which is
+    # checked separately and enforced at ARM.
+    EXPOSURE_MIN_MS = 1
+    EXPOSURE_MAX_MS = 999
 
     arm_requested = pyqtSignal()
     disarm_requested = pyqtSignal()
@@ -1169,6 +1175,103 @@ class GrowthMonitor(QWidget):
         )
         config_form.addRow("Camera mode:", self.config_camera_mode)
 
+        # Grower-facing exposure, applied at ARM and locked for the session.
+        # Deliberately not live-adjustable mid-growth: changing exposure
+        # during a session would make the connect-time settings snapshot a
+        # lie, and honest per-frame logging is a prerequisite for that.
+        #
+        # Slider + textbox in the kSA idiom: drag for a quick sweep, type
+        # for an exact value. They are two views of one integer in ms and
+        # are kept in sync in both directions.
+        self.config_camera_exposure_slider = QSlider(Qt.Orientation.Horizontal)
+        self.config_camera_exposure_slider.setRange(
+            self.EXPOSURE_MIN_MS, self.EXPOSURE_MAX_MS,
+        )
+        self.config_camera_exposure_slider.setSingleStep(1)
+        self.config_camera_exposure_slider.setPageStep(10)
+        self.config_camera_exposure_slider.setTickInterval(100)
+        self.config_camera_exposure_slider.setTickPosition(
+            QSlider.TickPosition.TicksBelow,
+        )
+
+        self.config_camera_exposure_ms = QSpinBox()
+        self.config_camera_exposure_ms.setRange(
+            self.EXPOSURE_MIN_MS, self.EXPOSURE_MAX_MS,
+        )
+        self.config_camera_exposure_ms.setSuffix(" ms")
+        self.config_camera_exposure_ms.setFixedWidth(90)
+
+        # "Keep current" survives as its own control rather than as a magic
+        # zero, now that the range starts at 1 ms. It is the default and the
+        # only state in which the GUI issues no camera write at all.
+        self.config_camera_exposure_keep = QCheckBox("Keep current")
+        self.config_camera_exposure_keep.setToolTip(
+            "Leave the camera's own exposure untouched. No write is issued "
+            "and the camera user set is not modified."
+        )
+
+        # The trigger-rate ceiling is a hardware fact, not a preference: an
+        # exposure longer than ~90% of the trigger period leaves no room for
+        # transport and readout, so the camera silently under-delivers. The
+        # slider still spans the full 1-999 ms kSA range, but anything above
+        # the ceiling is flagged here and refused at ARM rather than failing
+        # obscurely once streaming starts.
+        self._exposure_ceiling_ms = (
+            900.0 / self._cfg.camera_fps if self._cfg.camera_fps > 0 else 900.0
+        )
+        self.config_camera_exposure_warning = QLabel("")
+        self.config_camera_exposure_warning.setStyleSheet(
+            "color: #b45309; font-size: 11px;"
+        )
+
+        exposure_row = QHBoxLayout()
+        exposure_row.setContentsMargins(0, 0, 0, 0)
+        exposure_row.addWidget(self.config_camera_exposure_slider, 1)
+        exposure_row.addWidget(self.config_camera_exposure_ms)
+        exposure_row.addWidget(self.config_camera_exposure_keep)
+        exposure_container = QVBoxLayout()
+        exposure_container.setContentsMargins(0, 0, 0, 0)
+        exposure_container.setSpacing(2)
+        exposure_container.addLayout(exposure_row)
+        exposure_container.addWidget(self.config_camera_exposure_warning)
+        exposure_widget = QWidget()
+        exposure_widget.setLayout(exposure_container)
+
+        configured_exposure = self._cfg.camera_exposure_us
+        initial_ms = (
+            int(round(configured_exposure / 1000.0))
+            if configured_exposure else self.EXPOSURE_MIN_MS
+        )
+        initial_ms = max(
+            self.EXPOSURE_MIN_MS, min(self.EXPOSURE_MAX_MS, initial_ms),
+        )
+        self.config_camera_exposure_slider.setValue(initial_ms)
+        self.config_camera_exposure_ms.setValue(initial_ms)
+        self.config_camera_exposure_keep.setChecked(configured_exposure is None)
+
+        self.config_camera_exposure_slider.valueChanged.connect(
+            self._on_exposure_slider_changed,
+        )
+        self.config_camera_exposure_ms.valueChanged.connect(
+            self._on_exposure_spin_changed,
+        )
+        self.config_camera_exposure_keep.toggled.connect(
+            self._on_exposure_keep_toggled,
+        )
+        self._on_exposure_keep_toggled(
+            self.config_camera_exposure_keep.isChecked(),
+        )
+
+        exposure_widget.setToolTip(
+            f"Manual exposure for direct Vimba mode, {self.EXPOSURE_MIN_MS}"
+            f"-{self.EXPOSURE_MAX_MS} ms. Applied when ARM is pressed and "
+            "recorded in session metadata; it is a volatile write and does "
+            "not modify the camera user set. Values above "
+            f"{self._exposure_ceiling_ms:.0f} ms cannot sustain the "
+            f"{self._cfg.camera_fps:g} Hz acquisition loop."
+        )
+        config_form.addRow("Direct exposure:", exposure_widget)
+
         self.config_pyrometer_mode = QComboBox()
         self.config_pyrometer_mode.addItems(["dummy", "exactus", "modbus", "screengrab"])
         config_form.addRow("Pyrometer mode:", self.config_pyrometer_mode)
@@ -1252,6 +1355,9 @@ class GrowthMonitor(QWidget):
                 self.config_browse_btn,
                 self.config_prefix,
                 self.config_camera_mode,
+                self.config_camera_exposure_ms,
+                self.config_camera_exposure_slider,
+                self.config_camera_exposure_keep,
                 self.config_pyrometer_mode,
                 self.config_exactus_port,
                 self.config_exactus_baud,
@@ -2733,6 +2839,61 @@ class GrowthMonitor(QWidget):
         )
         self.auto_capture_pause_toggled.emit(paused)
 
+    def _on_exposure_slider_changed(self, value: int) -> None:
+        """Mirror the slider into the textbox without re-entering."""
+        if self.config_camera_exposure_ms.value() != value:
+            self.config_camera_exposure_ms.blockSignals(True)
+            self.config_camera_exposure_ms.setValue(value)
+            self.config_camera_exposure_ms.blockSignals(False)
+        self._refresh_exposure_warning()
+
+    def _on_exposure_spin_changed(self, value: int) -> None:
+        """Mirror the textbox into the slider without re-entering."""
+        if self.config_camera_exposure_slider.value() != value:
+            self.config_camera_exposure_slider.blockSignals(True)
+            self.config_camera_exposure_slider.setValue(value)
+            self.config_camera_exposure_slider.blockSignals(False)
+        self._refresh_exposure_warning()
+
+    def _on_exposure_keep_toggled(self, keep: bool) -> None:
+        """Grey out the value controls when no write will be issued."""
+        self.config_camera_exposure_slider.setEnabled(not keep)
+        self.config_camera_exposure_ms.setEnabled(not keep)
+        self._refresh_exposure_warning()
+
+    def _refresh_exposure_warning(self) -> None:
+        """Warn before ARM when the value exceeds the trigger-rate ceiling."""
+        if self.config_camera_exposure_keep.isChecked():
+            self.config_camera_exposure_warning.setText("")
+            return
+        value_ms = float(self.config_camera_exposure_ms.value())
+        if value_ms > self._exposure_ceiling_ms:
+            self.config_camera_exposure_warning.setText(
+                f"⚠ Above the {self._exposure_ceiling_ms:.0f} ms ceiling for "
+                f"{self._cfg.camera_fps:g} Hz acquisition — ARM will refuse "
+                "this value."
+            )
+        else:
+            self.config_camera_exposure_warning.setText("")
+
+    def selected_exposure_us(self) -> Optional[float]:
+        """Requested exposure in microseconds, or None for 'Keep current'.
+
+        One place decides this so the worker, the metadata and any future
+        caller cannot disagree about what the grower asked for.
+        """
+        if self.config_camera_exposure_keep.isChecked():
+            return None
+        return float(self.config_camera_exposure_ms.value()) * 1000.0
+
+    def clear_camera_provenance(self) -> None:
+        """Drop the prior arm cycle's camera readback before reconnecting.
+
+        Without this, a failed re-arm would report the previous cycle's
+        confirmed exposure as if it applied to the new one.
+        """
+        self._latest_camera = None
+
     def get_session_metadata(self) -> dict:
         """Return session metadata for growth log export."""
         mistral_mode = self.config_mistral_mode.currentText()
@@ -2749,6 +2910,28 @@ class GrowthMonitor(QWidget):
                 self.config_weak_primary_shadow_enabled.isChecked()
             ),
         }
+        # Requested vs confirmed are recorded separately and deliberately.
+        # The device quantises a request onto its own increment grid, so the
+        # two can legitimately differ; collapsing them would hide whether the
+        # camera actually honoured what the grower asked for. Both are None
+        # on "Keep current", which is itself the record that no write
+        # happened.
+        direct_camera = self.config_camera_mode.currentText() in (
+            "vimba", "direct",
+        )
+        requested_us = self.selected_exposure_us()
+        metadata["camera_exposure_requested_ms"] = (
+            requested_us / 1000.0
+            if direct_camera and requested_us is not None
+            else None
+        )
+        metadata["camera_exposure_readback_ms"] = (
+            self._latest_camera.exposure_us / 1000.0
+            if direct_camera
+            and self._latest_camera is not None
+            and self._latest_camera.exposure_us is not None
+            else None
+        )
         # ADS profile provenance — record the exact PLC endpoint + cell
         # count that produced this session's sensor log. Makes old CSVs
         # auditable: a reader can look at session_metadata.json and know

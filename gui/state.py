@@ -62,6 +62,12 @@ class CameraState:
     # provenance; stays False where duplicates are undetectable rather
     # than claiming a frame is fresh.
     is_duplicate: bool = False
+    # Confirmed exposure readback for the active connect cycle, in
+    # microseconds. None on backends with no sensor, and None until the
+    # driver has read it. This is the value the camera acknowledged, never
+    # the value the GUI asked for — the two differ whenever the device
+    # quantises a request to its own increment grid.
+    exposure_us: Optional[float] = None
     acquire_started_monotonic_ns: Optional[int] = field(
         default=None, repr=False, compare=False,
     )

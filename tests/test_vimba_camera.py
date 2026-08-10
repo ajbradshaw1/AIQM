@@ -127,6 +127,47 @@ class FakeSettable:
         return (self._readable, self._writable)
 
 
+class FakeExposure(FakeSettable):
+    """Writable numeric feature with a device range and increment grid.
+
+    Models ExposureTimeAbs closely enough to exercise the fail-closed
+    write path: range rejection, quantisation to the increment, readback
+    verification, and restoration of the original on failure.
+    """
+
+    def __init__(
+        self,
+        value: float = 300_000.0,
+        low: float = 44.0,
+        high: float = 60_000_000.0,
+        increment: float = 1.0,
+        writable: bool = True,
+        readback_offset: float = 0.0,
+    ):
+        super().__init__(writable=writable)
+        self.value = value
+        self._low = low
+        self._high = high
+        self._increment = increment
+        # Non-zero simulates a camera that silently accepts and applies
+        # something other than what was asked for.
+        self._readback_offset = readback_offset
+        self.set_history: list[float] = []
+
+    def get(self) -> float:
+        return self.value + self._readback_offset if self.set_history else self.value
+
+    def set(self, value) -> None:  # noqa: A003
+        super().set(value)
+        self.set_history.append(float(value))
+
+    def get_range(self) -> tuple[float, float]:
+        return (self._low, self._high)
+
+    def get_increment(self) -> float:
+        return self._increment
+
+
 class FakeFeature:
     """Read-only camera feature exposing vmbpy's ``get()``.
 
@@ -530,6 +571,150 @@ def test_sequence_is_application_owned_camera_id_is_evidence() -> None:
         assert capture.age_ms() >= 0.0
         assert capture.captured_at_utc.endswith("Z")
         cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def _exposure_camera(**kwargs):
+    """install_fake_vmbpy() with a writable exposure feature attached."""
+    fake_cam = install_fake_vmbpy()
+    fake_cam.ExposureTimeAbs = FakeExposure(**kwargs)
+    fake_cam.AcquisitionFrameRateLimit = FakeFeature(3.3323)
+    return fake_cam
+
+
+def test_keep_current_performs_no_camera_write() -> None:
+    """exposure_us=None records the existing value and writes nothing.
+
+    This is the "Keep current" path and the default. A grower who does not
+    ask for an exposure must not have their camera reconfigured.
+    """
+    try:
+        fake_cam = _exposure_camera()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=1.0, exposure_us=None)
+        cam.connect()
+        _wait_for_first_frame(cam)
+        assert fake_cam.ExposureTimeAbs.set_history == [], (
+            f"camera was written to: {fake_cam.ExposureTimeAbs.set_history}"
+        )
+        assert cam.exposure_us == 300_000.0, "existing exposure not recorded"
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_requested_exposure_is_applied_and_confirmed() -> None:
+    """A valid request is written once and reported from the readback."""
+    try:
+        fake_cam = _exposure_camera()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=1.0, exposure_us=250_000.0)
+        cam.connect()
+        _wait_for_first_frame(cam)
+        assert fake_cam.ExposureTimeAbs.set_history == [250_000.0]
+        assert cam.exposure_us == 250_000.0
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_exposure_beyond_trigger_headroom_is_refused_before_connect() -> None:
+    """The trigger-rate ceiling is enforced in __init__, not at the camera.
+
+    At 1 Hz the ceiling is 900 ms — 10% headroom below the period. An
+    exposure equal to the whole period leaves no room for transport and
+    readout, so the camera silently under-delivers instead of erroring.
+    """
+    from drivers.rheed_camera import VmbCamera
+    try:
+        VmbCamera(trigger_hz=1.0, exposure_us=950_000.0)
+    except ValueError as exc:
+        assert "headroom" in str(exc), exc
+    else:
+        raise AssertionError("an over-long exposure was accepted")
+
+
+def test_out_of_range_exposure_fails_without_writing() -> None:
+    """A request outside the device range is refused before any set()."""
+    try:
+        fake_cam = _exposure_camera(low=1_000.0, high=100_000.0)
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=1.0, exposure_us=250_000.0)
+        try:
+            cam.connect()
+        except Exception as exc:
+            assert "outside the camera range" in str(exc), exc
+        else:
+            cam.disconnect()
+            raise AssertionError("out-of-range exposure was accepted")
+        assert fake_cam.ExposureTimeAbs.set_history == [], (
+            "the camera was written to despite a range violation"
+        )
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_bad_readback_restores_the_original_exposure() -> None:
+    """If the readback disagrees, the original is put back before raising.
+
+    The camera accepting a value it then does not report is the dangerous
+    case: without restoration the session would abort having left the
+    camera on an exposure nobody chose.
+    """
+    try:
+        fake_cam = _exposure_camera(readback_offset=50_000.0)
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=1.0, exposure_us=250_000.0)
+        try:
+            cam.connect()
+        except Exception as exc:
+            assert "readback" in str(exc), exc
+        else:
+            cam.disconnect()
+            raise AssertionError("a mismatched readback was accepted")
+        history = fake_cam.ExposureTimeAbs.set_history
+        assert history == [250_000.0, 300_000.0], (
+            f"original was not restored; set history {history}"
+        )
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_manual_exposure_refused_in_read_access() -> None:
+    """Read access cannot write, so the driver refuses rather than pretends."""
+    try:
+        fake_cam = _exposure_camera()
+        fake_cam.refuse_full_on_enter = True
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=1.0, exposure_us=250_000.0)
+        try:
+            cam.connect()
+        except Exception as exc:
+            assert "Full camera access" in str(exc), exc
+        else:
+            cam.disconnect()
+            raise AssertionError("manual exposure was accepted in Read mode")
+        assert fake_cam.ExposureTimeAbs.set_history == []
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_auto_exposure_on_blocks_a_manual_write() -> None:
+    """A running auto-exposure loop would immediately override the write."""
+    try:
+        fake_cam = _exposure_camera()
+        fake_cam.ExposureAuto = FakeFeature("Continuous")
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=1.0, exposure_us=250_000.0)
+        try:
+            cam.connect()
+        except Exception as exc:
+            assert "ExposureAuto=Off" in str(exc), exc
+        else:
+            cam.disconnect()
+            raise AssertionError("wrote exposure with ExposureAuto on")
+        assert fake_cam.ExposureTimeAbs.set_history == []
     finally:
         uninstall_fake_vmbpy()
 

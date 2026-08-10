@@ -216,6 +216,7 @@ class GrowthApp(QMainWindow):
         self.setMinimumSize(1000, 700)
 
         self.camera_worker: Optional[RheedCameraWorker] = None
+        self._reported_camera_exposure_us: Optional[float] = None
         self.pyrometer_worker: Optional[PyrometerWorker] = None
         self.mistral_worker: Optional[MistralWorker] = None
         self.evap_worker: Optional[EvapControlWorker] = None
@@ -534,8 +535,18 @@ class GrowthApp(QMainWindow):
 
         new_camera_worker = False
         if not self.camera_worker or not self.camera_worker.isRunning():
+            exposure_us = (
+                self.monitor.selected_exposure_us()
+                if camera_mode in ("vimba", "direct") else None
+            )
+            self.monitor.clear_camera_provenance()
+            self._reported_camera_exposure_us = None
             self.camera_worker = RheedCameraWorker(
-                mode=camera_mode, poll_interval=1.0,
+                mode=camera_mode,
+                poll_interval=1.0,
+                camera_index=self._chamber_config.camera_index,
+                trigger_hz=self._chamber_config.camera_fps,
+                exposure_us=exposure_us,
             )
             self.camera_worker.state_updated.connect(self._on_camera_state)
             self.camera_worker.start()
@@ -2408,6 +2419,7 @@ class GrowthApp(QMainWindow):
             return
 
         state = _stamp_gui_received(state)
+        self._announce_camera_exposure(state)
         if self.growth_log.active:
             GrowthApp._trace_temporal(self,
                 "state_received", "rheed",
@@ -2518,6 +2530,27 @@ class GrowthApp(QMainWindow):
                     f"score: {self.auto_capture_engine.latest_score:.2f} | "
                     f"events: {self._auto_capture_event_count}"
                 )
+
+    def _announce_camera_exposure(self, state) -> None:
+        """Tell the grower the exposure the camera actually confirmed.
+
+        The readback, not the request — those differ whenever the device
+        quantises onto its increment grid, and the grower needs to see what
+        the frames were really taken at. Fires only on change, so a 1 Hz
+        state stream does not repaint the status bar every second.
+        """
+        exposure_us = getattr(state, "exposure_us", None)
+        if (
+            state.connected
+            and exposure_us is not None
+            and exposure_us != self._reported_camera_exposure_us
+        ):
+            self._reported_camera_exposure_us = exposure_us
+            self.statusBar().showMessage(
+                f"Direct camera exposure confirmed: "
+                f"{exposure_us / 1000.0:.0f} ms",
+                5000,
+            )
 
     def _on_heartbeat(self):
         """Heartbeat timer tick — save the latest RHEED frame as an anchor.

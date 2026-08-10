@@ -399,10 +399,22 @@ class RheedCameraWorker(QThread):
 
     state_updated = pyqtSignal(CameraState)
 
-    def __init__(self, mode: str = "dummy", poll_interval: float = 1.0):
+    def __init__(
+        self,
+        mode: str = "dummy",
+        poll_interval: float = 1.0,
+        *,
+        camera_index: int = 0,
+        trigger_hz: float = 1.0,
+        exposure_us: Optional[float] = None,
+    ):
         super().__init__()
         self.mode = mode
         self.poll_interval = poll_interval
+        self.camera_index = camera_index
+        self.trigger_hz = trigger_hz
+        # None means "keep whatever the camera already has" — no write.
+        self.exposure_us = exposure_us
         # True from __init__ to close the stop()-before-run race
         # (see PowerSupplyWorker for the full comment).
         self.running = True
@@ -501,6 +513,10 @@ class RheedCameraWorker(QThread):
                 # poll above ~3.33 Hz. The synthetic branch above mints a
                 # fresh timestamp per read and so can never repeat — there
                 # we genuinely cannot tell, and must not claim either way.
+                # Confirmed readback, not the request. Absent on backends
+                # with no sensor.
+                state.exposure_us = getattr(self._camera, "exposure_us", None)
+
                 capture_identity = (
                     state.capture_backend,
                     state.source_hwnd,
@@ -569,7 +585,11 @@ class RheedCameraWorker(QThread):
         """Factory method — import and instantiate camera driver."""
         if self.mode in ("vimba", "direct"):
             from drivers.rheed_camera import VmbCamera
-            return VmbCamera()
+            return VmbCamera(
+                camera_index=self.camera_index,
+                trigger_hz=self.trigger_hz,
+                exposure_us=self.exposure_us,
+            )
         elif self.mode == "screengrab":
             from drivers.rheed_camera import ScreenGrabCamera
             return ScreenGrabCamera()

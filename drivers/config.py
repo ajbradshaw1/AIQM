@@ -109,6 +109,10 @@ class MBESystemConfig:
     # Camera settings
     camera_index: int = 0
     camera_fps: float = 1.0
+    # Optional manual exposure for the direct Vimba path, in microseconds to
+    # match the GenICam feature (ExposureTimeAbs). ``None`` leaves the
+    # camera's current volatile setting untouched and performs no write.
+    camera_exposure_us: Optional[float] = None
 
     # MISTRAL ADS backend config — per-chamber Beckhoff PLC endpoint.
     # Empty ads_netid disables the "ads" MistralWorker mode for the chamber.
@@ -190,6 +194,11 @@ CHALCOGENIDE_MBE = MBESystemConfig(
         {"label": "Cell6",             "state_field": None},
         {"label": "Cell7",             "state_field": None},
     ],
+    # VERIFIED 2026-08-06 on the Ch-MBE Manta G-033B (serial 50-0503464907):
+    # ExposureTimeAbs is writable and reads 300000 us with ExposureAuto=Off.
+    # Applied per-arm as a volatile write; UserSetSave is never called, so a
+    # power-cycle restores the grower's stored user set.
+    camera_exposure_us=300_000.0,
     temperasure_title="BASF TemperaSure 5.7.0.4",
     temperasure_exe=r"C:\Users\Omicron\Desktop\TemperaSure.exe",
     pyrometer_port="COM3",
