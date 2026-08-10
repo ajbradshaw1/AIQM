@@ -118,6 +118,9 @@ scripts/                      CLI utilities, smoke tests, validation reports
   equalizer_*.py              Hybrid-basis labeling-game prototype
   ...
 
+tools/
+  rheed_postprocessing_labeling/  Offline model timelines + temporal segment annotation
+
 reference/                    Schema dumps, manuals, instrument datasheets
 docs/                         Methods writeups, schema proposals, deck artifacts
 f_version/                    Frankie Moreno's parallel intensity-work GUI
@@ -154,6 +157,7 @@ diagnostic charts and reports after the fact — no lab PC required.
 | `scripts/plot_temperature.py` | Single T-vs-t PNG | Quick temperature-trace view of one session |
 | `scripts/growth_profile_explorer.py` | 5 PNGs + self-contained HTML report in `<session>/analysis/` | Full session review: T + std band + event overlays + classifier trajectory + auto-capture score distribution + grower-vs-classifier agreement scatter. HTML wraps all 5 with base64-embedded PNGs and a session metadata header — emailable, no external dependencies |
 | `scripts/validate_angle_robustness.py` | HTML report + CSV | Classifier sensitivity to camera-angle rotations against an archived session |
+| `python -m tools.rheed_postprocessing_labeling` | Offline interactive HTML + JSON/CSV labels | Review archived RHEED timelines and annotate frame-anchored temporal segments; see `tools/rheed_postprocessing_labeling/README.md` |
 
 ```bash
 # Five-chart + HTML report

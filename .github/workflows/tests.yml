@@ -1,7 +1,7 @@
 name: tests
 
-# Hardware probes stay in scripts/. pytest.ini restricts automated collection
-# to offline tests under tests/ so CI never opens cameras or instrument links.
+# Hardware probes stay in scripts/. pytest.ini restricts collection to offline
+# tests under tests/ and tools/rheed_postprocessing_labeling/tests/.
 on:
   push:
     branches: [main]

@@ -1,0 +1,1867 @@
+<script src="vendor/d3.v7.9.0.min.js"></script>
+<section id="anneal-model-timeline" aria-labelledby="anneal-model-title">
+  <style>
+    #anneal-model-timeline {
+      color: var(--foreground);
+      width: 100%;
+    }
+    #anneal-model-timeline [hidden] {
+      display: none !important;
+    }
+    #anneal-model-timeline .arp-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(260px, 0.8fr);
+      gap: 18px;
+      align-items: start;
+    }
+    #anneal-model-timeline .arp-plots,
+    #anneal-model-timeline .arp-detail {
+      min-width: 0;
+    }
+    #anneal-model-timeline .arp-panel {
+      margin: 0 0 14px;
+    }
+    #anneal-model-timeline .arp-annotation-editor {
+      margin: 0 0 18px;
+    }
+    #anneal-model-timeline .arp-annotation-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 3px;
+    }
+    #anneal-model-timeline .arp-annotation-head h3 {
+      margin: 0;
+      font-weight: 500;
+    }
+    #anneal-model-timeline .arp-annotation-note,
+    #anneal-model-timeline .arp-annotation-summary,
+    #anneal-model-timeline .arp-annotation-status {
+      color: var(--muted-foreground);
+    }
+    #anneal-model-timeline .arp-annotation-note {
+      margin: 0 0 8px;
+    }
+    #anneal-model-timeline .arp-annotation-transport {
+      display: grid;
+      grid-template-columns: auto auto minmax(180px, 1fr);
+      align-items: end;
+      gap: 7px;
+      margin-bottom: 5px;
+    }
+    #anneal-model-timeline .arp-annotation-scrubber {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 3px 8px;
+      min-width: 0;
+    }
+    #anneal-model-timeline .arp-annotation-scrubber output {
+      color: var(--muted-foreground);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+    #anneal-model-timeline .arp-annotation-scrubber input {
+      grid-column: 1 / -1;
+      width: 100%;
+    }
+    #anneal-model-timeline .arp-annotation-track-host {
+      width: 100%;
+      min-height: 112px;
+    }
+    #anneal-model-timeline .arp-annotation-track .annotation-segment {
+      cursor: pointer;
+      stroke: var(--background);
+      stroke-width: 1px;
+    }
+    #anneal-model-timeline .arp-annotation-track .annotation-segment.is-selected {
+      stroke: var(--foreground);
+      stroke-width: 2px;
+    }
+    #anneal-model-timeline .arp-annotation-track .annotation-draft {
+      fill: var(--accent);
+      stroke: var(--accent-foreground);
+      stroke-width: 1.5px;
+      stroke-dasharray: 5 3;
+      pointer-events: none;
+    }
+    #anneal-model-timeline .arp-annotation-track .annotation-playhead {
+      stroke: var(--foreground);
+      stroke-width: 1.4px;
+      pointer-events: none;
+    }
+    #anneal-model-timeline .arp-annotation-track .annotation-marker {
+      stroke: var(--accent-foreground);
+      stroke-width: 2px;
+      pointer-events: none;
+    }
+    #anneal-model-timeline .arp-annotation-track .annotation-hit {
+      cursor: crosshair;
+    }
+    #anneal-model-timeline .arp-annotation-controls {
+      display: grid;
+      grid-template-columns: auto auto minmax(150px, 0.8fr) minmax(180px, 1.4fr);
+      gap: 7px;
+      align-items: end;
+      margin-top: 4px;
+    }
+    #anneal-model-timeline .arp-annotation-field {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+    #anneal-model-timeline .arp-annotation-field input,
+    #anneal-model-timeline .arp-annotation-field select {
+      width: 100%;
+      min-width: 0;
+    }
+    #anneal-model-timeline .arp-annotation-actions,
+    #anneal-model-timeline .arp-annotation-file-row {
+      display: flex;
+      align-items: end;
+      gap: 7px;
+      flex-wrap: wrap;
+      margin-top: 7px;
+    }
+    #anneal-model-timeline .arp-annotation-file-row .arp-annotation-field {
+      min-width: min(220px, 100%);
+      flex: 1 1 220px;
+    }
+    #anneal-model-timeline .arp-annotation-status {
+      min-height: 18px;
+      margin-top: 5px;
+    }
+    #anneal-model-timeline .arp-annotation-range-output {
+      display: block;
+      color: var(--muted-foreground);
+      font-variant-numeric: tabular-nums;
+      margin-top: 2px;
+    }
+    #anneal-model-timeline .arp-annotation-list {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      margin-top: 5px;
+    }
+    #anneal-model-timeline .arp-annotation-status.text-destructive {
+      color: var(--destructive);
+    }
+    #anneal-model-timeline .arp-panel-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+    #anneal-model-timeline .arp-panel h3,
+    #anneal-model-timeline .arp-detail h3,
+    #anneal-model-timeline .arp-nodes h3 {
+      margin: 0;
+      font-weight: 500;
+    }
+    #anneal-model-timeline .arp-subtitle,
+    #anneal-model-timeline .arp-meta,
+    #anneal-model-timeline .arp-selected-meta {
+      color: var(--muted-foreground);
+    }
+    #anneal-model-timeline .arp-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 10px;
+      margin: 4px 0;
+    }
+    #anneal-model-timeline .arp-legend button {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--foreground);
+      padding: 2px 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      font: inherit;
+    }
+    #anneal-model-timeline .arp-legend button[aria-pressed="false"] {
+      color: var(--muted-foreground);
+      text-decoration: line-through;
+    }
+    #anneal-model-timeline .arp-swatch {
+      width: 12px;
+      height: 3px;
+      display: inline-block;
+      background: var(--series-color);
+    }
+    #anneal-model-timeline .arp-chart-host {
+      width: 100%;
+      min-height: 215px;
+    }
+    #anneal-model-timeline .arp-chart {
+      display: block;
+      width: 100%;
+      height: auto;
+      overflow: visible;
+    }
+    #anneal-model-timeline .arp-chart text {
+      fill: var(--foreground);
+      font-size: 12px;
+    }
+    #anneal-model-timeline .arp-chart .domain,
+    #anneal-model-timeline .arp-chart .tick line,
+    #anneal-model-timeline .arp-chart [data-chart-frame] {
+      stroke: var(--border);
+    }
+    #anneal-model-timeline .arp-chart .grid line {
+      stroke: var(--border);
+      stroke-opacity: 0.45;
+    }
+    #anneal-model-timeline .arp-chart .series-line {
+      fill: none;
+      stroke-width: 1.4px;
+    }
+    #anneal-model-timeline .arp-chart .transition-mark {
+      stroke: var(--foreground);
+      stroke-width: 1px;
+      cursor: pointer;
+    }
+    #anneal-model-timeline .arp-chart [data-chart-hover-guide] {
+      stroke: var(--muted-foreground);
+      stroke-width: 1px;
+    }
+    #anneal-model-timeline .arp-chart .selected-guide {
+      stroke: var(--foreground);
+      stroke-width: 1.2px;
+    }
+    #anneal-model-timeline .arp-chart [data-chart-hover-marker] {
+      fill: var(--background);
+      stroke-width: 2px;
+    }
+    #anneal-model-timeline .arp-tooltip {
+      position: absolute;
+      pointer-events: none;
+      z-index: 20;
+      display: none;
+      background: var(--popover);
+      color: var(--popover-foreground);
+      border: 1px solid var(--border);
+      padding: 7px 9px;
+      max-width: 260px;
+    }
+    #anneal-model-timeline .arp-tooltip-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    #anneal-model-timeline .arp-detail {
+      position: sticky;
+      top: 8px;
+    }
+    #anneal-model-timeline .arp-image-wrap {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      border: 1px solid var(--border);
+      background: var(--background);
+      margin: 7px 0;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+    #anneal-model-timeline .arp-image-wrap canvas,
+    #anneal-model-timeline .arp-image-wrap img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      image-rendering: auto;
+    }
+    #anneal-model-timeline .arp-image-wrap canvas,
+    #anneal-model-timeline .arp-image-wrap img {
+      cursor: zoom-in;
+    }
+    #anneal-model-timeline .arp-image-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin: 6px 0;
+    }
+    #anneal-model-timeline .arp-display-controls {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px 10px;
+      align-items: end;
+      margin: 7px 0;
+    }
+    #anneal-model-timeline .arp-display-controls > .btn {
+      grid-column: 1 / -1;
+      justify-self: end;
+    }
+    #anneal-model-timeline .arp-display-control {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 3px 8px;
+      min-width: 0;
+    }
+    #anneal-model-timeline .arp-display-control input {
+      grid-column: 1 / -1;
+      width: 100%;
+      min-width: 92px;
+    }
+    #anneal-model-timeline .arp-display-control output {
+      color: var(--muted-foreground);
+      font-variant-numeric: tabular-nums;
+    }
+    #anneal-model-timeline .arp-display-note {
+      color: var(--muted-foreground);
+      margin: 0 0 7px;
+    }
+    #anneal-model-timeline .arp-zoom-display-controls {
+      grid-template-columns: repeat(2, minmax(160px, 1fr)) auto;
+      margin-bottom: 8px;
+    }
+    #anneal-model-timeline .arp-zoom-display-controls > .btn {
+      grid-column: auto;
+      justify-self: stretch;
+    }
+    #anneal-model-timeline .arp-zoom-timeline {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 4px 10px;
+      align-items: baseline;
+      margin-bottom: 8px;
+    }
+    #anneal-model-timeline .arp-zoom-timeline output {
+      color: var(--muted-foreground);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+    #anneal-model-timeline .arp-zoom-timeline input {
+      grid-column: 1 / -1;
+      width: 100%;
+    }
+    #anneal-model-timeline .arp-zoom-dialog {
+      color: var(--foreground);
+      background: var(--background);
+      border: 1px solid var(--border);
+      padding: 12px;
+      max-width: none;
+      max-height: none;
+    }
+    #anneal-model-timeline .arp-zoom-dialog::backdrop {
+      background: color-mix(in srgb, var(--background) 72%, transparent);
+    }
+    #anneal-model-timeline .arp-zoom-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    #anneal-model-timeline .arp-zoom-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #anneal-model-timeline .arp-zoom-stage {
+      width: min(88vw, 1120px);
+      height: min(64vh, 700px);
+      overflow: hidden;
+      display: grid;
+      place-items: center;
+      background: var(--background);
+      border: 1px solid var(--border);
+      touch-action: none;
+      cursor: grab;
+    }
+    #anneal-model-timeline .arp-zoom-stage.is-dragging {
+      cursor: grabbing;
+    }
+    #anneal-model-timeline .arp-zoom-stage img {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      transform-origin: center;
+      user-select: none;
+      pointer-events: none;
+    }
+    #anneal-model-timeline .arp-model-readout {
+      margin-top: 8px;
+    }
+    #anneal-model-timeline .arp-readout-row {
+      display: grid;
+      grid-template-columns: minmax(105px, 1fr) auto;
+      gap: 10px;
+      padding: 3px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    #anneal-model-timeline .arp-readout-row:last-child {
+      border-bottom: 0;
+    }
+    #anneal-model-timeline .arp-readout-value {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    #anneal-model-timeline .arp-nodes {
+      margin-top: 16px;
+    }
+    #anneal-model-timeline .arp-node-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 8px;
+      margin-top: 7px;
+    }
+    #anneal-model-timeline .arp-node-list .btn {
+      display: block;
+      text-align: left;
+      min-width: 0;
+    }
+    #anneal-model-timeline .arp-node-list canvas,
+    #anneal-model-timeline .arp-node-list img {
+      display: block;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      object-fit: contain;
+      background: var(--background);
+      margin-bottom: 4px;
+    }
+    #anneal-model-timeline .arp-node-label,
+    #anneal-model-timeline .arp-node-time {
+      display: block;
+    }
+    #anneal-model-timeline .arp-node-time {
+      color: var(--muted-foreground);
+    }
+    @media (max-width: 760px) {
+      #anneal-model-timeline .arp-layout {
+        grid-template-columns: 1fr;
+      }
+      #anneal-model-timeline .arp-detail {
+        position: static;
+      }
+      #anneal-model-timeline .arp-chart-host {
+        min-height: 205px;
+      }
+      #anneal-model-timeline .arp-display-controls {
+        grid-template-columns: 1fr 1fr;
+      }
+      #anneal-model-timeline .arp-display-controls .btn {
+        grid-column: 1 / -1;
+      }
+      #anneal-model-timeline .arp-annotation-controls {
+        grid-template-columns: auto auto minmax(0, 1fr);
+      }
+      #anneal-model-timeline .arp-annotation-controls .arp-annotation-notes {
+        grid-column: 1 / -1;
+      }
+    }
+    @media (max-width: 520px) {
+      #anneal-model-timeline .arp-display-controls {
+        grid-template-columns: 1fr;
+      }
+      #anneal-model-timeline .arp-zoom-timeline {
+        grid-template-columns: 1fr;
+      }
+      #anneal-model-timeline .arp-zoom-timeline output {
+        text-align: left;
+      }
+      #anneal-model-timeline .arp-zoom-stage {
+        height: min(48vh, 480px);
+      }
+      #anneal-model-timeline .arp-annotation-transport,
+      #anneal-model-timeline .arp-annotation-controls {
+        grid-template-columns: 1fr 1fr;
+      }
+      #anneal-model-timeline .arp-annotation-scrubber,
+      #anneal-model-timeline .arp-annotation-controls .arp-annotation-field {
+        grid-column: 1 / -1;
+      }
+    }
+  </style>
+
+  <h2 id="anneal-model-title"></h2>
+  <p class="arp-meta text-small" id="arp-report-meta"></p>
+  <div class="arp-layout">
+    <div class="arp-plots" id="arp-plots">
+      <section class="arp-annotation-editor" aria-labelledby="arp-annotation-title">
+        <div class="arp-annotation-head">
+          <h3 id="arp-annotation-title">Human reconstruction segments</h3>
+          <output class="arp-annotation-summary text-small" id="arp-annotation-summary">0 segments · 0 frames labeled</output>
+        </div>
+        <p class="arp-annotation-note text-small">Model outputs and lossy review images are visible. These labels are model-assisted review data and are not eligible as blind gold labels.</p>
+        <div class="arp-annotation-transport">
+          <button type="button" class="btn" id="arp-frame-previous">← Previous</button>
+          <button type="button" class="btn" id="arp-frame-next">Next →</button>
+          <label class="arp-annotation-scrubber text-small" for="arp-frame-scrubber">
+            <span>Frame playhead</span><output id="arp-frame-scrubber-output" for="arp-frame-scrubber"></output>
+            <input class="form-range" id="arp-frame-scrubber" type="range" min="0" max="0" step="1" value="0">
+          </label>
+        </div>
+        <div class="arp-annotation-track-host" id="arp-annotation-track-host"></div>
+        <output class="arp-annotation-range-output text-small" id="arp-annotation-range-output">In — · Out —</output>
+        <div class="arp-annotation-list text-small" id="arp-annotation-list" aria-label="Saved annotation segments"></div>
+        <div class="arp-annotation-controls">
+          <button type="button" class="btn" id="arp-mark-in">Mark In (I)</button>
+          <button type="button" class="btn" id="arp-mark-out">Mark Out (O)</button>
+          <label class="arp-annotation-field text-small" for="arp-annotation-label">
+            <span>Reconstruction label</span>
+            <select class="form-select" id="arp-annotation-label">
+              <option value="">Choose label…</option>
+              <option value="none_weak">1×1 / none-weak</option>
+              <option value="twinned_2x1">Twinned (2×1)</option>
+              <option value="c_6x2">c(6×2)</option>
+              <option value="rt13">RT13</option>
+              <option value="htr">HTR-like</option>
+              <option value="unknown">Uncertain</option>
+            </select>
+          </label>
+          <label class="arp-annotation-field arp-annotation-notes text-small" for="arp-annotation-notes">
+            <span>Notes</span>
+            <input class="form-control" id="arp-annotation-notes" type="text" maxlength="500" placeholder="Optional observation">
+          </label>
+        </div>
+        <div class="arp-annotation-actions">
+          <button type="button" class="btn btn-primary" id="arp-annotation-apply">Add segment</button>
+          <button type="button" class="btn" id="arp-annotation-new">New selection</button>
+          <button type="button" class="btn" id="arp-annotation-delete" disabled>Delete selected</button>
+          <button type="button" class="btn" id="arp-annotation-undo" disabled>Undo</button>
+        </div>
+        <div class="arp-annotation-file-row">
+          <label class="arp-annotation-field text-small" for="arp-annotation-labeler">
+            <span>Labeler</span>
+            <input class="form-control" id="arp-annotation-labeler" type="text" maxlength="120" placeholder="Required before saving">
+          </label>
+          <button type="button" class="btn" id="arp-annotation-export-json">Export JSON</button>
+          <button type="button" class="btn" id="arp-annotation-export-csv">Export CSV</button>
+          <label class="btn" for="arp-annotation-import">Import JSON</label>
+          <input id="arp-annotation-import" type="file" accept=".json,application/json" hidden>
+        </div>
+        <div class="arp-annotation-status text-small" id="arp-annotation-status" role="status" aria-live="polite"></div>
+      </section>
+    </div>
+    <aside class="arp-detail" aria-live="polite">
+      <h3>Selected RHEED frame</h3>
+      <div class="arp-selected-meta text-small" id="arp-selected-meta"></div>
+      <div class="arp-image-wrap">
+        <canvas id="arp-selected-canvas" width="640" height="480" aria-label="Selected RHEED frame"></canvas>
+        <img id="arp-selected-image" alt="Selected RHEED frame" hidden>
+      </div>
+      <div class="arp-display-controls" aria-label="RHEED display adjustments">
+        <label class="arp-display-control text-small" for="arp-brightness">
+          <span>Brightness</span><output data-display-output="brightness">100%</output>
+          <input class="form-range" id="arp-brightness" data-display-control="brightness" type="range" min="25" max="250" step="5" value="100">
+        </label>
+        <label class="arp-display-control text-small" for="arp-contrast">
+          <span>Contrast</span><output data-display-output="contrast">100%</output>
+          <input class="form-range" id="arp-contrast" data-display-control="contrast" type="range" min="25" max="250" step="5" value="100">
+        </label>
+        <button type="button" class="btn" data-display-reset>Reset display</button>
+      </div>
+      <p class="arp-display-note text-small">Display only — archived pixels and model outputs remain unchanged.</p>
+      <div class="arp-image-actions">
+        <button type="button" class="btn" id="arp-zoom-open">Enlarge RHEED frame</button>
+      </div>
+      <div class="arp-model-readout text-small" id="arp-model-readout"></div>
+    </aside>
+  </div>
+  <section class="arp-nodes" aria-labelledby="arp-nodes-title">
+    <h3 id="arp-nodes-title">Persistent model-output changes</h3>
+    <p class="arp-meta text-small" id="arp-node-meta"></p>
+    <div class="arp-node-list" id="arp-node-list"></div>
+  </section>
+  <div class="arp-tooltip text-small" id="arp-tooltip" role="tooltip"></div>
+  <dialog class="arp-zoom-dialog" id="arp-zoom-dialog" aria-labelledby="arp-zoom-title">
+    <div class="arp-zoom-toolbar">
+      <strong id="arp-zoom-title">RHEED frame</strong>
+      <div class="arp-zoom-controls">
+        <button type="button" class="btn" id="arp-zoom-out" aria-label="Zoom out">−</button>
+        <span id="arp-zoom-level" aria-live="polite">100%</span>
+        <button type="button" class="btn" id="arp-zoom-in" aria-label="Zoom in">+</button>
+        <button type="button" class="btn" id="arp-zoom-reset">Reset</button>
+        <button type="button" class="btn" id="arp-zoom-close">Close</button>
+      </div>
+    </div>
+    <div class="arp-display-controls arp-zoom-display-controls" aria-label="Enlarged RHEED display adjustments">
+      <label class="arp-display-control text-small" for="arp-zoom-brightness">
+        <span>Brightness</span><output data-display-output="brightness">100%</output>
+        <input class="form-range" id="arp-zoom-brightness" data-display-control="brightness" type="range" min="25" max="250" step="5" value="100">
+      </label>
+      <label class="arp-display-control text-small" for="arp-zoom-contrast">
+        <span>Contrast</span><output data-display-output="contrast">100%</output>
+        <input class="form-range" id="arp-zoom-contrast" data-display-control="contrast" type="range" min="25" max="250" step="5" value="100">
+      </label>
+      <button type="button" class="btn" data-display-reset>Reset display</button>
+    </div>
+    <div class="arp-zoom-timeline">
+      <label class="text-small" for="arp-zoom-timeline">Frame timeline</label>
+      <output class="text-small" id="arp-zoom-timeline-output" for="arp-zoom-timeline"></output>
+      <input class="form-range" id="arp-zoom-timeline" type="range" min="0" max="0" step="1" value="0">
+    </div>
+    <div class="arp-zoom-stage" id="arp-zoom-stage">
+      <img id="arp-zoom-image" alt="Enlarged selected RHEED frame" draggable="false">
+    </div>
+    <p class="arp-meta text-small">Use the mouse wheel or ± to zoom, drag to pan, and press Esc to close.</p>
+  </dialog>
+
+  <script>
+    (() => {
+      const root = document.getElementById('anneal-model-timeline');
+      const config = __CONFIG_JSON__;
+      root.querySelector('#anneal-model-title').textContent = config.report_title || config.title || 'RHEED reconstruction timeline';
+      root.querySelector('#arp-report-meta').textContent =
+        config.report_summary ||
+        `${Number(config.count).toLocaleString()} saved heartbeat frames · exact recorded timing · click any plot time to inspect that frame`;
+      root.querySelector('#arp-node-meta').textContent = config.node_summary ||
+        'Markers show persistent model-output changes, not physical ground truth.';
+      const colors = {
+        '1x1': 'var(--viz-series-1)',
+        'twinned_2x1': 'var(--viz-series-2)',
+        'c_6x2': 'var(--viz-series-3)',
+        'rt13': 'var(--viz-series-4)',
+        'htr': 'var(--viz-series-5)'
+      };
+      const labels = {
+        '1x1': '1×1',
+        'twinned_2x1': 'Twinned (2×1)',
+        'c_6x2': 'c(6×2)',
+        'rt13': 'RT13',
+        'htr': 'HTR'
+      };
+      const annotationLabels = {
+        'none_weak': '1×1 / none-weak',
+        'twinned_2x1': 'Twinned (2×1)',
+        'c_6x2': 'c(6×2)',
+        'rt13': 'RT13',
+        'htr': 'HTR-like',
+        'unknown': 'Uncertain'
+      };
+      const annotationColors = {
+        'none_weak': 'var(--viz-series-1)',
+        'twinned_2x1': 'var(--viz-series-2)',
+        'c_6x2': 'var(--viz-series-3)',
+        'rt13': 'var(--viz-series-4)',
+        'htr': 'var(--viz-series-5)',
+        'unknown': 'var(--viz-series-6)'
+      };
+      const annotationSchema = 'rheed-temporal-segments-v1';
+
+      function decode(b64, Type) {
+        const binary = atob(b64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        return new Type(bytes.buffer);
+      }
+
+      const times = decode('__TIMES_B64__', Float32Array);
+      const heartbeats = decode('__HEARTBEATS_B64__', Uint32Array);
+      const sequences = decode('__SEQUENCES_B64__', Uint32Array);
+      const temperatures = decode('__TEMPERATURES_B64__', Int16Array);
+      const captureOffsets = decode('__CAPTURE_OFFSETS_B64__', Float32Array);
+      const probabilities = decode('__PROBABILITIES_B64__', Uint16Array);
+      const qualityValues = decode('__QUALITY_B64__', Uint16Array);
+      const frameHashBytes = decode('__FRAME_HASHES_B64__', Uint8Array);
+      const totalColumns = config.probability_columns.reduce((a, b) => a + b, 0);
+      const packedLengths = [times.length, heartbeats.length, sequences.length, temperatures.length, captureOffsets.length];
+      const invalidQualityOffset = config.models.some((model, modelIndex) => {
+        const offset = Number.isInteger(model.quality_offset) ? model.quality_offset : modelIndex;
+        return offset < 0 || offset >= config.models.length;
+      });
+      if (!Number.isInteger(config.count) || config.count < 1 ||
+          invalidQualityOffset ||
+          packedLengths.some(length => length !== config.count) ||
+          probabilities.length !== config.count * totalColumns ||
+          qualityValues.length !== config.count * config.models.length ||
+          frameHashBytes.length !== config.count * 32) {
+        throw new Error('Packed report arrays do not match the declared frame count');
+      }
+      const startCaptureMs = Date.parse(config.start_capture_utc);
+      const tooltip = root.querySelector('#arp-tooltip');
+      const selectedCanvas = root.querySelector('#arp-selected-canvas');
+      const selectedImage = root.querySelector('#arp-selected-image');
+      const selectedContext = selectedCanvas.getContext('2d');
+      const zoomDialog = root.querySelector('#arp-zoom-dialog');
+      const zoomStage = root.querySelector('#arp-zoom-stage');
+      const zoomImage = root.querySelector('#arp-zoom-image');
+      const zoomLevel = root.querySelector('#arp-zoom-level');
+      const zoomTimeline = root.querySelector('#arp-zoom-timeline');
+      const zoomTimelineOutput = root.querySelector('#arp-zoom-timeline-output');
+      zoomTimeline.max = String(config.count - 1);
+      const frameScrubber = root.querySelector('#arp-frame-scrubber');
+      const frameScrubberOutput = root.querySelector('#arp-frame-scrubber-output');
+      const annotationSummary = root.querySelector('#arp-annotation-summary');
+      const annotationStatus = root.querySelector('#arp-annotation-status');
+      const annotationRangeOutput = root.querySelector('#arp-annotation-range-output');
+      const annotationLabel = root.querySelector('#arp-annotation-label');
+      const annotationNotes = root.querySelector('#arp-annotation-notes');
+      const annotationLabeler = root.querySelector('#arp-annotation-labeler');
+      const annotationApply = root.querySelector('#arp-annotation-apply');
+      const annotationDelete = root.querySelector('#arp-annotation-delete');
+      const annotationUndo = root.querySelector('#arp-annotation-undo');
+      const annotationImport = root.querySelector('#arp-annotation-import');
+      frameScrubber.max = String(config.count - 1);
+      const sprite = new Image();
+      if (!config.full_assets) sprite.src = config.sprite.data_uri;
+      let selectedIndex = 0;
+      const chartStates = [];
+      let zoomScale = 1;
+      let zoomX = 0;
+      let zoomY = 0;
+      let dragStart = null;
+      let displayBrightness = 100;
+      let displayContrast = 100;
+      let annotations = [];
+      let annotationAudit = [];
+      let annotationHistory = [];
+      let annotationSetId = '';
+      let annotationSetCreatedAt = '';
+      let selectedAnnotationId = null;
+      let markInIndex = null;
+      let markOutIndexExclusive = null;
+      let annotationState = null;
+      let annotationStorageAvailable = false;
+      if (!config.dataset || !config.dataset.dataset_id ||
+          config.dataset.frame_count !== config.count ||
+          !config.dataset.ordered_frame_fingerprint ||
+          !config.dataset.model_context_fingerprint) {
+        throw new Error('Report dataset identity is missing or inconsistent');
+      }
+      const datasetIdentity = config.dataset;
+      const annotationStorageKey =
+        `ai4mbe.rheed.annotations.${annotationSchema}.${datasetIdentity.dataset_id}.${datasetIdentity.model_context_fingerprint}`;
+
+      function valueAt(model, frameIndex, classIndex) {
+        return probabilities[frameIndex * totalColumns + model.offset + classIndex] / 65535;
+      }
+
+      function nearestIndex(value) {
+        return d3.bisector(d => d).center(times, value);
+      }
+
+      function formatElapsed(seconds) {
+        const whole = Math.max(0, Math.round(seconds));
+        const minutes = Math.floor(whole / 60);
+        const rest = whole % 60;
+        return `${minutes}:${String(rest).padStart(2, '0')}`;
+      }
+
+      function formatUtc(index) {
+        return new Date(startCaptureMs + captureOffsets[index] * 1000).toISOString();
+      }
+
+      function frameAsset(index) {
+        return config.image_pattern.replace('{index}', String(index + 1).padStart(4, '0'));
+      }
+
+      function nowUtc() {
+        return new Date().toISOString();
+      }
+
+      function makeId(prefix) {
+        const suffix = globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+          ? globalThis.crypto.randomUUID()
+          : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        return `${prefix}-${suffix}`;
+      }
+
+      function cloneValue(value) {
+        return JSON.parse(JSON.stringify(value));
+      }
+
+      function setAnnotationMessage(message, isError = false) {
+        annotationStatus.textContent = message;
+        annotationStatus.classList.toggle('text-destructive', isError);
+      }
+
+      function segmentSnapshot(segment) {
+        if (!segment) return null;
+        return {
+          annotation_id: segment.annotationId,
+          start_index: segment.startIndex,
+          end_index_exclusive: segment.endIndexExclusive,
+          label_code: segment.label,
+          notes: segment.notes,
+          labeler: segment.labeler,
+        };
+      }
+
+      function endpointForIndex(index) {
+        return {
+          frame_index: index + 1,
+          heartbeat_idx: Number(heartbeats[index]),
+          frame_sha256: frameSha256(index),
+          elapsed_s: Number(times[index].toFixed(3)),
+          captured_at_utc: formatUtc(index),
+          capture_sequence: Number(sequences[index]),
+          review_asset: frameAsset(index),
+        };
+      }
+
+      function frameSha256(index) {
+        const offset = index * 32;
+        let digest = '';
+        for (let byteIndex = 0; byteIndex < 32; byteIndex += 1) {
+          digest += frameHashBytes[offset + byteIndex].toString(16).padStart(2, '0');
+        }
+        return digest;
+      }
+
+      function publicSegment(segment, segmentIndex) {
+        const lastIndex = segment.endIndexExclusive - 1;
+        return {
+          annotation_id: segment.annotationId,
+          segment_index: segmentIndex + 1,
+          created_at_utc: segment.createdAt,
+          updated_at_utc: segment.updatedAt,
+          labeler: segment.labeler,
+          annotation_source: 'human_assisted_temporal_segment',
+          model_outputs_visible: true,
+          eligible_for_gold: false,
+          segment_kind: segment.label === 'unknown' ? 'unknown' : 'stable',
+          label_code: segment.label,
+          primary_reconstruction: segment.label === 'none_weak' ? 'none/weak' : segment.label,
+          notes: segment.notes,
+          start: endpointForIndex(segment.startIndex),
+          end: endpointForIndex(lastIndex),
+          frame_count: segment.endIndexExclusive - segment.startIndex,
+          elapsed_span_s: Number((times[lastIndex] - times[segment.startIndex]).toFixed(3)),
+          capture_backend: datasetIdentity.capture_backend,
+          capture_geometry_id: datasetIdentity.capture_geometry_id,
+          display_brightness_pct: segment.displayBrightness,
+          display_contrast_pct: segment.displayContrast,
+        };
+      }
+
+      function buildAnnotationDocument() {
+        const timestamp = nowUtc();
+        if (!annotationSetId) annotationSetId = makeId('annotation-set');
+        if (!annotationSetCreatedAt) annotationSetCreatedAt = timestamp;
+        return {
+          schema_version: annotationSchema,
+          document_type: 'ai4mbe_rheed_segment_annotations',
+          export_id: makeId('export'),
+          exported_at_utc: timestamp,
+          dataset: cloneValue(datasetIdentity),
+          annotation_set: {
+            annotation_set_id: annotationSetId,
+            labeler: annotationLabeler.value.trim(),
+            annotation_source: 'human_assisted_temporal_segment',
+            annotation_mode: 'model_assisted_review',
+            model_outputs_visible: true,
+            equalizer_outputs_visible: false,
+            eligible_for_gold: false,
+            created_at_utc: annotationSetCreatedAt,
+            updated_at_utc: timestamp,
+          },
+          interval_semantics: 'one-based inclusive saved-frame endpoints; gaps allowed; capture sequences may be non-contiguous',
+          segments: annotations.slice().sort((a, b) => a.startIndex - b.startIndex)
+            .map((segment, index) => publicSegment(segment, index)),
+          audit_events: cloneValue(annotationAudit),
+        };
+      }
+
+      function recordAudit(action, annotationId, before, after) {
+        annotationAudit.push({
+          event_id: makeId('audit'),
+          event_index: annotationAudit.length + 1,
+          timestamp_utc: nowUtc(),
+          action,
+          annotation_id: annotationId,
+          before: before ? cloneValue(before) : null,
+          after: after ? cloneValue(after) : null,
+        });
+      }
+
+      function pushAnnotationHistory() {
+        annotationHistory.push({
+          annotations: cloneValue(annotations),
+          selectedAnnotationId,
+          markInIndex,
+          markOutIndexExclusive,
+        });
+        if (annotationHistory.length > 100) annotationHistory.shift();
+      }
+
+      function validateAnnotationDocument(documentValue) {
+        if (!documentValue || documentValue.schema_version !== annotationSchema ||
+            documentValue.document_type !== 'ai4mbe_rheed_segment_annotations') {
+          throw new Error(`Expected ${annotationSchema} annotation JSON`);
+        }
+        const incomingDataset = documentValue.dataset || {};
+        if (incomingDataset.dataset_id !== datasetIdentity.dataset_id ||
+            incomingDataset.frame_count !== config.count ||
+            incomingDataset.ordered_frame_fingerprint !== datasetIdentity.ordered_frame_fingerprint ||
+            incomingDataset.model_context_fingerprint !== datasetIdentity.model_context_fingerprint) {
+          throw new Error('Annotation file belongs to a different acquisition or model-review context');
+        }
+        const annotationSet = documentValue.annotation_set || {};
+        if (annotationSet.model_outputs_visible !== true || annotationSet.eligible_for_gold !== false) {
+          throw new Error('This report accepts only model-visible, non-gold review annotations');
+        }
+        if (!Array.isArray(documentValue.segments)) throw new Error('segments must be an array');
+        const ids = new Set();
+        const imported = documentValue.segments.map(item => {
+          const annotationId = String(item.annotation_id || '');
+          const label = String(item.label_code || '');
+          const startFrame = Number(item.start && item.start.frame_index);
+          const endFrame = Number(item.end && item.end.frame_index);
+          if (!annotationId || annotationId.length > 200 || ids.has(annotationId)) {
+            throw new Error('Annotation IDs must be unique and non-empty');
+          }
+          ids.add(annotationId);
+          if (!Object.prototype.hasOwnProperty.call(annotationLabels, label)) {
+            throw new Error(`Unknown reconstruction label: ${label}`);
+          }
+          if (!Number.isInteger(startFrame) || !Number.isInteger(endFrame) ||
+              startFrame < 1 || endFrame < startFrame || endFrame > config.count) {
+            throw new Error('Segment frame bounds are invalid');
+          }
+          const startIndex = startFrame - 1;
+          const endIndex = endFrame - 1;
+          if (Number(item.frame_count) !== endFrame - startFrame + 1 ||
+              Number(item.start.heartbeat_idx) !== Number(heartbeats[startIndex]) ||
+              Number(item.end.heartbeat_idx) !== Number(heartbeats[endIndex]) ||
+              String(item.start.frame_sha256 || '').toLowerCase() !== frameSha256(startIndex) ||
+              String(item.end.frame_sha256 || '').toLowerCase() !== frameSha256(endIndex) ||
+              Number(item.start.capture_sequence) !== Number(sequences[startIndex]) ||
+              Number(item.end.capture_sequence) !== Number(sequences[endIndex]) ||
+              item.start.captured_at_utc !== formatUtc(startIndex) ||
+              item.end.captured_at_utc !== formatUtc(endIndex)) {
+            throw new Error('Segment endpoint provenance does not match this report');
+          }
+          const notes = String(item.notes || '');
+          const labeler = String(item.labeler || '');
+          if (notes.length > 500 || labeler.length > 120) throw new Error('Annotation text is too long');
+          const brightness = Number(item.display_brightness_pct);
+          const contrast = Number(item.display_contrast_pct);
+          return {
+            annotationId,
+            startIndex,
+            endIndexExclusive: endFrame,
+            label,
+            notes,
+            labeler,
+            createdAt: String(item.created_at_utc || nowUtc()),
+            updatedAt: String(item.updated_at_utc || nowUtc()),
+            displayBrightness: Number.isFinite(brightness) ? brightness : 100,
+            displayContrast: Number.isFinite(contrast) ? contrast : 100,
+          };
+        }).sort((a, b) => a.startIndex - b.startIndex);
+        imported.forEach((segment, index) => {
+          if (index > 0 && imported[index - 1].endIndexExclusive > segment.startIndex) {
+            throw new Error('Imported segments overlap');
+          }
+        });
+        return {
+          segments: imported,
+          audit: Array.isArray(documentValue.audit_events) ? cloneValue(documentValue.audit_events).slice(0, 10000) : [],
+          annotationSetId: String(annotationSet.annotation_set_id || makeId('annotation-set')),
+          annotationSetCreatedAt: String(annotationSet.created_at_utc || nowUtc()),
+          labeler: String(annotationSet.labeler || ''),
+        };
+      }
+
+      function persistAnnotationDraft() {
+        if (!annotationStorageAvailable) return;
+        try {
+          localStorage.setItem(annotationStorageKey, JSON.stringify(buildAnnotationDocument()));
+        } catch (_) {
+          annotationStorageAvailable = false;
+        }
+      }
+
+      function loadAnnotationDraft() {
+        try {
+          const probeKey = `${annotationStorageKey}.probe`;
+          localStorage.setItem(probeKey, '1');
+          localStorage.removeItem(probeKey);
+          annotationStorageAvailable = true;
+          const stored = localStorage.getItem(annotationStorageKey);
+          if (!stored) return false;
+          const parsed = validateAnnotationDocument(JSON.parse(stored));
+          annotations = parsed.segments;
+          annotationAudit = parsed.audit;
+          annotationSetId = parsed.annotationSetId;
+          annotationSetCreatedAt = parsed.annotationSetCreatedAt;
+          annotationLabeler.value = parsed.labeler;
+          return true;
+        } catch (_) {
+          annotationStorageAvailable = false;
+          return false;
+        }
+      }
+
+      function downloadText(filename, textValue, mimeType) {
+        if (!config.full_assets) {
+          setAnnotationMessage('Open the standalone report to save annotation files.', true);
+          return;
+        }
+        const url = URL.createObjectURL(new Blob([textValue], { type: mimeType }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+
+      function csvValue(value) {
+        const textValue = value === null || value === undefined ? '' : String(value);
+        return /[",\r\n]/.test(textValue) ? `"${textValue.replaceAll('"', '""')}"` : textValue;
+      }
+
+      function exportAnnotationsJson() {
+        const documentValue = buildAnnotationDocument();
+        const runName = datasetIdentity.acquisition_run || 'rheed-run';
+        downloadText(`${runName}_segment_annotations.json`, `${JSON.stringify(documentValue, null, 2)}\n`, 'application/json;charset=utf-8');
+        if (config.full_assets) setAnnotationMessage(`Exported ${documentValue.segments.length} segments as JSON.`);
+      }
+
+      function exportAnnotationsCsv() {
+        const documentValue = buildAnnotationDocument();
+        const headers = [
+          'schema_version','dataset_id','source_archive_sha256','ordered_frame_fingerprint','model_context_fingerprint','annotation_set_id',
+          'annotation_id','segment_index','labeler','annotation_source','model_outputs_visible','eligible_for_gold',
+          'segment_kind','label_code','primary_reconstruction','notes','start_frame_index','end_frame_index',
+          'frame_count','start_elapsed_s','end_elapsed_s','elapsed_span_s','start_captured_at_utc','end_captured_at_utc',
+          'start_heartbeat_idx','end_heartbeat_idx','start_frame_sha256','end_frame_sha256',
+          'start_capture_sequence','end_capture_sequence','capture_backend','capture_geometry_id',
+          'display_brightness_pct','display_contrast_pct','created_at_utc','updated_at_utc'
+        ];
+        const rows = documentValue.segments.map(segment => ({
+          schema_version: annotationSchema,
+          dataset_id: datasetIdentity.dataset_id,
+          source_archive_sha256: datasetIdentity.source_archive_sha256 || '',
+          ordered_frame_fingerprint: datasetIdentity.ordered_frame_fingerprint || '',
+          model_context_fingerprint: datasetIdentity.model_context_fingerprint || '',
+          annotation_set_id: annotationSetId,
+          annotation_id: segment.annotation_id,
+          segment_index: segment.segment_index,
+          labeler: segment.labeler,
+          annotation_source: segment.annotation_source,
+          model_outputs_visible: true,
+          eligible_for_gold: false,
+          segment_kind: segment.segment_kind,
+          label_code: segment.label_code,
+          primary_reconstruction: segment.primary_reconstruction,
+          notes: segment.notes,
+          start_frame_index: segment.start.frame_index,
+          end_frame_index: segment.end.frame_index,
+          frame_count: segment.frame_count,
+          start_elapsed_s: segment.start.elapsed_s,
+          end_elapsed_s: segment.end.elapsed_s,
+          elapsed_span_s: segment.elapsed_span_s,
+          start_captured_at_utc: segment.start.captured_at_utc,
+          end_captured_at_utc: segment.end.captured_at_utc,
+          start_heartbeat_idx: segment.start.heartbeat_idx,
+          end_heartbeat_idx: segment.end.heartbeat_idx,
+          start_frame_sha256: segment.start.frame_sha256,
+          end_frame_sha256: segment.end.frame_sha256,
+          start_capture_sequence: segment.start.capture_sequence,
+          end_capture_sequence: segment.end.capture_sequence,
+          capture_backend: segment.capture_backend,
+          capture_geometry_id: segment.capture_geometry_id,
+          display_brightness_pct: segment.display_brightness_pct,
+          display_contrast_pct: segment.display_contrast_pct,
+          created_at_utc: segment.created_at_utc,
+          updated_at_utc: segment.updated_at_utc,
+        }));
+        const csvText = [headers.join(','), ...rows.map(row => headers.map(header => csvValue(row[header])).join(','))].join('\r\n');
+        const runName = datasetIdentity.acquisition_run || 'rheed-run';
+        downloadText(`${runName}_segment_annotations.csv`, `\ufeff${csvText}\r\n`, 'text/csv;charset=utf-8');
+        if (config.full_assets) setAnnotationMessage(`Exported ${rows.length} segments as CSV.`);
+      }
+
+      function drawSpriteFrame(context, index, width, height) {
+        const sw = config.sprite.tile_width;
+        const sh = config.sprite.tile_height;
+        const sx = (index % config.sprite.columns) * sw;
+        const sy = Math.floor(index / config.sprite.columns) * sh;
+        context.clearRect(0, 0, width, height);
+        context.imageSmoothingEnabled = true;
+        context.drawImage(sprite, sx, sy, sw, sh, 0, 0, width, height);
+      }
+
+      function dominant(model, index) {
+        let bestClass = 0;
+        let bestValue = -Infinity;
+        model.classes.forEach((name, classIndex) => {
+          const value = valueAt(model, index, classIndex);
+          if (value > bestValue) {
+            bestValue = value;
+            bestClass = classIndex;
+          }
+        });
+        return { name: model.classes[bestClass], value: bestValue };
+      }
+
+      function syncFrameScrubber() {
+        frameScrubber.value = String(selectedIndex);
+        frameScrubberOutput.textContent =
+          `frame #${selectedIndex + 1} · heartbeat #${heartbeats[selectedIndex]} · ${formatElapsed(times[selectedIndex])} · capture #${sequences[selectedIndex]}`;
+      }
+
+      function refreshAnnotationControls() {
+        const labeledFrames = annotations.reduce(
+          (total, segment) => total + segment.endIndexExclusive - segment.startIndex, 0
+        );
+        annotationSummary.textContent =
+          `${annotations.length} segment${annotations.length === 1 ? '' : 's'} · ${labeledFrames} frames labeled`;
+        const inText = markInIndex === null
+          ? 'In —'
+          : `In #${markInIndex + 1} (${formatElapsed(times[markInIndex])})`;
+        const outIndex = markOutIndexExclusive === null ? null : markOutIndexExclusive - 1;
+        const outText = outIndex === null
+          ? 'Out —'
+          : `Out #${outIndex + 1} (${formatElapsed(times[outIndex])})`;
+        const countText = markInIndex !== null && markOutIndexExclusive !== null && markOutIndexExclusive > markInIndex
+          ? ` · ${markOutIndexExclusive - markInIndex} saved frames`
+          : '';
+        annotationRangeOutput.textContent = `${inText} · ${outText}${countText}`;
+        annotationApply.textContent = selectedAnnotationId ? 'Update segment' : 'Add segment';
+        annotationDelete.disabled = !selectedAnnotationId;
+        annotationUndo.disabled = annotationHistory.length === 0;
+      }
+
+      function renderAnnotationList() {
+        const list = root.querySelector('#arp-annotation-list');
+        list.replaceChildren();
+        if (!annotations.length) {
+          const empty = document.createElement('span');
+          empty.textContent = 'No saved segments.';
+          empty.className = 'text-muted';
+          list.append(empty);
+          return;
+        }
+        annotations.slice().sort((a, b) => a.startIndex - b.startIndex).forEach(segment => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'btn';
+          button.dataset.annotationListId = segment.annotationId;
+          button.setAttribute('aria-pressed', segment.annotationId === selectedAnnotationId ? 'true' : 'false');
+          button.textContent = `${annotationLabels[segment.label]} · #${segment.startIndex + 1}–${segment.endIndexExclusive}`;
+          button.addEventListener('click', () => selectAnnotation(segment.annotationId));
+          list.append(button);
+        });
+      }
+
+      function renderAnnotationTrack() {
+        const host = root.querySelector('#arp-annotation-track-host');
+        host.replaceChildren();
+        const width = Math.max(320, Math.floor(host.getBoundingClientRect().width));
+        const height = 112;
+        const margin = { top: 14, right: 12, bottom: 36, left: 64 };
+        const innerWidth = width - margin.left - margin.right;
+        const innerHeight = height - margin.top - margin.bottom;
+        const extent = d3.extent(times);
+        const padding = Math.max(1, (extent[1] - extent[0]) * 0.005);
+        const x = d3.scaleLinear().domain([extent[0] - padding, extent[1] + padding]).range([0, innerWidth]);
+        const boundaryTime = index => {
+          if (index <= 0) return extent[0] - padding;
+          if (index >= config.count) return extent[1] + padding;
+          return (times[index - 1] + times[index]) / 2;
+        };
+        const svg = d3.select(host).append('svg')
+          .attr('class', 'arp-chart arp-annotation-track')
+          .attr('viewBox', `0 0 ${width} ${height}`)
+          .attr('role', 'img')
+          .attr('aria-label', 'Human reconstruction segment annotation track');
+        svg.append('title').text('Human reconstruction segments');
+        svg.append('desc').text('Drag an unlabeled portion to choose exact saved-frame bounds, then assign a label.');
+        const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+        g.append('rect').attr('data-chart-frame', '')
+          .attr('width', innerWidth).attr('height', innerHeight).attr('fill', 'none');
+        const hit = g.append('rect').attr('class', 'annotation-hit').attr('data-annotation-hit', '')
+          .attr('width', innerWidth).attr('height', innerHeight).attr('fill', 'transparent');
+        annotations.slice().sort((a, b) => a.startIndex - b.startIndex).forEach(segment => {
+          const x0 = x(boundaryTime(segment.startIndex));
+          const x1 = x(boundaryTime(segment.endIndexExclusive));
+          const rect = g.append('rect')
+            .attr('class', `annotation-segment${segment.annotationId === selectedAnnotationId ? ' is-selected' : ''}`)
+            .attr('data-segment-id', segment.annotationId)
+            .attr('data-start-index', segment.startIndex)
+            .attr('data-end-index-exclusive', segment.endIndexExclusive)
+            .attr('x', x0).attr('y', 7).attr('width', Math.max(1, x1 - x0)).attr('height', innerHeight - 14)
+            .attr('fill', annotationColors[segment.label])
+            .attr('fill-opacity', 0.45)
+            .on('click', event => {
+              event.stopPropagation();
+              selectAnnotation(segment.annotationId);
+            });
+          rect.append('title').text(
+            `${annotationLabels[segment.label]} · frames ${segment.startIndex + 1}–${segment.endIndexExclusive}`
+          );
+          if (x1 - x0 >= 52) {
+            g.append('text').attr('x', (x0 + x1) / 2).attr('y', innerHeight / 2 + 4)
+              .attr('text-anchor', 'middle').style('pointer-events', 'none')
+              .text(annotationLabels[segment.label]);
+          }
+        });
+        const draftRect = g.append('rect').attr('class', 'annotation-draft').style('display', 'none');
+        const inMarker = g.append('line').attr('class', 'annotation-marker').style('display', 'none')
+          .attr('y1', 0).attr('y2', innerHeight);
+        const outMarker = g.append('line').attr('class', 'annotation-marker').style('display', 'none')
+          .attr('y1', 0).attr('y2', innerHeight);
+        const playhead = g.append('line').attr('class', 'annotation-playhead')
+          .attr('y1', 0).attr('y2', innerHeight);
+        g.append('g').attr('transform', `translate(0,${innerHeight})`)
+          .call(d3.axisBottom(x).ticks(width < 500 ? 4 : 7).tickFormat(value => (value / 60).toFixed(0)));
+        svg.append('text').attr('class', 'axis-title').attr('data-axis', 'y')
+          .attr('x', 4).attr('y', margin.top + innerHeight / 2 + 4).text('Human label');
+        svg.append('text').attr('class', 'axis-title').attr('data-axis', 'x')
+          .attr('x', margin.left + innerWidth / 2).attr('y', height - 3).attr('text-anchor', 'middle')
+          .text('Elapsed time (min)');
+
+        const refreshOverlay = () => {
+          playhead.attr('x1', x(times[selectedIndex])).attr('x2', x(times[selectedIndex]));
+          if (markInIndex === null || markOutIndexExclusive === null || markOutIndexExclusive <= markInIndex) {
+            draftRect.style('display', 'none');
+          } else {
+            const x0 = x(boundaryTime(markInIndex));
+            const x1 = x(boundaryTime(markOutIndexExclusive));
+            draftRect.style('display', null).attr('x', x0).attr('y', 3)
+              .attr('width', Math.max(1, x1 - x0)).attr('height', innerHeight - 6);
+          }
+          if (markInIndex === null) inMarker.style('display', 'none');
+          else inMarker.style('display', null)
+            .attr('x1', x(boundaryTime(markInIndex))).attr('x2', x(boundaryTime(markInIndex)));
+          if (markOutIndexExclusive === null) outMarker.style('display', 'none');
+          else outMarker.style('display', null)
+            .attr('x1', x(boundaryTime(markOutIndexExclusive))).attr('x2', x(boundaryTime(markOutIndexExclusive)));
+          syncFrameScrubber();
+          refreshAnnotationControls();
+        };
+
+        let rangeDrag = null;
+        hit.on('pointerdown', event => {
+          if (event.button !== 0) return;
+          const [pointerX] = d3.pointer(event);
+          const index = nearestIndex(x.invert(Math.max(0, Math.min(innerWidth, pointerX))));
+          rangeDrag = { pointerId: event.pointerId, startIndex: index };
+          selectedAnnotationId = null;
+          markInIndex = index;
+          markOutIndexExclusive = index + 1;
+          annotationNotes.value = '';
+          event.currentTarget.setPointerCapture(event.pointerId);
+          updateSelected(index);
+          refreshOverlay();
+          event.preventDefault();
+        }).on('pointermove', event => {
+          if (!rangeDrag || rangeDrag.pointerId !== event.pointerId) return;
+          const [pointerX] = d3.pointer(event);
+          const index = nearestIndex(x.invert(Math.max(0, Math.min(innerWidth, pointerX))));
+          markInIndex = Math.min(rangeDrag.startIndex, index);
+          markOutIndexExclusive = Math.max(rangeDrag.startIndex, index) + 1;
+          if (index !== selectedIndex) updateSelected(index);
+          refreshOverlay();
+        }).on('pointerup pointercancel', event => {
+          if (!rangeDrag || rangeDrag.pointerId !== event.pointerId) return;
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          rangeDrag = null;
+          refreshOverlay();
+          setAnnotationMessage('Range selected. Choose a human label and add the segment.');
+        });
+        annotationState = {
+          draw: renderAnnotationTrack,
+          updateSelection: refreshOverlay,
+        };
+        refreshOverlay();
+        renderAnnotationList();
+      }
+
+      function clearAnnotationSelection(clearLabel = true) {
+        selectedAnnotationId = null;
+        markInIndex = null;
+        markOutIndexExclusive = null;
+        annotationNotes.value = '';
+        if (clearLabel) annotationLabel.value = '';
+        renderAnnotationTrack();
+      }
+
+      function selectAnnotation(annotationId) {
+        const segment = annotations.find(item => item.annotationId === annotationId);
+        if (!segment) return;
+        selectedAnnotationId = annotationId;
+        markInIndex = segment.startIndex;
+        markOutIndexExclusive = segment.endIndexExclusive;
+        annotationLabel.value = segment.label;
+        annotationNotes.value = segment.notes;
+        annotationLabeler.value = segment.labeler;
+        updateSelected(segment.startIndex);
+        renderAnnotationTrack();
+        setAnnotationMessage(`Selected ${annotationLabels[segment.label]} segment.`);
+      }
+
+      function markAnnotationIn() {
+        markInIndex = selectedIndex;
+        if (markOutIndexExclusive !== null && markOutIndexExclusive <= markInIndex) {
+          setAnnotationMessage('Out must be the same frame as, or later than, In.', true);
+        } else {
+          setAnnotationMessage(`In set at frame ${markInIndex + 1}.`);
+        }
+        renderAnnotationTrack();
+      }
+
+      function markAnnotationOut() {
+        markOutIndexExclusive = selectedIndex + 1;
+        if (markInIndex !== null && markOutIndexExclusive <= markInIndex) {
+          setAnnotationMessage('Out must be the same frame as, or later than, In.', true);
+        } else {
+          setAnnotationMessage(`Out set at frame ${selectedIndex + 1}.`);
+        }
+        renderAnnotationTrack();
+      }
+
+      function applyAnnotationSegment() {
+        const labeler = annotationLabeler.value.trim();
+        const label = annotationLabel.value;
+        if (!labeler) return setAnnotationMessage('Enter the labeler name before saving.', true);
+        if (!Object.prototype.hasOwnProperty.call(annotationLabels, label)) {
+          return setAnnotationMessage('Choose a reconstruction label.', true);
+        }
+        if (markInIndex === null || markOutIndexExclusive === null) {
+          return setAnnotationMessage('Set both In and Out, or drag a range on the annotation track.', true);
+        }
+        if (markOutIndexExclusive <= markInIndex) {
+          return setAnnotationMessage('Out must be the same frame as, or later than, In.', true);
+        }
+        const overlap = annotations.find(segment =>
+          segment.annotationId !== selectedAnnotationId &&
+          markInIndex < segment.endIndexExclusive && markOutIndexExclusive > segment.startIndex
+        );
+        if (overlap) {
+          return setAnnotationMessage(
+            `Range overlaps ${annotationLabels[overlap.label]} frames ${overlap.startIndex + 1}–${overlap.endIndexExclusive}.`,
+            true
+          );
+        }
+        const timestamp = nowUtc();
+        const existing = annotations.find(segment => segment.annotationId === selectedAnnotationId) || null;
+        const before = segmentSnapshot(existing);
+        pushAnnotationHistory();
+        const segment = {
+          annotationId: existing ? existing.annotationId : makeId('segment'),
+          startIndex: markInIndex,
+          endIndexExclusive: markOutIndexExclusive,
+          label,
+          notes: annotationNotes.value,
+          labeler,
+          createdAt: existing ? existing.createdAt : timestamp,
+          updatedAt: timestamp,
+          displayBrightness,
+          displayContrast,
+        };
+        if (existing) annotations = annotations.map(item => item.annotationId === existing.annotationId ? segment : item);
+        else annotations.push(segment);
+        annotations.sort((a, b) => a.startIndex - b.startIndex);
+        selectedAnnotationId = segment.annotationId;
+        recordAudit(existing ? 'update' : 'create', segment.annotationId, before, segmentSnapshot(segment));
+        persistAnnotationDraft();
+        renderAnnotationTrack();
+        setAnnotationMessage(
+          `${existing ? 'Updated' : 'Added'} ${annotationLabels[label]} for ${segment.endIndexExclusive - segment.startIndex} saved frames.`
+        );
+      }
+
+      function deleteSelectedAnnotation() {
+        const segment = annotations.find(item => item.annotationId === selectedAnnotationId);
+        if (!segment) return;
+        if (!window.confirm(`Delete the ${annotationLabels[segment.label]} segment?`)) return;
+        pushAnnotationHistory();
+        annotations = annotations.filter(item => item.annotationId !== segment.annotationId);
+        recordAudit('delete', segment.annotationId, segmentSnapshot(segment), null);
+        selectedAnnotationId = null;
+        markInIndex = null;
+        markOutIndexExclusive = null;
+        annotationNotes.value = '';
+        persistAnnotationDraft();
+        renderAnnotationTrack();
+        setAnnotationMessage('Segment deleted. Undo is available.');
+      }
+
+      function undoAnnotationMutation() {
+        if (!annotationHistory.length) return;
+        const current = cloneValue(annotations);
+        const previous = annotationHistory.pop();
+        annotations = previous.annotations;
+        selectedAnnotationId = previous.selectedAnnotationId;
+        markInIndex = previous.markInIndex;
+        markOutIndexExclusive = previous.markOutIndexExclusive;
+        const selected = annotations.find(item => item.annotationId === selectedAnnotationId);
+        annotationLabel.value = selected ? selected.label : '';
+        annotationNotes.value = selected ? selected.notes : '';
+        recordAudit('undo', selectedAnnotationId, { segments: current.map(segmentSnapshot) },
+          { segments: annotations.map(segmentSnapshot) });
+        persistAnnotationDraft();
+        renderAnnotationTrack();
+        setAnnotationMessage('Last annotation change was undone.');
+      }
+
+      async function importAnnotations(event) {
+        const input = event.currentTarget;
+        const file = input.files && input.files[0];
+        if (!file) return;
+        try {
+          const parsed = validateAnnotationDocument(JSON.parse(await file.text()));
+          if (annotations.length && !window.confirm('Replace the current annotation set with the imported file?')) return;
+          pushAnnotationHistory();
+          annotations = parsed.segments;
+          annotationAudit = parsed.audit;
+          annotationSetId = parsed.annotationSetId;
+          annotationSetCreatedAt = parsed.annotationSetCreatedAt;
+          annotationLabeler.value = parsed.labeler;
+          selectedAnnotationId = null;
+          markInIndex = null;
+          markOutIndexExclusive = null;
+          recordAudit('import', null, null, { segment_count: annotations.length, file_name: file.name });
+          persistAnnotationDraft();
+          renderAnnotationTrack();
+          setAnnotationMessage(`Imported ${annotations.length} segments from ${file.name}.`);
+        } catch (error) {
+          setAnnotationMessage(`Import failed: ${error.message}`, true);
+        } finally {
+          input.value = '';
+        }
+      }
+
+      function applyDisplayFilter() {
+        const filter = `brightness(${displayBrightness}%) contrast(${displayContrast}%)`;
+        [selectedCanvas, selectedImage, zoomImage].forEach(element => {
+          element.style.filter = filter;
+        });
+        root.querySelectorAll('[data-display-control="brightness"]').forEach(input => {
+          input.value = String(displayBrightness);
+        });
+        root.querySelectorAll('[data-display-control="contrast"]').forEach(input => {
+          input.value = String(displayContrast);
+        });
+        root.querySelectorAll('[data-display-output="brightness"]').forEach(output => {
+          output.textContent = `${displayBrightness}%`;
+        });
+        root.querySelectorAll('[data-display-output="contrast"]').forEach(output => {
+          output.textContent = `${displayContrast}%`;
+        });
+      }
+
+      function resetDisplayFilter() {
+        displayBrightness = 100;
+        displayContrast = 100;
+        applyDisplayFilter();
+      }
+
+      function applyZoomTransform() {
+        zoomImage.style.transform = `translate(${zoomX}px, ${zoomY}px) scale(${zoomScale})`;
+        zoomLevel.textContent = `${Math.round(zoomScale * 100)}%`;
+      }
+
+      function resetZoom() {
+        zoomScale = 1;
+        zoomX = 0;
+        zoomY = 0;
+        applyZoomTransform();
+      }
+
+      function setZoom(nextScale) {
+        zoomScale = Math.max(1, Math.min(8, nextScale));
+        if (zoomScale === 1) {
+          zoomX = 0;
+          zoomY = 0;
+        }
+        applyZoomTransform();
+      }
+
+      function syncZoomFrame() {
+        const temp = temperatures[selectedIndex] === -32768 ? 'N/A' : `${(temperatures[selectedIndex] / 10).toFixed(1)} °C`;
+        zoomTimeline.value = String(selectedIndex);
+        zoomTimelineOutput.textContent =
+          `${formatElapsed(times[selectedIndex])} · heartbeat #${heartbeats[selectedIndex]} · capture #${sequences[selectedIndex]} · ${temp}`;
+        if (!zoomDialog.open) return;
+        zoomImage.dataset.frameIndex = String(selectedIndex);
+        zoomImage.src = config.full_assets ? frameAsset(selectedIndex) : selectedCanvas.toDataURL('image/png');
+        root.querySelector('#arp-zoom-title').textContent =
+          `RHEED · ${formatElapsed(times[selectedIndex])} · capture #${sequences[selectedIndex]}`;
+      }
+
+      function openZoom() {
+        resetZoom();
+        if (!zoomDialog.open) zoomDialog.showModal();
+        syncZoomFrame();
+      }
+
+      function updateSelected(index) {
+        selectedIndex = Math.max(0, Math.min(config.count - 1, Math.round(index)));
+        const temp = temperatures[selectedIndex] === -32768 ? 'N/A' : `${(temperatures[selectedIndex] / 10).toFixed(1)} °C`;
+        root.querySelector('#arp-selected-meta').textContent =
+          `${formatElapsed(times[selectedIndex])} elapsed · ${formatUtc(selectedIndex)} · heartbeat #${heartbeats[selectedIndex]} · capture #${sequences[selectedIndex]} · ${temp}`;
+        if (config.full_assets) {
+          selectedCanvas.hidden = true;
+          selectedImage.hidden = false;
+          selectedImage.src = frameAsset(selectedIndex);
+        } else {
+          selectedImage.hidden = true;
+          selectedCanvas.hidden = false;
+          if (sprite.complete) drawSpriteFrame(selectedContext, selectedIndex, selectedCanvas.width, selectedCanvas.height);
+        }
+
+        const readout = root.querySelector('#arp-model-readout');
+        readout.replaceChildren();
+        config.models.forEach((model, modelIndex) => {
+          const prediction = dominant(model, selectedIndex);
+          const row = document.createElement('div');
+          row.className = 'arp-readout-row';
+          const name = document.createElement('span');
+          name.textContent = model.title;
+          const output = document.createElement('span');
+          output.className = 'arp-readout-value';
+          output.textContent = `${labels[prediction.name]} · ${prediction.value.toFixed(3)}`;
+          row.append(name, output);
+          readout.append(row);
+          const detail = document.createElement('div');
+          detail.className = 'arp-readout-row';
+          const spacer = document.createElement('span');
+          const qualityOffset = Number.isInteger(model.quality_offset) ? model.quality_offset : modelIndex;
+          spacer.textContent = model.quality_available
+            ? `quality ${(qualityValues[selectedIndex * config.models.length + qualityOffset] / 65535).toFixed(3)}`
+            : (model.status || '');
+          const values = document.createElement('span');
+          values.className = 'arp-readout-value';
+          values.textContent = model.classes.map((item, classIndex) => `${labels[item]} ${valueAt(model, selectedIndex, classIndex).toFixed(2)}`).join(' · ');
+          detail.append(spacer, values);
+          readout.append(detail);
+        });
+        chartStates.forEach(state => state.updateSelection());
+        if (annotationState) annotationState.updateSelection();
+        else syncFrameScrubber();
+        syncZoomFrame();
+      }
+
+      function interpolation(model, classIndex, xValue) {
+        const right = d3.bisectLeft(times, xValue);
+        if (right <= 0) return valueAt(model, 0, classIndex);
+        if (right >= times.length) return valueAt(model, times.length - 1, classIndex);
+        const left = right - 1;
+        const span = times[right] - times[left];
+        const fraction = span > 0 ? (xValue - times[left]) / span : 0;
+        return valueAt(model, left, classIndex) * (1 - fraction) + valueAt(model, right, classIndex) * fraction;
+      }
+
+      function addPanel(model, modelIndex) {
+        const panel = document.createElement('section');
+        panel.className = 'arp-panel';
+        const heading = document.createElement('div');
+        heading.className = 'arp-panel-head';
+        const modelTitle = document.createElement('h3');
+        modelTitle.textContent = model.title;
+        const modelSubtitle = document.createElement('span');
+        modelSubtitle.className = 'arp-subtitle text-small';
+        modelSubtitle.textContent = model.subtitle || '';
+        heading.append(modelTitle, modelSubtitle);
+        const legend = document.createElement('div');
+        legend.className = 'arp-legend text-small';
+        const visible = new Set(model.classes);
+        model.classes.forEach(name => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.setAttribute('aria-pressed', 'true');
+          const swatch = document.createElement('span');
+          swatch.className = 'arp-swatch';
+          swatch.style.setProperty('--series-color', colors[name]);
+          const text = document.createElement('span');
+          text.textContent = labels[name];
+          button.append(swatch, text);
+          button.addEventListener('click', () => {
+            if (visible.has(name)) visible.delete(name); else visible.add(name);
+            button.setAttribute('aria-pressed', visible.has(name) ? 'true' : 'false');
+            draw();
+          });
+          legend.append(button);
+        });
+        const host = document.createElement('div');
+        host.className = 'arp-chart-host';
+        panel.append(heading, legend, host);
+        root.querySelector('#arp-plots').append(panel);
+        let selectionLine = null;
+
+        function draw() {
+          host.replaceChildren();
+          const width = Math.max(320, Math.floor(host.getBoundingClientRect().width));
+          const height = width < 500 ? 205 : 220;
+          const margin = { top: 8, right: 12, bottom: 40, left: 64 };
+          const innerWidth = width - margin.left - margin.right;
+          const innerHeight = height - margin.top - margin.bottom;
+          const svg = d3.select(host).append('svg')
+            .attr('class', 'arp-chart')
+            .attr('viewBox', `0 0 ${width} ${height}`)
+            .attr('role', 'img')
+            .attr('aria-label', `${model.title} output versus elapsed time`);
+          svg.append('title').text(`${model.title} output trajectories`);
+          svg.append('desc').text('Click any time to display the nearest archived RHEED frame.');
+          const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+          const extent = d3.extent(times);
+          const padding = Math.max(1, (extent[1] - extent[0]) * 0.005);
+          const x = d3.scaleLinear().domain([extent[0] - padding, extent[1] + padding]).range([0, innerWidth]);
+          const y = d3.scaleLinear().domain([0, 1]).range([innerHeight, 0]);
+          g.append('rect').attr('data-chart-frame', '').attr('width', innerWidth).attr('height', innerHeight).attr('fill', 'none');
+          g.append('g').attr('class', 'grid').call(d3.axisLeft(y).ticks(4).tickSize(-innerWidth).tickFormat(''));
+          g.append('g').call(d3.axisLeft(y).ticks(4).tickFormat(d3.format('.2f')));
+          g.append('g').attr('transform', `translate(0,${innerHeight})`)
+            .call(d3.axisBottom(x).ticks(width < 500 ? 4 : 7).tickFormat(value => (value / 60).toFixed(0)));
+          svg.append('text').attr('class', 'axis-title').attr('data-axis', 'y')
+            .attr('transform', 'rotate(-90)').attr('x', -(margin.top + innerHeight / 2)).attr('y', 14)
+            .attr('text-anchor', 'middle').text('Model output (0–1)');
+          svg.append('text').attr('class', 'axis-title').attr('data-axis', 'x')
+            .attr('x', margin.left + innerWidth / 2).attr('y', height - 4).attr('text-anchor', 'middle')
+            .text('Elapsed time (min)');
+
+          const line = d3.line()
+            .x((_, index) => x(times[index]))
+            .y(value => y(value));
+          model.classes.forEach((name, classIndex) => {
+            if (!visible.has(name)) return;
+            const series = Array.from({ length: config.count }, (_, index) => valueAt(model, index, classIndex));
+            g.append('path').datum(series).attr('class', 'series-line')
+              .attr('stroke', colors[name]).attr('d', line);
+          });
+
+          model.nodes.forEach(node => {
+            const classIndex = model.classes.indexOf(node.to);
+            const mark = g.append('circle')
+              .attr('class', 'transition-mark')
+              .attr('cx', x(times[node.index]))
+              .attr('cy', y(valueAt(model, node.index, classIndex)))
+              .attr('r', 4.5)
+              .attr('fill', colors[node.to]);
+            mark.on('click', event => {
+              event.stopPropagation();
+              updateSelected(node.index);
+            });
+          });
+
+          selectionLine = g.append('line').attr('class', 'selected-guide')
+            .attr('y1', 0).attr('y2', innerHeight).attr('x1', x(times[selectedIndex])).attr('x2', x(times[selectedIndex]));
+          const hoverGuide = g.append('line').attr('data-chart-hover-guide', '')
+            .attr('y1', 0).attr('y2', innerHeight).style('display', 'none');
+          const markers = model.classes.map((name, classIndex) =>
+            g.append('circle').attr('data-chart-hover-marker', '')
+              .attr('r', 3.5).attr('stroke', colors[name]).style('display', 'none')
+          );
+          g.append('rect').attr('data-chart-hit', '').attr('data-chart-hover-overlay', 'cross-series')
+            .attr('width', innerWidth).attr('height', innerHeight).attr('fill', 'transparent')
+            .style('cursor', 'crosshair')
+            .on('pointermove', event => {
+              const [pointerX] = d3.pointer(event);
+              const exactX = Math.max(0, Math.min(innerWidth, pointerX));
+              const xValue = x.invert(exactX);
+              hoverGuide.style('display', null).attr('x1', exactX).attr('x2', exactX);
+              const rows = [];
+              model.classes.forEach((name, classIndex) => {
+                const value = interpolation(model, classIndex, xValue);
+                markers[classIndex].style('display', visible.has(name) ? null : 'none')
+                  .attr('cx', exactX).attr('cy', y(value));
+                if (visible.has(name)) rows.push(`<div class="arp-tooltip-row"><span>${labels[name]}</span><span>${value.toFixed(3)}</span></div>`);
+              });
+              tooltip.innerHTML = `<strong>${formatElapsed(xValue)}</strong>${rows.join('')}`;
+              const bounds = root.getBoundingClientRect();
+              tooltip.style.display = 'block';
+              tooltip.style.left = `${Math.min(bounds.width - 270, Math.max(0, event.clientX - bounds.left + 12))}px`;
+              tooltip.style.top = `${Math.max(0, event.clientY - bounds.top - 10)}px`;
+            })
+            .on('pointerleave', () => {
+              hoverGuide.style('display', 'none');
+              markers.forEach(marker => marker.style('display', 'none'));
+              tooltip.style.display = 'none';
+            })
+            .on('click', event => {
+              const [pointerX] = d3.pointer(event);
+              updateSelected(nearestIndex(x.invert(Math.max(0, Math.min(innerWidth, pointerX)))));
+            });
+          chartStates[modelIndex] = {
+            updateSelection: () => {
+              if (selectionLine) selectionLine.attr('x1', x(times[selectedIndex])).attr('x2', x(times[selectedIndex]));
+            },
+            draw
+          };
+        }
+        draw();
+      }
+
+      function addNodeEvidence() {
+        const container = root.querySelector('#arp-node-list');
+        const nodes = [];
+        config.models.forEach(model => model.nodes.forEach(node => nodes.push({ model, node })));
+        nodes.sort((a, b) => a.node.elapsed_s - b.node.elapsed_s || a.model.key.localeCompare(b.model.key));
+        if (!nodes.length) {
+          container.textContent = 'No persistent argmax changes under this review rule.';
+          return;
+        }
+        nodes.forEach(({ model, node }) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'btn';
+          button.setAttribute('aria-label', `${model.title}: ${labels[node.from]} to ${labels[node.to]} at ${formatElapsed(node.elapsed_s)}`);
+          let preview;
+          if (config.full_assets) {
+            preview = document.createElement('img');
+            preview.src = frameAsset(node.index);
+            preview.alt = '';
+          } else {
+            preview = document.createElement('canvas');
+            preview.width = 240;
+            preview.height = 180;
+            preview.setAttribute('aria-hidden', 'true');
+            const paint = () => drawSpriteFrame(preview.getContext('2d'), node.index, preview.width, preview.height);
+            if (sprite.complete) paint(); else sprite.addEventListener('load', paint, { once: true });
+          }
+          const labelLine = document.createElement('span');
+          labelLine.className = 'arp-node-label text-small';
+          labelLine.textContent = `${labels[node.from]} → ${labels[node.to]}`;
+          const timeLine = document.createElement('span');
+          timeLine.className = 'arp-node-time text-small';
+          timeLine.textContent = `${formatElapsed(node.elapsed_s)} · ${model.key}`;
+          button.append(preview, labelLine, timeLine);
+          button.addEventListener('click', () => {
+            updateSelected(node.index);
+            openZoom();
+          });
+          container.append(button);
+        });
+      }
+
+      root.querySelector('#arp-zoom-open').addEventListener('click', openZoom);
+      selectedCanvas.addEventListener('click', openZoom);
+      selectedImage.addEventListener('click', openZoom);
+      root.querySelector('#arp-zoom-in').addEventListener('click', () => setZoom(zoomScale * 1.25));
+      root.querySelector('#arp-zoom-out').addEventListener('click', () => setZoom(zoomScale / 1.25));
+      root.querySelector('#arp-zoom-reset').addEventListener('click', resetZoom);
+      root.querySelector('#arp-zoom-close').addEventListener('click', () => zoomDialog.close());
+      zoomTimeline.addEventListener('input', event => {
+        updateSelected(Number(event.currentTarget.value));
+      });
+      frameScrubber.addEventListener('input', event => {
+        updateSelected(Number(event.currentTarget.value));
+      });
+      root.querySelector('#arp-frame-previous').addEventListener('click', () => updateSelected(selectedIndex - 1));
+      root.querySelector('#arp-frame-next').addEventListener('click', () => updateSelected(selectedIndex + 1));
+      root.querySelector('#arp-mark-in').addEventListener('click', markAnnotationIn);
+      root.querySelector('#arp-mark-out').addEventListener('click', markAnnotationOut);
+      annotationApply.addEventListener('click', applyAnnotationSegment);
+      root.querySelector('#arp-annotation-new').addEventListener('click', () => {
+        clearAnnotationSelection();
+        setAnnotationMessage('Selection cleared. Drag the track or set new In and Out points.');
+      });
+      annotationDelete.addEventListener('click', deleteSelectedAnnotation);
+      annotationUndo.addEventListener('click', undoAnnotationMutation);
+      root.querySelector('#arp-annotation-export-json').addEventListener('click', exportAnnotationsJson);
+      root.querySelector('#arp-annotation-export-csv').addEventListener('click', exportAnnotationsCsv);
+      annotationImport.addEventListener('change', importAnnotations);
+      annotationLabeler.addEventListener('change', persistAnnotationDraft);
+      root.querySelectorAll('[data-display-control="brightness"]').forEach(input => {
+        input.addEventListener('input', event => {
+          displayBrightness = Number(event.currentTarget.value);
+          applyDisplayFilter();
+        });
+      });
+      root.querySelectorAll('[data-display-control="contrast"]').forEach(input => {
+        input.addEventListener('input', event => {
+          displayContrast = Number(event.currentTarget.value);
+          applyDisplayFilter();
+        });
+      });
+      root.querySelectorAll('[data-display-reset]').forEach(button => {
+        button.addEventListener('click', resetDisplayFilter);
+      });
+      zoomDialog.addEventListener('click', event => {
+        if (event.target === zoomDialog) zoomDialog.close();
+      });
+      zoomStage.addEventListener('wheel', event => {
+        event.preventDefault();
+        setZoom(zoomScale * (event.deltaY < 0 ? 1.15 : 1 / 1.15));
+      }, { passive: false });
+      zoomStage.addEventListener('pointerdown', event => {
+        if (zoomScale <= 1) return;
+        dragStart = { pointerX: event.clientX, pointerY: event.clientY, imageX: zoomX, imageY: zoomY };
+        zoomStage.classList.add('is-dragging');
+        zoomStage.setPointerCapture(event.pointerId);
+      });
+      zoomStage.addEventListener('pointermove', event => {
+        if (!dragStart) return;
+        zoomX = dragStart.imageX + event.clientX - dragStart.pointerX;
+        zoomY = dragStart.imageY + event.clientY - dragStart.pointerY;
+        applyZoomTransform();
+      });
+      function finishDrag(event) {
+        dragStart = null;
+        zoomStage.classList.remove('is-dragging');
+        if (zoomStage.hasPointerCapture(event.pointerId)) zoomStage.releasePointerCapture(event.pointerId);
+      }
+      zoomStage.addEventListener('pointerup', finishDrag);
+      zoomStage.addEventListener('pointercancel', finishDrag);
+      zoomStage.addEventListener('dblclick', resetZoom);
+
+      root.ownerDocument.addEventListener('keydown', event => {
+        const target = event.target;
+        if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) return;
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          updateSelected(selectedIndex - 1);
+        } else if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          updateSelected(selectedIndex + 1);
+        } else if (event.key === 'Home') {
+          event.preventDefault();
+          updateSelected(0);
+        } else if (event.key === 'End') {
+          event.preventDefault();
+          updateSelected(config.count - 1);
+        } else if (event.key.toLowerCase() === 'i') {
+          event.preventDefault();
+          markAnnotationIn();
+        } else if (event.key.toLowerCase() === 'o') {
+          event.preventDefault();
+          markAnnotationOut();
+        } else if (event.key === 'Delete' && selectedAnnotationId) {
+          event.preventDefault();
+          deleteSelectedAnnotation();
+        } else if (event.key === 'Escape' && !zoomDialog.open) {
+          clearAnnotationSelection();
+          setAnnotationMessage('Draft selection cleared.');
+        }
+      });
+
+      const restoredAnnotationDraft = loadAnnotationDraft();
+      if (!annotationSetId) annotationSetId = makeId('annotation-set');
+      if (!annotationSetCreatedAt) annotationSetCreatedAt = nowUtc();
+      if (!config.full_assets) {
+        root.querySelector('#arp-annotation-export-json').disabled = true;
+        root.querySelector('#arp-annotation-export-csv').disabled = true;
+        setAnnotationMessage('Inline preview uses in-memory labels only. Open the standalone report for autosave and exports.');
+      } else if (restoredAnnotationDraft) {
+        setAnnotationMessage(`Restored ${annotations.length} browser-saved segments. Export JSON for a durable record.`);
+      } else if (annotationStorageAvailable) {
+        setAnnotationMessage('Browser draft autosave is active. Export JSON for a durable record.');
+      } else {
+        setAnnotationMessage('Browser autosave is unavailable. Export JSON before closing.', true);
+      }
+      renderAnnotationTrack();
+      config.models.forEach(addPanel);
+      addNodeEvidence();
+      const firstNode = config.models.flatMap(model => model.nodes).sort((a, b) => a.elapsed_s - b.elapsed_s)[0];
+      selectedIndex = firstNode ? firstNode.index : 0;
+      if (!config.full_assets) {
+        sprite.addEventListener('load', () => updateSelected(selectedIndex), { once: true });
+      }
+      updateSelected(selectedIndex);
+      applyDisplayFilter();
+
+      const resizeObserver = new ResizeObserver(() => {
+        if (annotationState) annotationState.draw();
+        chartStates.forEach(state => state.draw());
+      });
+      resizeObserver.observe(root.querySelector('#arp-plots'));
+    })();
+  </script>
+</section>

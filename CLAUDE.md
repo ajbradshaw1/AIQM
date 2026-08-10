@@ -21,7 +21,7 @@
 | `scripts/owon_self_test.py` | OWON self-test |
 
 ## Testing
-Unit tests live in `tests/` (run `pytest` from the repo root — `pytest.ini` limits collection to `tests/`, 696 tests, all mock-based and Mac-safe). `scripts/` keeps the **hardware probe scripts** whose names also start with `test_` (`test_ads_read.py`, `test_elog.py`, `test_ksa_comm.py`, `test_ksa_single.py`, `test_mistral_jsonrpc_discovery.py`, `test_pyrometer.py`, plus `heater_step_test.py`, `owon_self_test.py`) — these talk to real instruments and exit at import on machines without them; never collect them with pytest.
+Offline unit tests live in `tests/` and `tools/rheed_postprocessing_labeling/tests/` (run `pytest` from the repo root; `pytest.ini` limits collection to those paths). `scripts/` keeps the **hardware probe scripts** whose names also start with `test_` (`test_ads_read.py`, `test_elog.py`, `test_ksa_comm.py`, `test_ksa_single.py`, `test_mistral_jsonrpc_discovery.py`, `test_pyrometer.py`, plus `heater_step_test.py`, `owon_self_test.py`) — these talk to real instruments and exit at import on machines without them; never collect them with pytest.
 
 ## Two GUI Applications
 
