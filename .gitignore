@@ -28,3 +28,9 @@ tmp/
 *.egg-info/
 dist/
 build/
+
+# Model weights — 203 MB, distributed outside Git and fetched on demand.
+# models/WEIGHTS_MANIFEST.json records every sha256; see
+# scripts/fetch_model_weights.py. Committing these once put 83 MB on every
+# clone forever, and Git history is append-only.
+models/**/*.pth

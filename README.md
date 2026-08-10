@@ -157,6 +157,7 @@ diagnostic charts and reports after the fact — no lab PC required.
 | `scripts/plot_temperature.py` | Single T-vs-t PNG | Quick temperature-trace view of one session |
 | `scripts/growth_profile_explorer.py` | 5 PNGs + self-contained HTML report in `<session>/analysis/` | Full session review: T + std band + event overlays + classifier trajectory + auto-capture score distribution + grower-vs-classifier agreement scatter. HTML wraps all 5 with base64-embedded PNGs and a session metadata header — emailable, no external dependencies |
 | `scripts/validate_angle_robustness.py` | HTML report + CSV | Classifier sensitivity to camera-angle rotations against an archived session |
+| `scripts/fetch_model_weights.py` | Verified model weights on disk | Model `*.pth` files live outside Git (203 MB); fetch and sha256-verify them from a distributed copy. `--verify-only` audits what is present |
 | `python -m tools.rheed_postprocessing_labeling` | Offline interactive HTML + JSON/CSV labels | Review archived RHEED timelines and annotate frame-anchored temporal segments; see `tools/rheed_postprocessing_labeling/README.md` |
 
 ```bash
