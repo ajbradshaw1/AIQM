@@ -265,6 +265,11 @@ class VmbCamera(RheedCamera):
         # the camera's own ID is always preferred because it is the thing
         # that makes a duplicate detectable.
         self._fallback_sequence = 0
+        # Acquisition settings read once per open, before streaming starts.
+        # Deliberately NOT cleared on disconnect: this describes the
+        # conditions a session's frames were taken under, and the session
+        # outlives the connection. See _read_sensor_settings.
+        self._sensor_settings: dict = {}
         # Any exception that terminated the stream thread. Populated by
         # _stream_loop's ``except`` block, read by ``read_frame`` so
         # mid-session stream death surfaces to the caller with its real
@@ -428,6 +433,11 @@ class VmbCamera(RheedCamera):
                 self._set_if_writable(cam, "TriggerMode", "On", mode)
                 self._set_if_writable(cam, "AcquisitionMode", "Continuous", mode)
 
+                # Read AFTER the trigger writes so the record reflects the
+                # configuration the frames were actually taken under, and
+                # BEFORE streaming so it cannot contend with the handler.
+                self._read_sensor_settings(cam)
+
                 cam.start_streaming(self._frame_handler)
                 try:
                     # connect() unblocks here — the pipeline is live.
@@ -480,6 +490,85 @@ class VmbCamera(RheedCamera):
             )
             return
         feature.set(value)
+
+    # Acquisition settings worth recording alongside a session, in the order
+    # they appear in the report. Each entry is (record_key, candidate names);
+    # the first candidate that exists and reads successfully wins.
+    #
+    # Names are firmware-dependent. The Ch-MBE Manta G-033B (fw 00.01.44)
+    # carries the legacy AVT spellings — ExposureTimeAbs, GainRaw — and has
+    # no SFNC ExposureTime at all; the alternates keep this working on
+    # cameras that do. Confirmed against the camera 2026-08-06; see
+    # scripts/vimba_feature_probe.py, which established these names.
+    _SENSOR_SETTING_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("exposure_us", ("ExposureTimeAbs", "ExposureTime", "ExposureTimeRaw")),
+        ("exposure_auto", ("ExposureAuto",)),
+        ("exposure_mode", ("ExposureMode",)),
+        ("gain", ("Gain", "GainRaw")),
+        ("gain_auto", ("GainAuto",)),
+        # Additive pedestal — 35 DN on the Ch-MBE camera. Shifts every
+        # intensity the classifier and the change detector see.
+        ("black_level", ("BlackLevel", "BlackLevelRaw")),
+        ("gamma", ("Gamma",)),
+        ("pixel_format", ("PixelFormat",)),
+        ("width", ("Width",)),
+        ("height", ("Height",)),
+        ("device_serial", ("DeviceSerialNumber",)),
+        ("device_firmware", ("DeviceFirmwareVersion",)),
+    )
+
+    def _read_sensor_settings(self, cam) -> None:
+        """Record the acquisition settings this session's frames were taken under.
+
+        VmbCamera does not *set* exposure or gain — they come from the
+        camera's persistent user set, which nothing has been recording. Two
+        sessions with identical code and an identical model can therefore
+        feed the classifier completely different intensity distributions,
+        with nothing in the archive to reveal it. Reading them costs one
+        pass at open and makes a session self-describing.
+
+        Strictly read-only, and non-fatal by construction: a camera that
+        lacks a feature, or a firmware that raises on one, must still
+        produce a working session. Values are stringified because vmbpy
+        returns enums for some features and numbers for others, and the
+        record only needs to be faithful and JSON-safe, not typed.
+        """
+        settings: dict = {}
+        missing: list[str] = []
+        for key, candidates in self._SENSOR_SETTING_CANDIDATES:
+            for name in candidates:
+                # getattr must happen INSIDE the try: on vmbpy a missing
+                # feature raises from the attribute access itself, so a
+                # lookup outside the guard escapes it. This is the same
+                # bug that killed the 2026-08-06 probe run (e086a79).
+                try:
+                    value = getattr(cam, name).get()
+                except Exception:  # noqa: BLE001
+                    continue
+                settings[key] = value if isinstance(value, (int, float)) else str(value)
+                settings[f"{key}_feature"] = name
+                break
+            else:
+                missing.append(key)
+        if missing:
+            # INFO, not WARNING: a camera legitimately may not have Gamma or
+            # a serial number, and this must never look like a fault.
+            log.info(
+                "VmbCamera: no readable feature for %s — omitted from the "
+                "session record.", ", ".join(missing),
+            )
+        self._sensor_settings = settings
+
+    @property
+    def sensor_settings(self) -> dict:
+        """Acquisition settings recorded at the most recent open.
+
+        Empty before the first successful connect. Survives disconnect on
+        purpose — it describes the session, which outlives the connection,
+        and the GUI writes session_metadata.json after the camera has
+        already been stopped.
+        """
+        return dict(self._sensor_settings)
 
     def _trigger_and_idle_loop(self, cam, mode: str) -> None:
         """Per-mode trigger/idle loop; exits when `_stop_event` is set.

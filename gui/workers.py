@@ -408,6 +408,17 @@ class RheedCameraWorker(QThread):
         self.running = True
         self._camera = None
 
+    @property
+    def sensor_settings(self) -> dict:
+        """Acquisition settings from the driver, or {} if it records none.
+
+        Only the direct Vimba path reports these; screengrab and dummy have
+        no sensor to interrogate. Safe to read after the worker has stopped
+        — the driver keeps the record past disconnect, which is what lets
+        the session metadata be written at session end.
+        """
+        return dict(getattr(self._camera, "sensor_settings", None) or {})
+
     def run(self):
         """Main worker loop — connect camera and emit frames."""
         backend = {

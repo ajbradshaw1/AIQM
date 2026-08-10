@@ -950,6 +950,18 @@ class GrowthApp(QMainWindow):
         self.monitor.set_auto_capture_pause_enabled(False)
 
         metadata = self.monitor.get_session_metadata()
+        # Camera acquisition provenance, in the same spirit as the ADS
+        # profile block in get_session_metadata: record what produced this
+        # session's frames so old archives stay auditable. Exposure and gain
+        # come from the camera's persistent user set, which the GUI does not
+        # set and nothing has been recording — so without this, two sessions
+        # can feed the classifier different intensity distributions with no
+        # way to tell after the fact. Namespaced to keep it obviously
+        # acquisition-side. Empty on screengrab and dummy, which have no
+        # sensor to interrogate.
+        camera_settings = self.camera_worker.sensor_settings
+        if camera_settings:
+            metadata["camera_sensor_settings"] = camera_settings
 
         # Save session metadata
         self.growth_log.save_session_metadata(metadata)

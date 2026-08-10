@@ -115,6 +115,25 @@ class FakeSettable:
         return (self._readable, self._writable)
 
 
+class FakeFeature:
+    """Read-only camera feature exposing vmbpy's ``get()``.
+
+    ``raises`` models a firmware that has the feature but errors when it is
+    read — which must be survivable, not fatal to the connect.
+    """
+
+    def __init__(self, value, raises: Exception | None = None):
+        self._value = value
+        self._raises = raises
+        self.get_call_count = 0
+
+    def get(self):
+        self.get_call_count += 1
+        if self._raises is not None:
+            raise self._raises
+        return self._value
+
+
 class FakeTriggerSoftware:
     """Represents cam.TriggerSoftware — exposes a run() that produces a frame.
 
@@ -182,6 +201,23 @@ class FakeCamera:
         self.TriggerMode = FakeSettable(writable=trigger_mode_writable)
         self.AcquisitionMode = FakeSettable(writable=acquisition_mode_writable)
         self.TriggerSoftware = FakeTriggerSoftware(self)
+
+        # Acquisition features, mirroring the Ch-MBE Manta G-033B as read
+        # from the Vimba X Viewer on 2026-08-06. The omissions are as
+        # important as the values: this firmware has the legacy AVT
+        # ExposureTimeAbs and GainRaw but NO SFNC ExposureTime, no Gamma,
+        # no GainAuto and no DeviceFirmwareVersion — so the candidate
+        # fallback order and the absent-feature path are both exercised
+        # against a real camera's actual shape.
+        self.ExposureTimeAbs = FakeFeature(300000.0)
+        self.ExposureAuto = FakeFeature("Off")
+        self.ExposureMode = FakeFeature("Timed")
+        self.GainRaw = FakeFeature(0)
+        self.BlackLevel = FakeFeature(35.0)
+        self.PixelFormat = FakeFeature("Mono12")
+        self.Width = FakeFeature(656)
+        self.Height = FakeFeature(492)
+        self.DeviceSerialNumber = FakeFeature("50-0503464907")
 
         self.handler = None
         self.start_streaming_calls = 0
@@ -545,6 +581,97 @@ def test_last_capture_cleared_on_disconnect() -> None:
         assert cam.last_capture is None, "provenance survived disconnect"
     finally:
         uninstall_fake_vmbpy()
+
+
+def test_sensor_settings_recorded_at_connect() -> None:
+    """Exposure/gain/black-level are captured so a session is self-describing."""
+    try:
+        install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=100.0)
+        assert cam.sensor_settings == {}, "settings existed before connect"
+        cam.connect()
+        _wait_for_first_frame(cam)
+
+        settings = cam.sensor_settings
+        assert settings["exposure_us"] == 300000.0
+        assert settings["exposure_auto"] == "Off"
+        assert settings["exposure_mode"] == "Timed"
+        assert settings["black_level"] == 35.0
+        assert settings["pixel_format"] == "Mono12"
+        assert settings["device_serial"] == "50-0503464907"
+        assert (settings["width"], settings["height"]) == (656, 492)
+
+        # Which feature name supplied each value is part of the record —
+        # 'gain: 0' means nothing without knowing it came from GainRaw
+        # rather than the SFNC Gain, which is on a different scale.
+        assert settings["exposure_us_feature"] == "ExposureTimeAbs"
+        assert settings["gain_feature"] == "GainRaw"
+
+        # Absent on this firmware — omitted, not guessed or defaulted.
+        for absent in ("gamma", "gain_auto", "device_firmware"):
+            assert absent not in settings, f"{absent} was invented"
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_sensor_settings_survive_disconnect() -> None:
+    """The record outlives the connection — metadata is written at session end."""
+    try:
+        install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=100.0)
+        cam.connect()
+        _wait_for_first_frame(cam)
+        cam.disconnect()
+        assert cam.sensor_settings["exposure_us"] == 300000.0, (
+            "settings were cleared on disconnect; session metadata is "
+            "written after the camera stops, so they must persist"
+        )
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_unreadable_feature_does_not_break_connect() -> None:
+    """A feature that raises on get() is skipped, not fatal."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        fake_cam.ExposureTimeAbs = FakeFeature(
+            None, raises=RuntimeError("feature read failed"),
+        )
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=100.0)
+        cam.connect()
+        _wait_for_first_frame(cam)
+
+        assert cam.connected, "a bad feature read killed the connection"
+        settings = cam.sensor_settings
+        assert "exposure_us" not in settings, "a failed read was recorded anyway"
+        # Everything else must still have been collected.
+        assert settings["black_level"] == 35.0
+        assert cam.read_frame().shape == (492, 656, 3)
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_worker_sensor_settings_empty_without_a_sensor() -> None:
+    """screengrab/dummy drivers report no settings rather than failing."""
+    from gui.workers import RheedCameraWorker
+
+    worker = RheedCameraWorker(mode="dummy")
+    # Before run(), and for any driver that records nothing.
+    assert worker.sensor_settings == {}
+
+    class _DriverWithSettings:
+        sensor_settings = {"exposure_us": 300000.0}
+
+    worker._camera = _DriverWithSettings()
+    assert worker.sensor_settings == {"exposure_us": 300000.0}
+    # Must be a copy — a caller mutating it cannot corrupt the driver record.
+    worker.sensor_settings["exposure_us"] = 1.0
+    assert worker.sensor_settings["exposure_us"] == 300000.0
 
 
 def test_capture_geometry_id_tracks_pixel_policy() -> None:
