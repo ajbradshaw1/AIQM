@@ -1206,13 +1206,17 @@ class GrowthMonitor(QWidget):
         # only state in which the GUI issues no camera write at all.
         self.config_camera_exposure_keep = QCheckBox("Keep current")
         self.config_camera_exposure_keep.setToolTip(
-            "Leave the camera's own exposure untouched. No write is issued "
-            "and the camera user set is not modified."
+            "Leave the camera's own exposure untouched. No EXPOSURE write "
+            "is issued (the driver still applies trigger configuration in "
+            "Full access) and the camera user set is never modified."
         )
 
-        # The trigger-rate ceiling is a hardware fact, not a preference: an
-        # exposure longer than ~90% of the trigger period leaves no room for
-        # transport and readout, so the camera silently under-delivers. The
+        # The ceiling is OUR SAFETY POLICY, not a measured device limit: we
+        # reserve 10% of the trigger period for transport and readout, which
+        # at 1 Hz puts it at 900 ms. The Manta has not been characterised
+        # across that boundary, so treat the number as conservative rather
+        # than as something the datasheet says. Revisit once the O-MBE
+        # acceptance run has actually probed it. The
         # slider still spans the full 1-999 ms kSA range, but anything above
         # the ceiling is flagged here and refused at ARM rather than failing
         # obscurely once streaming starts.
@@ -1258,9 +1262,12 @@ class GrowthMonitor(QWidget):
         self.config_camera_exposure_keep.toggled.connect(
             self._on_exposure_keep_toggled,
         )
-        self._on_exposure_keep_toggled(
-            self.config_camera_exposure_keep.isChecked(),
+        # Exposure is meaningless on screengrab/dummy — those backends
+        # have no sensor to configure — so the controls follow the mode.
+        self.config_camera_mode.currentTextChanged.connect(
+            lambda _text: self._sync_exposure_control_enabled(),
         )
+        self._sync_exposure_control_enabled()
 
         exposure_widget.setToolTip(
             f"Manual exposure for direct Vimba mode, {self.EXPOSURE_MIN_MS}"
@@ -1489,6 +1496,26 @@ class GrowthMonitor(QWidget):
                 widget.setToolTip(orig_tooltip)
             else:
                 widget.setToolTip(self._CONFIG_LOCKED_TOOLTIP)
+        # The bulk pass above cannot know about "Keep current" or camera
+        # mode, so the exposure widgets get their state re-derived after it.
+        self._sync_exposure_control_enabled()
+
+    def _refresh_arm_availability(self) -> None:
+        """Disable ARM while the chosen exposure cannot be applied.
+
+        Only meaningful in idle; the armed/running branches own the button
+        themselves.
+        """
+        if self._state != "idle":
+            return
+        blocked = self.exposure_blocks_arm()
+        self.arm_btn.setEnabled(not blocked)
+        self.arm_btn.setToolTip(
+            f"Exposure exceeds the {self._exposure_ceiling_ms:.0f} ms limit "
+            f"for {self._cfg.camera_fps:g} Hz acquisition. Lower it or "
+            "select Keep current."
+            if blocked else ""
+        )
 
     def _apply_state(self):
         s = self._state
@@ -1510,6 +1537,7 @@ class GrowthMonitor(QWidget):
             self.grower_input.setEnabled(True)
             # Config panel: fully editable in idle.
             self._set_config_widgets_enabled(True)
+            self._refresh_arm_availability()
         elif s == "armed":
             self.arm_btn.setText("DISARM")
             self.arm_btn.setStyleSheet(BTN_DISARM)
@@ -2839,13 +2867,59 @@ class GrowthMonitor(QWidget):
         )
         self.auto_capture_pause_toggled.emit(paused)
 
+    def _sync_exposure_control_enabled(self) -> None:
+        """Re-derive the exposure widgets' enabled state from all three gates.
+
+        Session lock, "Keep current", and camera mode each independently
+        disable the value widgets, so the state cannot be set once at build
+        time. _set_config_widgets_enabled(True) re-enables every config
+        widget indiscriminately and runs from __init__ and on every DISARM,
+        which previously left "Keep current" checked while its own slider
+        and textbox were live — internally safe, since selected_exposure_us
+        still returned None, but a contradiction the grower had to
+        second-guess.
+        """
+        session_unlocked = self.config_camera_mode.isEnabled()
+        direct_camera = self.config_camera_mode.currentText() in (
+            "vimba", "direct",
+        )
+        self.config_camera_exposure_keep.setEnabled(
+            session_unlocked and direct_camera,
+        )
+        value_widgets_live = (
+            session_unlocked
+            and direct_camera
+            and not self.config_camera_exposure_keep.isChecked()
+        )
+        self.config_camera_exposure_slider.setEnabled(value_widgets_live)
+        self.config_camera_exposure_ms.setEnabled(value_widgets_live)
+        # ARM too, not just the warning: checking "Keep current" makes any
+        # previously-blocking value irrelevant, so the button has to come
+        # back. Refreshing only the warning left ARM stuck disabled.
+        self._refresh_exposure_warning_and_arm()
+
+    def exposure_blocks_arm(self) -> bool:
+        """True when the chosen exposure cannot sustain the trigger rate.
+
+        The driver refuses these values, so allowing ARM would buy the
+        grower a failed connect and a puzzling traceback. Blocking the
+        button instead keeps the full 1-999 ms range visible while making
+        the unreachable part of it obviously unreachable.
+        """
+        if self.config_camera_mode.currentText() not in ("vimba", "direct"):
+            return False
+        requested_us = self.selected_exposure_us()
+        if requested_us is None:
+            return False
+        return requested_us / 1000.0 > self._exposure_ceiling_ms
+
     def _on_exposure_slider_changed(self, value: int) -> None:
         """Mirror the slider into the textbox without re-entering."""
         if self.config_camera_exposure_ms.value() != value:
             self.config_camera_exposure_ms.blockSignals(True)
             self.config_camera_exposure_ms.setValue(value)
             self.config_camera_exposure_ms.blockSignals(False)
-        self._refresh_exposure_warning()
+        self._refresh_exposure_warning_and_arm()
 
     def _on_exposure_spin_changed(self, value: int) -> None:
         """Mirror the textbox into the slider without re-entering."""
@@ -2853,13 +2927,11 @@ class GrowthMonitor(QWidget):
             self.config_camera_exposure_slider.blockSignals(True)
             self.config_camera_exposure_slider.setValue(value)
             self.config_camera_exposure_slider.blockSignals(False)
-        self._refresh_exposure_warning()
+        self._refresh_exposure_warning_and_arm()
 
     def _on_exposure_keep_toggled(self, keep: bool) -> None:
-        """Grey out the value controls when no write will be issued."""
-        self.config_camera_exposure_slider.setEnabled(not keep)
-        self.config_camera_exposure_ms.setEnabled(not keep)
-        self._refresh_exposure_warning()
+        """Grey out the value controls when no exposure write will happen."""
+        self._sync_exposure_control_enabled()
 
     def _refresh_exposure_warning(self) -> None:
         """Warn before ARM when the value exceeds the trigger-rate ceiling."""
@@ -2875,6 +2947,10 @@ class GrowthMonitor(QWidget):
             )
         else:
             self.config_camera_exposure_warning.setText("")
+
+    def _refresh_exposure_warning_and_arm(self) -> None:
+        self._refresh_exposure_warning()
+        self._refresh_arm_availability()
 
     def selected_exposure_us(self) -> Optional[float]:
         """Requested exposure in microseconds, or None for 'Keep current'.

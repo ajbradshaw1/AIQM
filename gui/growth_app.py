@@ -1148,8 +1148,13 @@ class GrowthApp(QMainWindow):
         """
         metadata = self.monitor.get_session_metadata()
         worker = self.camera_worker
-        settings = (
-            worker.sensor_settings_at_connect if worker is not None else {}
+        # getattr, not attribute access: the property exists on
+        # RheedCameraWorker but a session can end holding any worker-like
+        # object, and losing the metadata write to an AttributeError costs
+        # more than the settings are worth. Mirrors how the worker itself
+        # reaches into the driver.
+        settings = dict(
+            getattr(worker, "sensor_settings_at_connect", None) or {},
         )
         if settings:
             metadata["camera_sensor_settings_at_connect"] = settings

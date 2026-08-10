@@ -366,6 +366,27 @@ class VmbCamera(RheedCamera):
         )
 
     @staticmethod
+    def _optional_feature(cam, name: str):
+        """Return a camera feature, or None if it is absent OR raises.
+
+        ``getattr(cam, name, None)`` is NOT safe here. The default only
+        applies to AttributeError; vmbpy's __getattr__ raises its own error
+        type for an unknown feature, which sails straight past the default
+        and out of the caller. That is the same escape that killed the
+        2026-08-06 probe run (e086a79), and it bit again here: a camera
+        whose ExposureTimeAbs raises would never reach the ExposureTime
+        fallback and would fail the connect outright — even with no
+        exposure requested, i.e. on the "Keep current" path that is
+        supposed to touch nothing.
+
+        Every optional feature lookup in this class goes through here.
+        """
+        try:
+            return getattr(cam, name, None)
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
     def _optional_feature_call(feature, method_name: str, default=None):
         """Call an optional vmbpy accessor, tolerating absence AND failure.
 
@@ -409,7 +430,7 @@ class VmbCamera(RheedCamera):
         feature_name = next(
             (
                 name for name in self._EXPOSURE_FEATURE_CANDIDATES
-                if getattr(cam, name, None) is not None
+                if self._optional_feature(cam, name) is not None
             ),
             None,
         )
@@ -421,7 +442,7 @@ class VmbCamera(RheedCamera):
                 "ExposureTime exists on this camera"
             )
 
-        feature = getattr(cam, feature_name)
+        feature = self._optional_feature(cam, feature_name)
         current = self._optional_feature_call(feature, "get", None)
         if isinstance(current, (int, float)):
             self._exposure_us = float(current)
@@ -434,7 +455,7 @@ class VmbCamera(RheedCamera):
                 "to pretend the requested exposure was applied in Read mode."
             )
 
-        auto_feature = getattr(cam, "ExposureAuto", None)
+        auto_feature = self._optional_feature(cam, "ExposureAuto")
         auto_value = self._optional_feature_call(auto_feature, "get", None)
         if auto_value is not None and not str(auto_value).lower().endswith("off"):
             raise RuntimeError(
@@ -485,7 +506,9 @@ class VmbCamera(RheedCamera):
                     f"match requested {requested:.0f} us"
                 )
 
-            limit_feature = getattr(cam, "AcquisitionFrameRateLimit", None)
+            limit_feature = self._optional_feature(
+                cam, "AcquisitionFrameRateLimit",
+            )
             limit = self._optional_feature_call(limit_feature, "get", None)
             if isinstance(limit, (int, float)) and self._trigger_hz > float(limit):
                 raise RuntimeError(
@@ -668,7 +691,7 @@ class VmbCamera(RheedCamera):
         * Read mode: log at INFO and skip. The driver is intentionally
           passive; a probe failure is bounded and non-fatal.
         """
-        feature = getattr(cam, feature_name)
+        feature = self._optional_feature(cam, feature_name)
         try:
             _readable, writable = feature.get_access_mode()
         except Exception as exc:  # noqa: BLE001

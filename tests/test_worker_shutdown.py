@@ -138,6 +138,12 @@ class _Monitor:
         self.auto_capture_statuses: list[str] = []
         self.auto_capture_events: list[tuple[int, float, str]] = []
 
+    def get_session_metadata(self) -> dict:
+        return {"grower": "harness", "sample_id": "harness"}
+
+    def clear_camera_provenance(self) -> None:
+        self._latest_camera = None
+
     def reset_displays(self) -> None:
         self.reset_called = True
 
@@ -266,6 +272,16 @@ class _AppHarness:
         self.invalidations: list[str] = []
         self.auto_capture_state_at_worker_stop = None
         self._latest_classifier = None
+        # Camera provenance/exposure state added on the exposure-integration
+        # branch. The harness borrows the real GrowthApp methods below rather
+        # than stubbing them, so these have to exist for the same reason the
+        # rest of this class does.
+        self._reported_camera_exposure_us = None
+
+    # Real implementations, bound to the harness. Stubbing them would let a
+    # production change pass here while breaking the app.
+    _announce_camera_exposure = GrowthApp._announce_camera_exposure
+    _session_metadata_with_camera = GrowthApp._session_metadata_with_camera
 
     def _stop_workers(self, *workers) -> tuple[object, ...]:
         self.stopped_workers = workers

@@ -583,6 +583,67 @@ def _exposure_camera(**kwargs):
     return fake_cam
 
 
+class _RaisingFeatureCamera:
+    """Wraps a FakeCamera so one named feature raises on ATTRIBUTE ACCESS.
+
+    vmbpy signals an unknown feature by raising from __getattr__, not by
+    being absent — so `getattr(cam, name, None)` does not return the
+    default, it propagates. Models that exactly.
+    """
+
+    def __init__(self, inner, raising_name: str):
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_raising_name", raising_name)
+
+    def __getattr__(self, name):
+        if name == object.__getattribute__(self, "_raising_name"):
+            raise RuntimeError(f"missing feature: {name}")
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+
+def test_raising_feature_falls_through_to_the_alternate_spelling() -> None:
+    """A camera whose ExposureTimeAbs raises still resolves ExposureTime.
+
+    getattr's default only covers AttributeError. Before the safe lookup,
+    a raising ExposureTimeAbs never reached the SFNC fallback and killed
+    the connect — including on "Keep current", which writes nothing and
+    has no business failing.
+    """
+    try:
+        fake_cam = install_fake_vmbpy()
+        fake_cam.ExposureTime = FakeExposure(value=120_000.0)
+        wrapped = _RaisingFeatureCamera(fake_cam, "ExposureTimeAbs")
+        import drivers.rheed_camera as rc
+        assert rc.VmbCamera._optional_feature(wrapped, "ExposureTimeAbs") is None
+        assert rc.VmbCamera._optional_feature(wrapped, "ExposureTime") is not None
+
+        cam = rc.VmbCamera(trigger_hz=1.0, exposure_us=None)
+        cam._configure_exposure(wrapped, "full")
+        assert cam.exposure_us == 120_000.0, (
+            "fell back to neither spelling; exposure not recorded"
+        )
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_raising_optional_features_do_not_block_a_write() -> None:
+    """ExposureAuto / AcquisitionFrameRateLimit raising must not be fatal.
+
+    Both are advisory: absent, they simply cannot veto the write. A
+    firmware that errors on them must behave like one that lacks them.
+    """
+    try:
+        fake_cam = _exposure_camera()
+        wrapped = _RaisingFeatureCamera(fake_cam, "AcquisitionFrameRateLimit")
+        import drivers.rheed_camera as rc
+        cam = rc.VmbCamera(trigger_hz=1.0, exposure_us=250_000.0)
+        cam._configure_exposure(wrapped, "full")
+        assert cam.exposure_us == 250_000.0
+        assert fake_cam.ExposureTimeAbs.set_history == [250_000.0]
+    finally:
+        uninstall_fake_vmbpy()
+
+
 def test_keep_current_performs_no_camera_write() -> None:
     """exposure_us=None records the existing value and writes nothing.
 

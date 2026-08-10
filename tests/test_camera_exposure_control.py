@@ -15,9 +15,14 @@ the warning appears above the ceiling, and VmbCamera refuses the value at
 ARM — so an unachievable request fails early and legibly instead of turning
 into silently under-delivered frames.
 
-NOT RUN on the Mac dev box as of 2026-08-10: the Qt platform plugin is
-unavailable there, so every QApplication-based test aborts regardless of
-branch. Verified in CI (ubuntu-24.04) and on the lab machine.
+STATUS 2026-08-10: passes locally, 11/11. Qt needs its plugin path pointed
+at PyQt6's bundled copy on this machine — without it QApplication aborts
+and every widget test in the repo goes with it:
+
+    QT_PLUGIN_PATH=$(python -c "import PyQt6,pathlib;\
+      print(pathlib.Path(PyQt6.__file__).parent/'Qt6'/'plugins')")
+
+CI (ubuntu-24.04) and the O-MBE acceptance run have NOT happened yet.
 """
 
 from __future__ import annotations
@@ -129,6 +134,90 @@ def test_over_ceiling_value_is_refused_by_the_driver() -> None:
         raise AssertionError(
             "the driver accepted an exposure the UI flagged as unachievable"
         )
+
+
+def test_keep_current_survives_the_bulk_config_unlock() -> None:
+    """"Keep current" checked must never leave its own controls live.
+
+    _set_config_widgets_enabled(True) enables every config widget in one
+    pass and runs from __init__ and on every DISARM. It cannot know about
+    "Keep current", so without a re-derive afterwards the checkbox reads
+    checked while the slider and textbox are editable — internally safe,
+    since selected_exposure_us() still returns None, but a state the
+    grower has to second-guess.
+    """
+    monitor = GrowthMonitor()
+    monitor.config_camera_mode.setCurrentText("vimba")
+    monitor.config_camera_exposure_keep.setChecked(True)
+
+    # Simulate the ARM → DISARM cycle.
+    monitor._set_config_widgets_enabled(False)
+    assert not monitor.config_camera_exposure_slider.isEnabled()
+    monitor._set_config_widgets_enabled(True)
+
+    assert monitor.config_camera_exposure_keep.isChecked()
+    assert not monitor.config_camera_exposure_slider.isEnabled(), (
+        "slider re-enabled under a checked Keep current"
+    )
+    assert not monitor.config_camera_exposure_ms.isEnabled(), (
+        "textbox re-enabled under a checked Keep current"
+    )
+
+
+def test_controls_follow_the_camera_mode() -> None:
+    """Exposure is meaningless on backends with no sensor."""
+    monitor = GrowthMonitor()
+    monitor.config_camera_exposure_keep.setChecked(False)
+
+    monitor.config_camera_mode.setCurrentText("vimba")
+    assert monitor.config_camera_exposure_slider.isEnabled()
+    assert monitor.config_camera_exposure_keep.isEnabled()
+
+    monitor.config_camera_mode.setCurrentText("dummy")
+    assert not monitor.config_camera_exposure_slider.isEnabled(), (
+        "exposure editable on a backend with no sensor"
+    )
+    assert not monitor.config_camera_exposure_keep.isEnabled()
+
+
+def test_arm_is_blocked_above_the_ceiling() -> None:
+    """An unachievable exposure disables ARM instead of failing the connect.
+
+    The driver refuses these values, so permitting ARM would buy the grower
+    a failed connect mid-setup. Blocking the button keeps the full kSA
+    range visible while making the unreachable part obviously unreachable.
+    """
+    monitor = GrowthMonitor()
+    monitor.config_camera_mode.setCurrentText("vimba")
+    monitor.config_camera_exposure_keep.setChecked(False)
+    ceiling = monitor._exposure_ceiling_ms
+
+    monitor.config_camera_exposure_ms.setValue(int(ceiling) - 1)
+    assert not monitor.exposure_blocks_arm()
+    assert monitor.arm_btn.isEnabled()
+
+    monitor.config_camera_exposure_ms.setValue(int(ceiling) + 1)
+    assert monitor.exposure_blocks_arm()
+    assert not monitor.arm_btn.isEnabled(), "ARM allowed above the ceiling"
+    assert "Keep current" in monitor.arm_btn.toolTip()
+
+    # Keep current is always achievable — it writes no exposure at all.
+    monitor.config_camera_exposure_keep.setChecked(True)
+    assert not monitor.exposure_blocks_arm()
+    assert monitor.arm_btn.isEnabled()
+
+
+def test_ceiling_is_named_as_a_policy_not_a_device_limit() -> None:
+    """The 900 ms figure is our 90%-headroom rule, not a camera datasheet.
+
+    Pin the derivation so the number stays traceable to the trigger rate
+    rather than hardening into folklore about the Manta.
+    """
+    monitor = GrowthMonitor()
+    expected = (
+        900.0 / monitor._cfg.camera_fps if monitor._cfg.camera_fps > 0 else 900.0
+    )
+    assert monitor._exposure_ceiling_ms == expected
 
 
 def test_exposure_controls_lock_during_a_session() -> None:
