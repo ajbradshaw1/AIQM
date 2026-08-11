@@ -47,13 +47,36 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
-from pathlib import Path
+import tempfile
+from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MANIFEST_PATH = REPO_ROOT / "models" / "WEIGHTS_MANIFEST.json"
+MODELS_ROOT = REPO_ROOT / "models"
+MANIFEST_PATH = MODELS_ROOT / "WEIGHTS_MANIFEST.json"
 _READ_BLOCK = 8 << 20
+
+
+def resolve_entry_path(rel_path: str) -> Path:
+    """Resolve a manifest path, refusing anything outside models/.
+
+    The manifest is generated from git and is currently safe, but this
+    script writes files, so it must not depend on that staying true. A
+    future entry of "../.git/hooks/pre-commit" or an absolute path would
+    otherwise let an edited manifest write anywhere the user can — and a
+    manifest is exactly the kind of file that gets hand-edited when someone
+    is adding a model in a hurry.
+    """
+    if PurePosixPath(rel_path).is_absolute() or Path(rel_path).is_absolute():
+        raise SystemExit(f"Manifest path must be relative: {rel_path!r}")
+    resolved = (REPO_ROOT / rel_path).resolve()
+    if not resolved.is_relative_to(MODELS_ROOT.resolve()):
+        raise SystemExit(
+            f"Manifest path escapes models/: {rel_path!r} -> {resolved}"
+        )
+    return resolved
 
 
 def sha256_file(path: Path) -> str:
@@ -89,7 +112,7 @@ def select(manifest: dict, role: str) -> list[dict]:
 
 def verify_one(entry: dict) -> tuple[bool, str]:
     """Return (ok, reason). A present-but-wrong file is not ok."""
-    target = REPO_ROOT / entry["path"]
+    target = resolve_entry_path(entry["path"])
     if not target.is_file():
         return False, "missing"
     actual_size = target.stat().st_size
@@ -127,7 +150,7 @@ def do_fetch(entries: list[dict], source: Path, force: bool) -> int:
     copied = skipped = 0
     failures: list[tuple[str, str]] = []
     for entry in entries:
-        target = REPO_ROOT / entry["path"]
+        target = resolve_entry_path(entry["path"])
         ok, _reason = verify_one(entry)
         if ok and not force:
             # Already correct. Re-copying 83 MB to reach the same bytes is
@@ -135,7 +158,7 @@ def do_fetch(entries: list[dict], source: Path, force: bool) -> int:
             skipped += 1
             continue
 
-        candidate = source / entry["path"]
+        candidate = source / entry["path"]  # source layout mirrors the repo
         if not candidate.is_file():
             failures.append((entry["path"], f"not in source: {candidate}"))
             continue
@@ -148,12 +171,32 @@ def do_fetch(entries: list[dict], source: Path, force: bool) -> int:
             failures.append((entry["path"], "source sha256 mismatch"))
             continue
 
+        # Copy to a temporary file BESIDE the target, verify that, then
+        # rename over it. Writing straight onto the target means an
+        # interrupted copy leaves a truncated .pth where a good one was —
+        # and with --force, a source that changed between the pre-check and
+        # the copy would destroy a valid file. os.replace is atomic within
+        # a filesystem, so the target is either the old bytes or the new
+        # ones and never a partial write.
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(candidate, target)
-        ok, reason = verify_one(entry)
-        if not ok:
-            failures.append((entry["path"], f"after copy: {reason}"))
+        handle, temp_name = tempfile.mkstemp(
+            dir=target.parent, prefix=f".{target.name}.", suffix=".partial",
+        )
+        os.close(handle)
+        temp_path = Path(temp_name)
+        try:
+            shutil.copy2(candidate, temp_path)
+            if sha256_file(temp_path) != entry["sha256"]:
+                failures.append((entry["path"], "copy did not verify"))
+                continue
+            os.replace(temp_path, target)
+        except Exception as exc:  # noqa: BLE001
+            failures.append((entry["path"], f"copy failed: {exc}"))
             continue
+        finally:
+            # Only ever removes the temporary file; an existing target that
+            # was never replaced is left exactly as it was.
+            temp_path.unlink(missing_ok=True)
         copied += 1
         print(f"  fetched  {entry['path']}")
 
