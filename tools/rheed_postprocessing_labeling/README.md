@@ -54,11 +54,18 @@ The same launcher is available from PowerShell:
 python -m tools.rheed_postprocessing_labeling desktop
 ```
 
-The PDF operator guide is
-[`docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf`](../../docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf).
-Its reproducible ReportLab source is
-`tools/rheed_postprocessing_labeling/manual/generate_manual.py`; all figures it
-creates are explicitly synthetic and contain no laboratory data.
+The default English-only PDF operator guide is
+[`docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf`](../../docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf).
+Its LaTeX source and reproducible Windows build helper are:
+
+```powershell
+.\tools\rheed_postprocessing_labeling\manual\build_english_manual.ps1
+```
+
+The earlier
+[bilingual PDF](../../docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
+and its ReportLab generator remain available. The English PDF uses only
+LaTeX/TikZ vector illustrations; both editions contain no laboratory data.
 
 ### Command line
 

@@ -31,8 +31,10 @@ repository root, and writes diagnostics under
 `%LOCALAPPDATA%\AI4MBE\LauncherLogs`. It never installs packages or changes
 instrument settings. The two root-level `Start *.cmd` files can also be
 double-clicked directly. See
-[`docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf`](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
-for the operator workflow and troubleshooting guide.
+[`docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf`](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf)
+for the English operator workflow and troubleshooting guide. The earlier
+[bilingual edition](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
+remains available.
 
 ## Two GUI Applications
 

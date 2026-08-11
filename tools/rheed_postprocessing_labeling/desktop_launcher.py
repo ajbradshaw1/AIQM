@@ -42,7 +42,7 @@ from .report_builder import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_MODULE = "tools.rheed_postprocessing_labeling"
 SETTINGS_VERSION = 1
-MANUAL_PATH = REPOSITORY_ROOT / "docs" / "RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf"
+MANUAL_PATH = REPOSITORY_ROOT / "docs" / "RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf"
 
 
 @dataclass(frozen=True)
@@ -342,7 +342,7 @@ class LabelingDesktopLauncher(QMainWindow):
         self.report_edit = QLineEdit()
         self.report_button = QPushButton("Browse...")
         self.open_report_button = QPushButton("Open report")
-        self.open_manual_button = QPushButton("Open PDF manual")
+        self.open_manual_button = QPushButton("Open English PDF manual")
         self.report_button.clicked.connect(self._choose_validation_report)
         self.open_report_button.clicked.connect(self._open_report)
         self.open_manual_button.clicked.connect(self._open_manual)
@@ -685,7 +685,7 @@ class LabelingDesktopLauncher(QMainWindow):
         self._open_local_file(Path(self.report_edit.text().strip()), "report")
 
     def _open_manual(self) -> None:
-        self._open_local_file(self._manual_path, "PDF manual")
+        self._open_local_file(self._manual_path, "English PDF manual")
 
     def _open_local_file(self, path: Path, description: str) -> bool:
         if not path.is_file():

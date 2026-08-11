@@ -16,6 +16,7 @@ from PyQt6.QtGui import QCloseEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from tools.rheed_postprocessing_labeling.desktop_launcher import (  # noqa: E402
+    MANUAL_PATH,
     BuildRequest,
     LabelingDesktopLauncher,
     ModelPair,
@@ -56,6 +57,10 @@ class RecordingLauncher(LabelingDesktopLauncher):
 
 def _settings(path: Path) -> QSettings:
     return QSettings(str(path), QSettings.Format.IniFormat)
+
+
+def test_default_manual_is_the_english_latex_edition() -> None:
+    assert MANUAL_PATH.name == "RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf"
 
 
 def _launcher(

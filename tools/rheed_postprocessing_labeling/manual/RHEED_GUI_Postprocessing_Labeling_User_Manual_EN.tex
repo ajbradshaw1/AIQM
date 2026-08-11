@@ -1,0 +1,692 @@
+% English-only operator manual for the Ch-MBE GUI and offline RHEED labeler.
+% Build from this directory with build_english_manual.ps1.
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[scale=0.94]{tgheros}
+\usepackage{inconsolata}
+\usepackage[margin=16mm,top=18mm,bottom=17mm,headheight=14pt]{geometry}
+\usepackage[table]{xcolor}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{ragged2e}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{titlesec}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage{hyperref}
+\usepackage{amssymb}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc,positioning}
+
+\ifdefined\pdfinfoomitdate
+  \pdfinfoomitdate=1
+\fi
+\ifdefined\pdftrailerid
+  \pdftrailerid{}
+\fi
+\ifdefined\pdfsuppressptexinfo
+  \pdfsuppressptexinfo=15
+\fi
+
+\definecolor{ManualNavy}{HTML}{102A43}
+\definecolor{ManualBlue}{HTML}{1565C0}
+\definecolor{ManualTeal}{HTML}{00796B}
+\definecolor{ManualGreen}{HTML}{2E7D32}
+\definecolor{ManualAmber}{HTML}{B26A00}
+\definecolor{ManualRed}{HTML}{B42318}
+\definecolor{ManualLine}{HTML}{CBD5E1}
+\definecolor{ManualPale}{HTML}{F4F7FA}
+\definecolor{ManualBluePale}{HTML}{EAF3FF}
+\definecolor{ManualGreenPale}{HTML}{EAF7EE}
+\definecolor{ManualAmberPale}{HTML}{FFF6E5}
+\definecolor{ManualRedPale}{HTML}{FDECEC}
+\definecolor{ManualInk}{HTML}{243B53}
+\definecolor{ManualMuted}{HTML}{52667A}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=ManualBlue,
+  urlcolor=ManualBlue,
+  pdfauthor={AI4MBE},
+  pdftitle={Ch-MBE GUI and RHEED Post-processing Labeling User Manual - English Edition},
+  pdfsubject={English operator guide for the Ch-MBE GUI and offline RHEED temporal labeler}
+}
+
+\renewcommand{\familydefault}{\sfdefault}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4.5pt}
+\setlength{\emergencystretch}{2em}
+\setlist[itemize]{leftmargin=5mm,itemsep=2.5pt,topsep=2pt}
+\setlist[enumerate]{leftmargin=7mm,itemsep=3pt,topsep=2pt}
+
+\newcolumntype{Y}{>{\RaggedRight\arraybackslash}X}
+\newcolumntype{L}[1]{>{\RaggedRight\arraybackslash}p{#1}}
+
+\titleformat{\section}
+  {\color{ManualNavy}\bfseries\LARGE}
+  {\color{ManualBlue}\thesection}{0.65em}{}
+\titlespacing*{\section}{0pt}{0pt}{5mm}
+\titleformat{\subsection}
+  {\color{ManualNavy}\bfseries\large}
+  {}{0pt}{}
+\titlespacing*{\subsection}{0pt}{4mm}{1.5mm}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{ManualMuted}AI4MBE | Ch-MBE}
+\fancyhead[R]{\small\color{ManualMuted}English operator manual}
+\fancyfoot[L]{\small\color{ManualMuted}Manual v1.1 | 2026-08-11}
+\fancyfoot[R]{\small\color{ManualMuted}Page \thepage\ of \pageref*{LastPage}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\newtcolorbox{corebox}[1]{
+  enhanced,breakable,title={#1},fonttitle=\bfseries,
+  colback=ManualGreenPale,colframe=ManualGreen,coltitle=ManualGreen,
+  boxrule=0.7pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm
+}
+\newtcolorbox{infobox}[1]{
+  enhanced,breakable,title={#1},fonttitle=\bfseries,
+  colback=ManualBluePale,colframe=ManualBlue,coltitle=ManualBlue,
+  boxrule=0.7pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm
+}
+\newtcolorbox{warnbox}[1]{
+  enhanced,breakable,title={#1},fonttitle=\bfseries,
+  colback=ManualAmberPale,colframe=ManualAmber,coltitle=ManualAmber,
+  boxrule=0.7pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm
+}
+\newtcolorbox{dangerbox}[1]{
+  enhanced,breakable,title={#1},fonttitle=\bfseries,
+  colback=ManualRedPale,colframe=ManualRed,coltitle=ManualRed,
+  boxrule=0.7pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm
+}
+
+\lstdefinestyle{manualcode}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{ManualPale},
+  frame=single,
+  rulecolor=\color{ManualLine},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  aboveskip=2mm,
+  belowskip=2mm,
+  xleftmargin=1mm,
+  framexleftmargin=1mm
+}
+\lstset{style=manualcode}
+
+\newcommand{\manualsection}[2]{
+  \clearpage
+  \section{#2}
+  \markboth{#2}{#2}
+}
+\newcommand{\step}[2]{
+  \begin{tcolorbox}[
+    enhanced,colback=white,colframe=ManualLine,boxrule=0.5pt,arc=1.5mm,
+    left=2.5mm,right=2.5mm,top=1.5mm,bottom=1.5mm,before skip=1.5mm,after skip=1.5mm]
+    \textcolor{ManualBlue}{\textbf{Step #1.}} #2
+  \end{tcolorbox}
+}
+\newcommand{\checkitem}[1]{\item[$\square$] #1}
+
+\begin{document}
+
+% Page 1 - cover
+\thispagestyle{empty}
+\vspace*{4mm}
+{\color{ManualNavy}\bfseries\fontsize{27}{31}\selectfont
+Ch-MBE GUI and RHEED\\[1mm]
+Post-processing Labeling\par}
+\vspace{3mm}
+{\color{ManualBlue}\fontsize{16}{20}\selectfont English Operator Manual\par}
+\vspace{7mm}
+\begin{center}
+\resizebox{\linewidth}{!}{%
+\begin{tikzpicture}[x=1cm,y=1cm]
+  \fill[ManualNavy] (0,0) rectangle (16,5.6);
+  \node[anchor=west,text=white,font=\bfseries\large] at (0.55,5.05)
+    {SYNTHETIC RHEED ILLUSTRATION};
+  \draw[line width=1.2pt,color=cyan!75] (0.7,2.65) -- (15.3,2.65);
+  \foreach \x in {2.6,5.4,8.0,10.6,13.4} {
+    \draw[line width=1.1pt,color=cyan!70] (\x,0.55) -- (\x,4.75);
+    \shade[inner color=white,outer color=cyan!20!ManualNavy]
+      (\x,2.65) ellipse [x radius=0.85,y radius=0.18];
+  }
+\end{tikzpicture}%
+}
+\end{center}
+\vspace{5mm}
+\begin{corebox}{Core boundary}
+The post-processing labeler reads archived data only. It does not connect to or control cameras, pyrometers, power supplies, or any other instrument.
+\end{corebox}
+\vspace{4mm}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{54mm}Y}
+\toprule
+\textbf{Quick entry} & \textbf{Double-click} \\
+\midrule
+Ch-MBE live GUI & \texttt{Start Ch-MBE Growth Monitor.cmd} \\
+RHEED offline labeler & \texttt{Start RHEED Post-processing Labeler.cmd} \\
+Install or refresh desktop shortcuts & \texttt{Install AI4MBE Desktop Shortcuts.cmd} \\
+\bottomrule
+\end{tabularx}
+\vfill
+{\small\color{ManualMuted}
+Manual v1.1 - English edition\\
+Issued 2026-08-11 for the Windows Ch-MBE workstation.\\[2mm]
+All interface and RHEED images in this manual are synthetic illustrations. No experimental dataset is included.}
+
+% Page 2 - overview
+\manualsection{1}{Understand the two independent paths}
+
+The live GUI performs acquisition and display. The offline labeler works only on completed archived sessions. Never interpret an offline result as a real-time control instruction.
+
+\begin{center}
+\resizebox{\linewidth}{!}{%
+\begin{tikzpicture}[
+  x=1cm,y=1cm,
+  flow/.style={rounded corners=2mm,draw=ManualLine,line width=0.8pt,
+    minimum width=2.65cm,minimum height=2.0cm,align=center,font=\sffamily\small},
+  arrow/.style={-{Stealth[length=3mm]},line width=1.2pt,ManualBlue}
+]
+  \node[flow,fill=ManualBluePale] (gui) at (1.45,1.35) {Ch-MBE GUI\\{\scriptsize Live acquisition}};
+  \node[flow,fill=ManualGreenPale] (zip) at (4.85,1.35) {Session ZIP\\{\scriptsize Frames and logs}};
+  \node[flow,fill=ManualAmberPale] (pred) at (8.25,1.35) {Predictions + spec\\{\scriptsize Model context}};
+  \node[flow,fill=violet!10] (lab) at (11.65,1.35) {Offline labeler\\{\scriptsize Review and segments}};
+  \node[flow,fill=ManualGreenPale] (json) at (15.05,1.35) {JSON + validation\\{\scriptsize Export and verify}};
+  \draw[arrow] (gui.east) -- (zip.west);
+  \draw[arrow] (zip.east) -- (pred.west);
+  \draw[arrow] (pred.east) -- (lab.west);
+  \draw[arrow] (lab.east) -- (json.west);
+  \node[anchor=west,text=ManualRed,font=\bfseries\small] at (0.1,-0.05)
+    {The offline labeler never controls instruments.};
+\end{tikzpicture}%
+}
+\end{center}
+
+\subsection{What this manual covers}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{16mm}L{72mm}Y}
+\toprule
+\textbf{Page} & \textbf{Topic} & \textbf{Outcome} \\
+\midrule
+3 & Shortcuts and live GUI startup & Confirm the correct chamber and a clean exit \\
+4 & Labeler desktop application & Select inputs, build, open, and validate \\
+5-6 & Inputs and safe report build & Produce a complete local report directory \\
+7-8 & Segment labeling and display controls & Create traceable labels on actual saved frames \\
+9 & Export, import, and validation & Produce canonical JSON and validate fail-closed \\
+10-12 & Safety, troubleshooting, and version checks & Handoff and reproduce the work safely \\
+\bottomrule
+\end{tabularx}
+
+\begin{warnbox}{Keep the concepts separate}
+Surface-reconstruction labels, acquisition-quality QC, and FeSe film quality are three different concepts. The current classifier concerns the bare STO surface before growth.
+\end{warnbox}
+
+\subsection{Operating principle}
+\begin{itemize}
+  \item The GUI reads live instrument sources and writes session records under the operator's control.
+  \item Post-processing combines an archived session with one or more already-generated prediction tables.
+  \item Human labels are stored as frame-bound temporal segments with provenance.
+  \item Model outputs remain visible, so these annotations are assisted review, not blind-gold labels.
+\end{itemize}
+
+% Page 3 - live GUI
+\manualsection{2}{Install shortcuts and start the Ch-MBE GUI}
+
+\subsection{First setup or after moving the checkout}
+\step{1}{From the GUI repository root, double-click \texttt{Install AI4MBE Desktop Shortcuts.cmd}.}
+\step{2}{Confirm that the desktop contains refreshed shortcuts named \textbf{Ch-MBE Growth Monitor} and \textbf{RHEED Post-processing Labeler}.}
+\step{3}{If Windows displays an unexpected security warning, do not bypass it. Stop and ask the maintainer to verify the file source and commit.}
+
+\subsection{Start each experiment}
+\step{1}{Double-click \texttt{Start Ch-MBE Growth Monitor.cmd} or its desktop shortcut. Do not use an O-MBE launcher.}
+\step{2}{Wait for the main window and confirm the title \textbf{Chalcogenide MBE Growth Monitor}. Then inspect each device status.}
+\step{3}{ARM or start a session only when the operator is ready under the experiment SOP. Double-click startup does not authorize setpoint changes.}
+\step{4}{At the end, close through the GUI normally and wait for the window to disappear. Do not force-kill Python while logs are being written.}
+
+The launcher forces the Ch-MBE chamber configuration and refuses a second live-GUI process through a Windows single-instance mutex.
+
+\begin{infobox}{Expected environment behavior}
+Launcher logs are stored below \texttt{\%LOCALAPPDATA\%\textbackslash AI4MBE\textbackslash LauncherLogs}. They record the resolved Python interpreter, repository path, branch, commit, chamber, and optional driver status. Missing \texttt{pyads}, \texttt{serial}, or \texttt{windows\_capture} produces a visible warning without hiding the GUI; do not ARM a production mode that needs the missing driver. Do not assume a fixed drive letter or create global environment variables ad hoc.
+\end{infobox}
+
+\subsection{Quick check after startup}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{29mm}L{59mm}Y}
+\toprule
+\textbf{Check} & \textbf{Expected} & \textbf{If abnormal} \\
+\midrule
+Chamber & Ch-MBE configuration is shown & Close immediately and verify the launcher \\
+RHEED & New frame sequence values continue to advance & Do not save old frames; inspect the window and camera state \\
+Temperature & Reading agrees with valid and connected state & Record mode and exact error; do not guess serial settings \\
+Logs & Session files appear in the selected directory & Preserve the error text before contacting the maintainer \\
+\bottomrule
+\end{tabularx}
+
+% Page 4 - labeler UI
+\manualsection{3}{Open the RHEED post-processing labeler}
+
+\step{1}{Double-click \texttt{Start RHEED Post-processing Labeler.cmd} or its desktop shortcut.}
+\step{2}{Confirm that the application has the \textbf{Build} and \textbf{Open / Validate} tabs, plus \textbf{Build report and open}, \textbf{Open report}, \textbf{Validate annotations}, and \textbf{Open English PDF manual}. It must not start Growth Monitor or contact instruments.}
+
+\begin{center}
+\resizebox{0.92\linewidth}{!}{%
+\begin{tikzpicture}[x=1cm,y=1cm,font=\sffamily]
+  \draw[rounded corners=2mm,line width=0.9pt,ManualNavy,fill=ManualPale]
+    (0,0) rectangle (15,8.5);
+  \fill[ManualNavy] (0,7.65) rectangle (15,8.5);
+  \node[anchor=west,text=white,font=\bfseries\large] at (0.35,8.08)
+    {RHEED Post-processing and Temporal Labeling};
+  \node[anchor=west,text=ManualInk,font=\small] at (0.4,7.35)
+    {Build an offline timeline and label temporal reconstruction segments};
+  \draw[rounded corners=1mm,ManualAmber,fill=ManualAmberPale]
+    (0.4,6.65) rectangle (14.6,7.15);
+  \node[anchor=west,text=ManualAmber,font=\bfseries\small] at (0.6,6.9)
+    {Model outputs are visible: model-assisted review, not blind-gold.};
+
+  \node[anchor=west,font=\small] at (0.45,6.25) {Session ZIP};
+  \draw[ManualLine,fill=white] (3.35,5.93) rectangle (12.55,6.42);
+  \node[anchor=west,font=\scriptsize,text=ManualMuted] at (3.55,6.18)
+    {<local-data-root>\textbackslash growth\_session.zip};
+  \draw[rounded corners=1mm,ManualBlue,fill=ManualBluePale] (12.8,5.93) rectangle (14.55,6.42);
+  \node[font=\scriptsize] at (13.68,6.18) {Browse};
+
+  \node[anchor=west,font=\small] at (0.45,5.62) {Ordered model pairs};
+  \draw[ManualLine,fill=white] (3.35,4.15) rectangle (14.55,5.65);
+  \fill[ManualBluePale] (3.35,5.2) rectangle (14.55,5.65);
+  \draw[ManualLine] (8.9,4.15) -- (8.9,5.65);
+  \draw[ManualLine] (3.35,5.2) -- (14.55,5.2);
+  \node[anchor=west,font=\bfseries\scriptsize] at (3.55,5.42) {Prediction CSV};
+  \node[anchor=west,font=\bfseries\scriptsize] at (9.1,5.42) {Model-spec JSON};
+  \node[anchor=west,font=\scriptsize,text=ManualMuted] at (3.55,4.8) {predictions.csv};
+  \node[anchor=west,font=\scriptsize,text=ManualMuted] at (9.1,4.8) {model\_spec.json};
+
+  \foreach \x/\w/\buttontext in {3.35/2.1/Add pair,5.65/2.45/Remove selected,8.3/1.75/Move up,10.25/1.85/Move down} {
+    \draw[rounded corners=1mm,ManualBlue,fill=ManualBluePale]
+      (\x,3.55) rectangle ({\x+\w},3.98);
+    \node[font=\scriptsize] at ({\x+\w/2},3.765) {\buttontext};
+  }
+
+  \node[anchor=west,font=\small] at (0.45,3.15) {Output directory};
+  \draw[ManualLine,fill=white] (3.35,2.83) rectangle (12.55,3.32);
+  \node[anchor=west,font=\scriptsize,text=ManualMuted] at (3.55,3.08) {new empty report folder};
+  \draw[rounded corners=1mm,ManualBlue,fill=ManualBluePale] (12.8,2.83) rectangle (14.55,3.32);
+  \node[font=\scriptsize] at (13.68,3.08) {Browse};
+
+  \node[anchor=west,font=\small] at (0.45,2.35) {Report title};
+  \draw[ManualLine,fill=white] (3.35,2.03) rectangle (9.0,2.52);
+  \node[anchor=west,font=\scriptsize,text=ManualMuted] at (3.55,2.28) {RHEED reconstruction timeline};
+  \node[anchor=west,font=\small] at (9.35,2.35) {WebP quality};
+  \draw[ManualLine,fill=white] (11.45,2.03) rectangle (12.7,2.52);
+  \node[font=\scriptsize] at (12.08,2.28) {78};
+
+  \draw[rounded corners=1mm,ManualBlue,fill=ManualBlue]
+    (3.35,1.12) rectangle (8.15,1.72);
+  \node[text=white,font=\bfseries\small] at (5.75,1.42) {Build report and open};
+  \draw[rounded corners=1mm,ManualLine,fill=white]
+    (8.5,1.12) rectangle (14.55,1.72);
+  \node[anchor=west,text=ManualGreen,font=\bfseries\scriptsize] at (8.72,1.47) {Status: Ready};
+  \node[anchor=west,text=ManualMuted,font=\scriptsize] at (8.72,1.25) {Build and validation messages appear here};
+
+  \node[anchor=west,text=ManualMuted,font=\scriptsize] at (0.4,0.45)
+    {SYNTHETIC ENGLISH-ONLY UI ILLUSTRATION};
+\end{tikzpicture}%
+}
+\end{center}
+
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{42mm}Y}
+\toprule
+\textbf{Area} & \textbf{Purpose} \\
+\midrule
+Session ZIP & Select one archived Growth Monitor session \\
+Model inputs & Pair one prediction CSV with its model-spec JSON on each row \\
+Output directory & Select a new or empty directory, preferably outside Git \\
+Message log & Preserve complete build and validation messages \\
+Open report button & Open a previously generated \texttt{interactive\_report.html} \\
+Validate annotations & Check exported JSON against the exact report provenance \\
+\bottomrule
+\end{tabularx}
+
+\begin{corebox}{Offline by design}
+This application can run on a computer without instrument software when the archived inputs are complete and the Python environment is valid. Report construction and validation run in an isolated child process so the desktop application remains responsive.
+\end{corebox}
+
+% Page 5 - inputs
+\manualsection{4}{Prepare inputs and verify provenance}
+
+\subsection{Session archive}
+The ZIP archive must contain exactly one member ending in \texttt{session\_metadata.json}, exactly one member ending in \texttt{heartbeat\_log.csv}, and every sibling \texttt{frames/} image referenced by the heartbeat rows. Saved-frame elapsed time, heartbeat index, capture sequence, and timezone-aware capture UTC must each increase strictly; gaps are allowed. Do not extract and rename frames manually.
+
+\begin{lstlisting}
+growth_session.zip
+  session_metadata.json
+  heartbeat_log.csv
+  frames/
+    heartbeat_000001_....bmp
+    heartbeat_000002_....bmp
+\end{lstlisting}
+
+\subsection{Prediction tables and model specifications are positional pairs}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{31mm}L{82mm}Y}
+\toprule
+\textbf{File} & \textbf{Required content} & \textbf{Check} \\
+\midrule
+Prediction CSV & frame index, heartbeat index, elapsed time, capture UTC, capture sequence, frame name, frame SHA-256, and score columns & Rows match the saved-frame order exactly \\
+Model-spec JSON & schema version 1, non-empty key and title, at least two unique classes, and equally sized unique probability columns & Class order matches the score columns; status and provenance are optional \\
+Session ZIP & metadata, heartbeat log, and frames & Every referenced frame exists in the archive \\
+\bottomrule
+\end{tabularx}
+
+Prediction \texttt{frame\_index} may begin at 0 or 1, but it must then remain contiguous. Heartbeat indices, capture sequences, and elapsed times may contain gaps. The tool follows actual saved frames and recorded times; it never assumes exact 1 Hz sampling.
+
+\begin{dangerbox}{Fail closed}
+Any mismatch in row count, order, time, sequence, filename, or SHA-256 stops the build. Do not edit the inputs to bypass an error.
+\end{dangerbox}
+
+\subsection{Recommended local layout}
+\begin{lstlisting}
+<local-data-root>\2026-08-11_anneal\
+  source\growth_session.zip
+  predictions\model_A.csv
+  specs\model_A.json
+  output\
+  exports\
+\end{lstlisting}
+
+% Page 6 - build
+\manualsection{5}{Build and open a report safely}
+
+\step{1}{Choose the preserved archive copy in Session ZIP.}
+\step{2}{Add one Prediction CSV and Model-spec JSON row for every model to display. Pairing is positional, so preserve row order.}
+\step{3}{Choose a new or empty directory outside the repository. The desktop labeler will not overwrite a non-empty directory.}
+\step{4}{Enter a report title. Review quality changes only the lossy review images; it never changes archived pixels or model predictions. The default value of 78 is suitable for routine use.}
+\step{5}{Click \textbf{Build report and open}. Wait for success and for \texttt{interactive\_report.html} to open automatically.}
+
+\subsection{PowerShell fallback}
+\begin{lstlisting}
+Set-Location '<GUI repository>'
+conda activate ai4mbe-gui
+python -m tools.rheed_postprocessing_labeling build `
+  --session '<local-data-root>\growth_session.zip' `
+  --predictions '<local-data-root>\predictions.csv' `
+  --model-spec '<local-data-root>\model_spec.json' `
+  --output-dir '<local-data-root>\labeling-output'
+\end{lstlisting}
+
+\subsection{Copy the entire report directory}
+The report consists of \texttt{interactive\_report.html}, \texttt{images/}, \texttt{vendor/}, and \texttt{run\_manifest.json}. Copy the entire directory during handoff. Preserve the original prediction CSV and model-spec JSON separately outside the report directory.
+
+\begin{warnbox}{Advanced CLI overwrite boundary}
+The desktop application always refuses a non-empty output directory. CLI \texttt{-{}-overwrite} may replace only a recognized, unmodified tool output. It validates the new inputs and stages a complete replacement first. If the old report changes during the build, replacement stops and the original content is restored. Filesystem roots, repository paths, the current directory, and directories containing inputs are always rejected.
+\end{warnbox}
+
+% Page 7 - annotation
+\manualsection{6}{Label temporal segments like an editing timeline}
+
+\begin{center}
+\resizebox{0.92\linewidth}{!}{%
+\begin{tikzpicture}[x=1cm,y=1cm,font=\sffamily]
+  \fill[ManualPale] (0,0) rectangle (16,9.2);
+  \node[anchor=west,text=ManualNavy,font=\bfseries\Large] at (0.3,8.75)
+    {RHEED reconstruction timeline};
+  \node[anchor=west,text=ManualRed,font=\bfseries\small] at (0.3,8.35)
+    {Model-assisted review - not blind-gold};
+
+  \draw[rounded corners=2mm,ManualLine,fill=white] (0.3,4.8) rectangle (10.4,7.95);
+  \node[anchor=west,text=ManualNavy,font=\bfseries\small] at (0.65,7.58)
+    {Human reconstruction segments};
+  \draw[line width=0.7pt,ManualLine] (0.85,6.25) -- (9.8,6.25);
+  \fill[blue!35] (1.45,5.9) rectangle (3.25,6.75);
+  \fill[orange!45] (3.25,5.9) rectangle (5.85,6.75);
+  \fill[green!35] (5.85,5.9) rectangle (8.05,6.75);
+  \fill[violet!40] (8.05,5.9) rectangle (9.15,6.75);
+  \draw[ManualMuted] (1.45,5.9) rectangle (9.15,6.75);
+  \foreach \x in {3.25,5.85,8.05} {\draw[ManualMuted] (\x,5.9)--(\x,6.75);}
+  \node[font=\scriptsize] at (2.35,6.33) {1x1 / none-weak};
+  \node[font=\scriptsize] at (4.55,6.33) {Twinned (2x1)};
+  \node[font=\scriptsize] at (6.95,6.33) {c(6x2)};
+  \node[font=\scriptsize] at (8.6,6.33) {RT13};
+  \draw[-{Stealth[length=2.5mm]},line width=1.1pt,ManualBlue] (5.18,5.3) -- (5.18,7.15);
+  \node[anchor=west,font=\scriptsize] at (0.7,5.25) {Mark In};
+  \node[anchor=west,font=\scriptsize] at (3.55,5.25) {Mark Out};
+  \node[anchor=west,font=\scriptsize,text=ManualMuted] at (6.3,5.25) {Add / Update / Undo};
+
+  \draw[rounded corners=2mm,ManualLine,fill=white] (0.3,0.35) rectangle (10.4,4.35);
+  \node[anchor=west,text=ManualNavy,font=\bfseries\small] at (0.65,4.0) {Model probabilities};
+  \draw[ManualMuted] (0.95,0.95) -- (0.95,3.45);
+  \draw[ManualMuted] (0.95,0.95) -- (9.8,0.95);
+  \draw[line width=1.1pt,ManualBlue] plot[smooth] coordinates {(0.95,2.9)(3,2.6)(5.2,2.2)(7.2,1.55)(9.8,1.25)};
+  \draw[line width=1.1pt,ManualTeal] plot[smooth] coordinates {(0.95,1.3)(3,1.65)(5.2,2.25)(7.2,2.65)(9.8,3.2)};
+  \draw[line width=1.1pt,orange!90!black] plot[smooth] coordinates {(0.95,1.05)(3,1.15)(5.2,1.45)(7.2,1.75)(9.8,2.05)};
+  \draw[line width=1.1pt,ManualBlue] (5.18,0.82) -- (5.18,3.65);
+
+  \draw[rounded corners=2mm,ManualNavy,fill=ManualNavy] (10.85,3.3) rectangle (15.7,7.95);
+  \node[anchor=west,text=white,font=\bfseries\small] at (11.15,7.55) {Selected frame};
+  \draw[line width=0.8pt,cyan!70] (11.25,5.75) -- (15.25,5.75);
+  \foreach \x in {11.8,13.3,14.75} {
+    \draw[line width=0.8pt,cyan!65] (\x,4.25) -- (\x,7.05);
+    \fill[cyan!20] (\x,5.75) ellipse [x radius=0.38,y radius=0.11];
+  }
+  \node[anchor=west,text=cyan!50,font=\scriptsize] at (11.15,3.72) {SYNTHETIC RHEED};
+
+  \node[anchor=west,text=ManualNavy,font=\bfseries\small] at (11.1,2.85) {Display only};
+  \node[anchor=west,text=ManualMuted,font=\scriptsize] at (11.1,2.35) {Brightness 100\%};
+  \node[anchor=west,text=ManualMuted,font=\scriptsize] at (11.1,1.9) {Contrast 100\%};
+  \node[anchor=west,text=ManualMuted,font=\scriptsize] at (11.1,1.45) {Zoom and time scrubber};
+  \node[anchor=west,text=ManualMuted,font=\scriptsize] at (11.1,0.75) {Pixels and predictions remain unchanged.};
+\end{tikzpicture}%
+}
+\end{center}
+
+\step{1}{Move the Frame playhead or click a model plot to locate the first saved frame of a segment. Click \textbf{Mark In}.}
+\step{2}{Move to the final saved frame of the segment and click \textbf{Mark Out}. The Out marker is inclusive.}
+\step{3}{Choose a reconstruction label, enter the labeler name, add notes when useful, and click \textbf{Add segment}.}
+\step{4}{Select a saved segment to edit it. Update preserves its annotation ID. Adjacent segments are allowed; overlapping segments are rejected.}
+
+The displayed and exported saved-frame ordinal is 1-based. Every endpoint also records heartbeat index, capture sequence, UTC, and frame SHA-256. This preserves traceability even when the sampling interval or sequence contains gaps.
+
+\begin{infobox}{Frame-bound interval semantics}
+Labels cover the saved frames from In through Out, inclusive. They do not claim that unsaved camera frames or every capture-sequence number in between was reviewed.
+\end{infobox}
+
+% Page 8 - review controls
+\manualsection{7}{Review, display controls, and drafts}
+
+\subsection{All time indicators remain synchronized}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{38mm}L{68mm}Y}
+\toprule
+\textbf{Action} & \textbf{Must update together} & \textbf{Must not change} \\
+\midrule
+Move the main timeline & Current RHEED image, model guides, enlarged-view timeline & Archive and prediction values \\
+Click a model curve & Main playhead, image, and metadata & Saved segments \\
+Adjust brightness or contrast & On-screen appearance & Pixels, SHA-256, and model outputs \\
+Enlarge the image & Zoom view and its adjustable timeline & Source image and segment boundaries \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Drafts and editing}
+\begin{itemize}
+  \item The browser stores a draft scoped by both dataset ID and model-context fingerprint in localStorage. This is not a durable backup.
+  \item Export JSON frequently, especially during long reviews and before changing computers, browsers, or cache settings.
+  \item Delete selected requires confirmation. Undo restores only the most recent annotation mutation.
+  \item Import JSON validates before replacement. On failure, the current segment set remains unchanged.
+\end{itemize}
+
+\subsection{Interpretation}
+Labels describe the dominant surface-reconstruction category seen by the reviewer during the interval. The displayed \textbf{Uncertain} label exports as \texttt{unknown}; \textbf{1x1 / none-weak} exports as \texttt{none\_weak}. Never overwrite a human selection with model argmax, and never interpret \texttt{unknown} as acquisition-quality rejection.
+
+\begin{infobox}{Display adjustment is not data modification}
+Brightness, contrast, zoom, and image enlargement aid inspection only. Brightness and contrast are stored with each segment; zoom is not exported. The report never rewrites archived images or model outputs.
+\end{infobox}
+
+\subsection{Recommended review rhythm}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{35mm}Y}
+\toprule
+\textbf{Stage} & \textbf{Action} \\
+\midrule
+Survey & Scrub through the complete run and identify obvious changes and data gaps \\
+Boundary pass & Confirm each In and Out frame and inspect its metadata \\
+Review & Check unlabeled gaps, overlap errors, unknown labels, and notes \\
+Save & Export canonical JSON, then validate it \\
+\bottomrule
+\end{tabularx}
+
+% Page 9 - export
+\manualsection{8}{Export, import, and fail-closed validation}
+
+\subsection{JSON is the canonical artifact}
+Use Export JSON to resume work, validate provenance, and support downstream processing. Export CSV is useful for meetings and tabular analysis, but it does not replace the complete nested provenance in JSON.
+
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{66mm}Y}
+\toprule
+\textbf{Binding} & \textbf{Purpose} \\
+\midrule
+\texttt{dataset\_id} and source archive SHA-256 & Bind the source session \\
+Ordered-frame fingerprint & Bind frame order and per-frame SHA-256 \\
+\texttt{model\_context\_fingerprint} & Bind the visible predictions and model specifications \\
+Endpoint provenance & Bind saved-frame ordinal, heartbeat, UTC, sequence, and SHA-256 \\
+\texttt{model\_outputs\_visible=true} & Disclose that the models were visible \\
+\texttt{eligible\_for\_gold=false} & Prevent blind-gold misuse \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Validate in the desktop application}
+\step{1}{Select the original \texttt{interactive\_report.html}.}
+\step{2}{Select the exported annotation JSON.}
+\step{3}{Click \textbf{Validate annotations}. Continue only when the application says \textbf{Annotation JSON is valid for this report}.}
+
+\subsection{PowerShell validation}
+\begin{lstlisting}
+python -m tools.rheed_postprocessing_labeling validate `
+  --report '<local-data-root>\labeling-output\interactive_report.html' `
+  --annotations '<local-data-root>\exports\segment_annotations.json'
+\end{lstlisting}
+
+\begin{dangerbox}{Never bypass a validation failure}
+A wrong run, changed model context, altered endpoint, overlapping segment, invalid label, or gold-data claim causes validation to fail. Return to the correct report and original export and investigate the exact message.
+\end{dangerbox}
+
+Browser Import performs immediate client-side provenance checks before replacing the current draft. Desktop \textbf{Validate annotations} is the authoritative full fail-closed validation.
+
+% Page 10 - safety
+\manualsection{9}{Data safety and scientific boundaries}
+
+\subsection{What belongs in Git}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{Y Y}
+\toprule
+\textbf{May be tracked} & \textbf{Keep out by default} \\
+\midrule
+Tool code, templates, tests, and documentation & Real session ZIP files, raw RHEED images, and sensor logs \\
+Example model specifications & Real predictions, generated reports, and annotation JSON or CSV \\
+Synthetic test images and manual illustrations & Checkpoints, unpublished results, and browser screenshots \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Safe handling sequence}
+\step{1}{Keep the source session ZIP read-only or preserve an immutable copy, and record its SHA-256.}
+\step{2}{Create a dedicated working directory outside the repository. Keep reports, exports, and screenshots there.}
+\step{3}{For handoff, copy the complete report directory and canonical JSON. Separately preserve the original prediction CSV, model-spec JSON, and SHA manifest. Never send only the HTML.}
+\step{4}{Run statistics or training-data preparation only after validation, and preserve the original export unchanged.}
+
+\begin{dangerbox}{Model-assisted review, not blind-gold}
+Model plots and lossy review images are visible during labeling. These annotations are eligible only as model-assisted review. Formal blind-gold labels require a separate workflow that hides model and Equalizer outputs and preserves the required audit evidence.
+\end{dangerbox}
+
+\begin{warnbox}{Do not over-interpret the output}
+The current classification target is bare STO surface reconstruction before growth. Do not interpret a reconstruction label as FeSe film quality. Do not equate reconstruction \texttt{unknown} with acquisition-quality \texttt{QC\_REJECT}.
+\end{warnbox}
+
+% Page 11 - troubleshooting
+\manualsection{10}{Troubleshooting}
+
+First preserve the exact error text, occurrence time, branch, commit, and selected paths. Do not begin by deleting environments, changing global variables, or force-resetting Git. A live-driver warning is fail-visible behavior, not a prompt for ad hoc dependency installation.
+
+\small
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{37mm}L{50mm}Y}
+\toprule
+\textbf{Symptom} & \textbf{Likely cause} & \textbf{Safe action} \\
+\midrule
+Desktop shortcut is absent or opens an old checkout & Installer was not run after the checkout moved & Run the shortcut installer from the current repository root \\
+Growth Monitor shows the wrong chamber & Wrong launcher was used & Close normally and use only the Ch-MBE launcher \\
+Launcher window closes immediately & Environment or dependency failure & Read the newest launcher log; if needed, run the same CMD from PowerShell \\
+Temperature or RHEED has no valid reading & Interface, vendor window, or selected mode issue & Record connected, error, and mode; do not guess global settings \\
+Labeler rejects Build & Missing input, mismatched pair, or non-empty output & Check the session, each positional pair, and a new output directory \\
+Provenance mismatch & Predictions do not belong to the ZIP or rows changed & Find the matching predictions and spec; do not edit the CSV \\
+HTML has no images or curves & Only the HTML was copied or assets are missing & Restore the complete report directory and relative paths \\
+Draft disappeared & Browser, computer, or localStorage changed & Import the latest JSON and export more frequently \\
+Import or validation fails & Run, context, endpoint, overlap, or label mismatch & Use the original report and JSON; read the fail-closed message \\
+\bottomrule
+\end{tabularx}
+\normalsize
+
+\subsection{Minimum evidence for the maintainer}
+\begin{itemize}
+  \item Full error text and occurrence time. Do not report only that it does not work.
+  \item Output of \texttt{git status -{}-short -{}-branch} and \texttt{git rev-parse HEAD}.
+  \item Launcher name, environment path, input filenames, and output directory. Keep sensitive data out of public channels.
+  \item For labeling issues, report-manifest and annotation-JSON SHA values. Raw images are not initially required.
+\end{itemize}
+
+% Page 12 - checklist
+\manualsection{11}{Version verification and quick checklist}
+
+\subsection{Record versions before acquisition or labeling}
+\begin{lstlisting}
+Set-Location '<GUI repository>'
+git status --short --branch
+git rev-parse HEAD
+conda env list
+conda activate ai4mbe-gui
+python --version
+python -m tools.rheed_postprocessing_labeling --help
+\end{lstlisting}
+
+Use the resolved Python interpreter and repository path recorded by the launcher. Read \texttt{AI4MBE\_GUI\_PYTHON} only when it is already configured on that workstation; do not create it ad hoc. If the branch or commit differs from the team-specified version, or Git reports unknown modifications, stop and verify.
+
+\subsection{Integrity hashes}
+\begin{lstlisting}
+Get-FileHash '<local-data-root>\growth_session.zip' -Algorithm SHA256
+Get-FileHash '<local-data-root>\exports\segment_annotations.json' -Algorithm SHA256
+Get-FileHash '.\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf' -Algorithm SHA256
+\end{lstlisting}
+
+\subsection{Quick checklist}
+\begin{itemize}[leftmargin=7mm,itemsep=1.7pt]
+  \checkitem{Use the Ch-MBE launcher and confirm the chamber identity.}
+  \checkitem{Confirm live status, frame sequence, temperature, and logging behavior under the experiment SOP.}
+  \checkitem{Preserve a read-only source ZIP and its SHA-256.}
+  \checkitem{Open the offline labeler with the dedicated launcher.}
+  \checkitem{Pair every prediction CSV with the correct model-spec JSON.}
+  \checkitem{Use a new or empty output directory outside Git.}
+  \checkitem{Review boundaries frame by frame; allow no overlaps.}
+  \checkitem{Export JSON and validate it against the original report.}
+  \checkitem{Record branch, commit, environment, manifest, and export hashes.}
+  \checkitem{Handoff the complete report and declare model-assisted, not blind-gold.}
+\end{itemize}
+
+\begin{dangerbox}{Stop condition}
+Stop and contact the maintainer when instrument state, stale data, version identity, provenance, or validation cannot be explained.
+\end{dangerbox}
+
+\vfill
+\hrule
+\vspace{2mm}
+{\small\color{ManualMuted}All interface and RHEED images in this manual are synthetic illustrations and contain no experimental data.}
+
+\end{document}
