@@ -1,4 +1,9 @@
 PyQt6
+# Imported at module level by gui/rheed_intensity_window.py and
+# gui/pyrometer_window.py, both of which gui/growth_app.py imports at
+# import time — so it is a hard dependency of the Growth Monitor, not an
+# optional plotting extra.
+pyqtgraph
 numpy
 matplotlib
 scikit-learn
