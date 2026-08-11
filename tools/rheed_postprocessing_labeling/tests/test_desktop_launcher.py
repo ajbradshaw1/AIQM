@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -108,6 +109,63 @@ def test_english_manual_keeps_chamber_defaults_separate_and_pending() -> None:
         assert block.count(r"\emph{Pending - to be supplied}") == 7
     assert "Never copy a value from one chamber to the other." in source
     assert "not Ch-MBE or O-MBE production defaults" in source
+
+
+def test_english_manual_starts_every_chapter_with_in_brief() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    source = (
+        repository_root
+        / "tools"
+        / "rheed_postprocessing_labeling"
+        / "manual"
+        / "RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.tex"
+    ).read_text(encoding="ascii")
+    chapter_pattern = re.compile(r"\\manualsection\{\d+\}\{[^}]+\}\s*")
+    chapters = list(chapter_pattern.finditer(source))
+    assert len(chapters) == 12
+    assert source.count(r"\inbrief{") == 12
+    for index, chapter in enumerate(chapters):
+        end = chapters[index + 1].start() if index + 1 < len(chapters) else len(source)
+        body = source[chapter.end():end]
+        body = re.sub(r"^\\label\{[^}]+\}\s*", "", body.lstrip())
+        assert body.startswith(r"\inbrief{"), chapter.group(0)
+
+
+def test_markdown_manual_and_ai_prompt_pack_are_complete() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    docs = repository_root / "docs"
+    manual = docs.joinpath(
+        "RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md"
+    ).read_text(encoding="ascii")
+    prompts = docs.joinpath(
+        "RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md"
+    ).read_text(encoding="ascii")
+
+    chapter_pattern = re.compile(r"^## (\d+)\. .+$", re.MULTILINE)
+    chapters = list(chapter_pattern.finditer(manual))
+    assert [int(item.group(1)) for item in chapters] == list(range(1, 13))
+    assert manual.count("### In brief") == 12
+    for index, chapter in enumerate(chapters):
+        end = chapters[index + 1].start() if index + 1 < len(chapters) else len(manual)
+        assert manual[chapter.end():end].lstrip().startswith("### In brief")
+
+    prompt_blocks = re.findall(r"```text\n(.*?)\n```", prompts, re.DOTALL)
+    assert len(prompt_blocks) == 9
+    required_boundaries = (
+        "sole procedural and scientific authority",
+        "chapter number and exact heading",
+        "Manual facts",
+        "Reasoned inference",
+        "Missing information",
+        "Never invent a pending Ch-MBE or O-MBE default",
+        "Do not authorize ARM",
+        "surface reconstruction, acquisition-quality QC, and FeSe film quality",
+        "model-assisted",
+        "not blind-gold",
+    )
+    for prompt in prompt_blocks:
+        for boundary in required_boundaries:
+            assert boundary in prompt
 
 
 def _launcher(

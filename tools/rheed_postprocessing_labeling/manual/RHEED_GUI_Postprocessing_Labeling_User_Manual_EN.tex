@@ -79,7 +79,7 @@
 \fancyhf{}
 \fancyhead[L]{\small\color{ManualMuted}AI4MBE | Ch-MBE}
 \fancyhead[R]{\small\color{ManualMuted}English operator manual}
-\fancyfoot[L]{\small\color{ManualMuted}Manual v1.3 | 2026-08-11}
+\fancyfoot[L]{\small\color{ManualMuted}Manual v1.4 | 2026-08-11}
 \fancyfoot[R]{\small\color{ManualMuted}Page \thepage\ of \pageref*{LastPage}}
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\footrulewidth}{0pt}
@@ -147,6 +147,15 @@
     {\footnotesize\color{ManualMuted}\textbf{Actual application screenshot.} #1}
   \end{center}
 }
+\newcommand{\inbrief}[1]{%
+  \begin{tcolorbox}[
+    enhanced,fontupper=\footnotesize,
+    colback=ManualBluePale,colframe=ManualBlue,
+    boxrule=0.7pt,arc=2mm,left=2.5mm,right=2.5mm,top=0.8mm,bottom=0.8mm,
+    before skip=0mm,after skip=2mm]
+    \textcolor{ManualBlue}{\textbf{In brief.}} #1
+  \end{tcolorbox}
+}
 
 \begin{document}
 
@@ -178,12 +187,14 @@ Install or refresh desktop shortcuts & \texttt{Install AI4MBE Desktop Shortcuts.
 \end{tabularx}
 \vfill
 {\small\color{ManualMuted}
-Manual v1.3 - English edition\\
+Manual v1.4 - English edition\\
 Issued 2026-08-11 for the Windows Ch-MBE workstation.\\[2mm]
 The screenshots show the actual applications using generated demo inputs. No experimental dataset is included.}
 
 % Page 2 - overview
 \manualsection{1}{Understand the two independent paths}
+
+\inbrief{The live GUI acquires data and writes session records. The offline labeler reads completed archives later and never controls instruments.}
 
 The live GUI performs acquisition and display. The offline labeler works only on completed archived sessions. Never interpret an offline result as a real-time control instruction.
 
@@ -240,6 +251,8 @@ Surface-reconstruction labels, acquisition-quality QC, and FeSe film quality are
 % Page 3 - live GUI
 \manualsection{2}{Install shortcuts and start the Ch-MBE GUI}
 
+\inbrief{Use the dedicated Ch-MBE shortcut, verify the window title and live status before ARM, and close the GUI normally so logs finish writing.}
+
 \subsection{First setup or after moving the checkout}
 \step{1}{From the GUI repository root, double-click \texttt{Install AI4MBE Desktop Shortcuts.cmd}.}
 \step{2}{Confirm that the desktop contains refreshed shortcuts named \textbf{Ch-MBE Growth Monitor} and \textbf{RHEED Post-processing Labeler}.}
@@ -251,7 +264,7 @@ Surface-reconstruction labels, acquisition-quality QC, and FeSe film quality are
 \step{3}{ARM or start a session only when the operator is ready under the experiment SOP. Double-click startup does not authorize setpoint changes.}
 \step{4}{At the end, close through the GUI normally and wait for the window to disappear. Do not force-kill Python while logs are being written.}
 
-\manualscreenshot[width=0.78\linewidth,height=58mm,keepaspectratio]{assets/screenshots/chmbe_growth_monitor_session.png}
+\manualscreenshot[width=0.78\linewidth,height=50mm,keepaspectratio]{assets/screenshots/chmbe_growth_monitor_session.png}
 \screenshotcaption{The current Session tab in a hardware-free demo. Its dummy selections are demonstration values, not Ch-MBE or O-MBE production defaults. Confirm the chamber and every selected interface before ARM.}
 
 The launcher forces the Ch-MBE chamber configuration and refuses a second live-GUI process through a Windows single-instance mutex.
@@ -267,6 +280,8 @@ Launcher logs are stored below \texttt{\%LOCALAPPDATA\%\textbackslash AI4MBE\tex
 % Page 4 - chamber-specific defaults (reserved)
 \manualsection{3}{Keep Ch-MBE and O-MBE defaults separate}
 \label{sec:chamber-defaults}
+
+\inbrief{Every default is pending until its chamber owner approves it. Keep Ch-MBE and O-MBE records independent and never copy a value across chambers.}
 
 \begin{dangerbox}{Reserved placeholders - not operating values}
 Every value on this page is intentionally pending. These entries must not be used to configure, ARM, or troubleshoot either chamber until the chamber owner supplies and approves them. Until then, follow the applicable chamber SOP and verify the active GUI configuration before ARM. Never copy a value from one chamber to the other.
@@ -313,6 +328,8 @@ A completed value of \textbf{Not applicable} is valid when approved by the chamb
 % Page 5 - labeler UI
 \manualsection{4}{Open the RHEED post-processing labeler}
 
+\inbrief{The labeler is offline. Select one session, ordered prediction/model-spec pairs, and a safe output directory; then build, open, or validate without contacting instruments.}
+
 \step{1}{Double-click \texttt{Start RHEED Post-processing Labeler.cmd} or its desktop shortcut.}
 \step{2}{Confirm that the application has the \textbf{Build} and \textbf{Open / Validate} tabs, plus \textbf{Build report and open}, \textbf{Open report}, \textbf{Validate annotations}, and \textbf{Open English PDF manual}. It must not start Growth Monitor or contact instruments.}
 
@@ -339,6 +356,8 @@ This application can run on a computer without instrument software when the arch
 
 % Page 6 - inputs
 \manualsection{5}{Prepare inputs and verify provenance}
+
+\inbrief{The session, predictions, and model specifications must agree exactly on saved-frame order and provenance. Any mismatch stops the build, and exact 1 Hz timing is never assumed.}
 
 \subsection{Session archive}
 The ZIP archive must contain exactly one member ending in \texttt{session\_metadata.json}, exactly one member ending in \texttt{heartbeat\_log.csv}, and every sibling \texttt{frames/} image referenced by the heartbeat rows. Saved-frame elapsed time, heartbeat index, capture sequence, and timezone-aware capture UTC must each increase strictly; gaps are allowed. Do not extract and rename frames manually.
@@ -383,6 +402,8 @@ Any mismatch in row count, order, time, sequence, filename, or SHA-256 stops the
 % Page 7 - build
 \manualsection{6}{Build and open a report safely}
 
+\inbrief{Build only into a new or empty directory outside Git. Preserve the complete report directory and the original prediction/model-spec inputs separately.}
+
 \step{1}{Choose the preserved archive copy in Session ZIP.}
 \step{2}{Add one Prediction CSV and Model-spec JSON row for every model to display. Pairing is positional, so preserve row order.}
 \step{3}{Choose a new or empty directory outside the repository. The desktop labeler will not overwrite a non-empty directory.}
@@ -410,6 +431,8 @@ The desktop application always refuses a non-empty output directory. CLI \texttt
 % Page 8 - annotation
 \manualsection{7}{Label temporal segments like an editing timeline}
 
+\inbrief{Mark inclusive In and Out frames, choose the human label, and save exact endpoint provenance. Adjacent segments are allowed; overlaps are rejected.}
+
 \manualscreenshot[width=0.94\linewidth,height=104mm,keepaspectratio]{assets/screenshots/rheed_timeline_editor.png}
 \screenshotcaption{The current English browser editor with generated RHEED frames, synthetic model curves, saved human segments, and a synchronized playhead.}
 
@@ -427,6 +450,8 @@ Labels cover the saved frames from In through Out, inclusive. They do not claim 
 % Page 9 - review controls
 \manualsection{8}{Review, display controls, and drafts}
 
+\inbrief{Keep the image, playhead, model guides, and enlarged timeline synchronized. Display adjustments never change source data, and browser drafts do not replace frequent JSON exports.}
+
 \subsection{All time indicators remain synchronized}
 \rowcolors{2}{ManualPale}{white}
 \begin{tabularx}{\linewidth}{L{38mm}L{68mm}Y}
@@ -440,7 +465,7 @@ Enlarge the image & Zoom view and its adjustable timeline & Source image and seg
 \bottomrule
 \end{tabularx}
 
-\manualscreenshot[width=0.76\linewidth,height=70mm,keepaspectratio]{assets/screenshots/rheed_timeline_zoom.png}
+\manualscreenshot[width=0.76\linewidth,height=62mm,keepaspectratio]{assets/screenshots/rheed_timeline_zoom.png}
 \screenshotcaption{The actual enlarged-frame dialog. Its timeline changes the selected frame while preserving zoom, pan, and display adjustments.}
 
 \subsection{Drafts and editing}
@@ -464,6 +489,8 @@ JSON.
 
 % Page 10 - export
 \manualsection{9}{Export, import, and fail-closed validation}
+
+\inbrief{JSON is the canonical annotation artifact. Validate it against the exact report and stop on any run, model-context, endpoint, label, or overlap mismatch.}
 
 \subsection{JSON is the canonical artifact}
 Use Export JSON to resume work, validate provenance, and support downstream processing. Export CSV is useful for meetings and tabular analysis, but it does not replace the complete nested provenance in JSON.
@@ -503,6 +530,8 @@ Browser Import performs immediate client-side provenance checks before replacing
 % Page 11 - safety
 \manualsection{10}{Data safety and scientific boundaries}
 
+\inbrief{Keep laboratory data, checkpoints, reports, and annotations out of Git. These labels are model-assisted, not blind gold, and reconstruction is distinct from QC and film quality.}
+
 \subsection{What belongs in Git}
 \rowcolors{2}{ManualPale}{white}
 \begin{tabularx}{\linewidth}{Y Y}
@@ -531,6 +560,8 @@ The current classification target is bare STO surface reconstruction before grow
 
 % Page 12 - troubleshooting
 \manualsection{11}{Troubleshooting}
+
+\inbrief{Preserve the error, time, branch, commit, paths, and launcher log before changing anything. Do not start by deleting environments, resetting Git, or guessing settings.}
 
 First preserve the exact error text, occurrence time, branch, commit, and selected paths. Do not begin by deleting environments, changing global variables, or force-resetting Git. A live-driver warning is fail-visible behavior, not a prompt for ad hoc dependency installation.
 
@@ -564,6 +595,8 @@ Import or validation fails & Run, context, endpoint, overlap, or label mismatch 
 % Page 13 - checklist
 \manualsection{12}{Version verification and quick checklist}
 
+\inbrief{Record versions and hashes, complete the checklist, and stop whenever instrument state, provenance, or validation cannot be explained.}
+
 \subsection{Record versions before acquisition or labeling}
 \begin{lstlisting}
 Set-Location '<GUI repository>'
@@ -583,6 +616,11 @@ Get-FileHash '<local-data-root>\growth_session.zip' -Algorithm SHA256
 Get-FileHash '<local-data-root>\exports\segment_annotations.json' -Algorithm SHA256
 Get-FileHash '.\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf' -Algorithm SHA256
 \end{lstlisting}
+
+\subsection{Companion text and AI prompts}
+Searchable manual: \path{docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md}\par
+AI prompt pack: \path{docs/RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md}\par
+The prompt pack does not authorize an AI to invent pending defaults or make instrument-control decisions.
 
 \subsection{Quick checklist}
 \begin{itemize}[leftmargin=7mm,itemsep=1.7pt]

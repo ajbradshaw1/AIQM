@@ -1,0 +1,452 @@
+# Ch-MBE GUI and RHEED Post-processing Labeling
+
+## English Operator Manual
+
+- Manual version: **v1.4**
+- Issued: **2026-08-11**
+- Scope: Windows Ch-MBE workstation and the offline RHEED post-processing labeler
+
+This Markdown document is the accessible companion to the [English PDF manual](RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf). The screenshots show the actual applications with generated demo inputs. They do not contain experimental data and do **not** define production defaults for Ch-MBE or O-MBE.
+
+![Ch-MBE Growth Monitor with generated demo inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/chmbe_growth_monitor_dummy.png)
+
+> **Core boundary:** The post-processing labeler reads archived data only. It does not connect to or control cameras, pyrometers, power supplies, or any other instrument.
+
+### Quick entry
+
+| Purpose | Double-click |
+| --- | --- |
+| Ch-MBE live GUI | `Start Ch-MBE Growth Monitor.cmd` |
+| RHEED offline labeler | `Start RHEED Post-processing Labeler.cmd` |
+| Install or refresh desktop shortcuts | `Install AI4MBE Desktop Shortcuts.cmd` |
+
+### Contents
+
+1. [Understand the two independent paths](#1-understand-the-two-independent-paths)
+2. [Install shortcuts and start the Ch-MBE GUI](#2-install-shortcuts-and-start-the-ch-mbe-gui)
+3. [Keep Ch-MBE and O-MBE defaults separate](#3-keep-ch-mbe-and-o-mbe-defaults-separate)
+4. [Open the RHEED post-processing labeler](#4-open-the-rheed-post-processing-labeler)
+5. [Prepare inputs and verify provenance](#5-prepare-inputs-and-verify-provenance)
+6. [Build and open a report safely](#6-build-and-open-a-report-safely)
+7. [Label temporal segments like an editing timeline](#7-label-temporal-segments-like-an-editing-timeline)
+8. [Review, display controls, and drafts](#8-review-display-controls-and-drafts)
+9. [Export, import, and fail-closed validation](#9-export-import-and-fail-closed-validation)
+10. [Data safety and scientific boundaries](#10-data-safety-and-scientific-boundaries)
+11. [Troubleshooting](#11-troubleshooting)
+12. [Version verification and quick checklist](#12-version-verification-and-quick-checklist)
+
+## 1. Understand the two independent paths
+
+### In brief
+
+- The live GUI acquires and displays instrument data and writes the session archive.
+- The offline labeler reads a completed archive, prediction tables, and model specifications.
+- The offline tool never sends commands back to instruments.
+- Surface reconstruction, acquisition QC, and FeSe film quality are different concepts.
+
+### Live acquisition and offline review
+
+The live GUI performs acquisition and display. The offline labeler works only on completed archived sessions. Never interpret an offline result as a real-time control instruction.
+
+| Live acquisition | Offline build and validation |
+| --- | --- |
+| ![Growth Monitor writes the archived session](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/chmbe_growth_monitor_dummy.png) | ![The labeler combines archived inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_labeler_build.png) |
+| Growth Monitor writes the archived session. | The labeler combines the ZIP with predictions and model specifications. |
+
+> **Application boundary:** The live GUI creates session records. The labeler reads those records later, produces a browser report, and exports validated JSON. It never sends commands back to instruments.
+
+### Operating principle
+
+- The GUI reads live instrument sources and writes session records under operator control.
+- Post-processing combines an archived session with one or more already-generated prediction tables.
+- Human labels are stored as frame-bound temporal segments with provenance.
+- Model outputs remain visible, so these annotations are assisted review, not blind-gold labels.
+
+> **Keep the concepts separate:** Surface-reconstruction labels, acquisition-quality QC, and FeSe film quality are three different concepts. The current classifier concerns the bare STO surface before growth.
+
+## 2. Install shortcuts and start the Ch-MBE GUI
+
+### In brief
+
+1. Install or refresh the shortcuts from the current repository checkout.
+2. Start only the Ch-MBE launcher and verify the window, chamber, live sources, and log directory.
+3. ARM only under the experiment SOP.
+4. Close normally and wait for logging to finish.
+
+### First setup or after moving the checkout
+
+1. From the GUI repository root, double-click `Install AI4MBE Desktop Shortcuts.cmd`.
+2. Confirm that the desktop contains refreshed shortcuts named **Ch-MBE Growth Monitor** and **RHEED Post-processing Labeler**.
+3. If Windows displays an unexpected security warning, do not bypass it. Stop and ask the maintainer to verify the file source and commit.
+
+### Start each experiment
+
+1. Double-click `Start Ch-MBE Growth Monitor.cmd` or its desktop shortcut. Do not use an O-MBE launcher.
+2. Wait for the main window and confirm the title **Chalcogenide MBE Growth Monitor**. Then inspect every device status.
+3. ARM or start a session only when the operator is ready under the experiment SOP. Double-click startup does not authorize setpoint changes.
+4. At the end, close through the GUI normally and wait for the window to disappear. Do not force-kill Python while logs are being written.
+
+![Session tab with generated demo inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/chmbe_growth_monitor_session.png)
+
+> **Screenshot status:** This is the actual Session tab in a hardware-free demo. Its dummy selections are demonstration values, not Ch-MBE or O-MBE production defaults. Confirm the chamber and every selected interface before ARM.
+
+The launcher forces the Ch-MBE chamber configuration and refuses a second live-GUI process through a Windows single-instance mutex.
+
+Before ARM, confirm the Ch-MBE chamber, an advancing RHEED frame sequence, a valid temperature state, and the intended log directory. Approved settings belong in the chamber-specific register in [Chapter 3](#3-keep-ch-mbe-and-o-mbe-defaults-separate); a pending field is not a default.
+
+> **Expected environment behavior:** Launcher logs are stored below `%LOCALAPPDATA%\AI4MBE\LauncherLogs`. They record the resolved Python interpreter, repository path, branch, commit, chamber, and optional driver status. Missing `pyads`, `serial`, or `windows_capture` produces a visible warning without hiding the GUI; do not ARM a production mode that needs the missing driver. Do not assume a fixed drive letter or create global environment variables ad hoc.
+
+## 3. Keep Ch-MBE and O-MBE defaults separate
+
+### In brief
+
+- Ch-MBE and O-MBE have independent, owner-approved configuration registers.
+- Every field below is intentionally pending until the corresponding chamber owner supplies it.
+- Never infer a default from source code, a selected GUI value, a demo screenshot, or the other chamber.
+- A pending value is not an operating instruction. Follow the applicable chamber SOP.
+
+> **Reserved placeholders - not operating values:** Every value in this chapter is intentionally pending. Do not use these entries to configure, ARM, or troubleshoot either chamber until the chamber owner supplies and approves them. Until then, follow the applicable chamber SOP and verify the active GUI configuration before ARM. Never copy a value from one chamber to the other.
+
+### Ch-MBE default configuration
+
+| Configuration item | Owner-approved default |
+| --- | --- |
+| GUI launcher and chamber profile | *Pending - to be supplied* |
+| RHEED acquisition source and mode | *Pending - to be supplied* |
+| Temperature interface and communication settings | *Pending - to be supplied* |
+| Other instrument interfaces and connection settings | *Pending - to be supplied* |
+| Classifier or model package | *Pending - to be supplied* |
+| Sampling, capture, and logging settings | *Pending - to be supplied* |
+
+**Approved by / revision / date:** *Pending - to be supplied*
+
+### O-MBE default configuration
+
+| Configuration item | Owner-approved default |
+| --- | --- |
+| GUI launcher and chamber profile | *Pending - to be supplied* |
+| RHEED acquisition source and mode | *Pending - to be supplied* |
+| Temperature interface and communication settings | *Pending - to be supplied* |
+| Other instrument interfaces and connection settings | *Pending - to be supplied* |
+| Classifier or model package | *Pending - to be supplied* |
+| Sampling, capture, and logging settings | *Pending - to be supplied* |
+
+**Approved by / revision / date:** *Pending - to be supplied*
+
+> **Scope:** A completed value of **Not applicable** is valid when approved by the chamber owner; a blank or pending value is not. The O-MBE register does not replace an O-MBE startup SOP.
+
+## 4. Open the RHEED post-processing labeler
+
+### In brief
+
+1. Start the dedicated offline-labeler shortcut.
+2. Confirm the **Build** and **Open / Validate** tabs and their expected buttons.
+3. Verify that Growth Monitor and instrument processes do not start.
+
+1. Double-click `Start RHEED Post-processing Labeler.cmd` or its desktop shortcut.
+2. Confirm that the application has the **Build** and **Open / Validate** tabs, plus **Build report and open**, **Open report**, **Validate annotations**, and **Open English PDF manual**. It must not start Growth Monitor or contact instruments.
+
+![Offline labeler Build tab with generated fixture](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_labeler_build.png)
+
+> **Screenshot status:** This is the actual desktop labeler Build tab populated with a generated local fixture. The application is offline and no instrument process is running.
+
+| Area | Purpose |
+| --- | --- |
+| Session ZIP | Select one archived Growth Monitor session. |
+| Model inputs | Pair one prediction CSV with its model-spec JSON on each row. |
+| Output directory | Select a new or empty directory, preferably outside Git. |
+| Message log | Preserve complete build and validation messages. |
+| Open report button | Open a previously generated `interactive_report.html`. |
+| Validate annotations | Check exported JSON against the exact report provenance. |
+
+> **Offline by design:** This application can run on a computer without instrument software when the archived inputs are complete and the Python environment is valid. Report construction and validation run in an isolated child process so the desktop application remains responsive.
+
+## 5. Prepare inputs and verify provenance
+
+### In brief
+
+- Use the original session ZIP without manually renaming or reordering frames.
+- Pair every prediction CSV with its matching model-spec JSON in the same row order.
+- Let the tool verify saved-frame provenance, timing, filenames, and SHA-256 values.
+- Any mismatch stops the build; never edit inputs to bypass the check.
+
+### Session archive
+
+The ZIP archive must contain exactly one member ending in `session_metadata.json`, exactly one member ending in `heartbeat_log.csv`, and every sibling `frames/` image referenced by the heartbeat rows. Saved-frame elapsed time, heartbeat index, capture sequence, and timezone-aware capture UTC must each increase strictly; gaps are allowed. Do not extract and rename frames manually.
+
+```text
+growth_session.zip
+  session_metadata.json
+  heartbeat_log.csv
+  frames/
+    heartbeat_000001_....bmp
+    heartbeat_000002_....bmp
+```
+
+### Prediction tables and model specifications are positional pairs
+
+| File | Required content | Check |
+| --- | --- | --- |
+| Prediction CSV | Frame index, heartbeat index, elapsed time, capture UTC, capture sequence, frame name, frame SHA-256, and score columns | Rows match the saved-frame order exactly. |
+| Model-spec JSON | Schema version 1, non-empty key and title, at least two unique classes, and equally sized unique probability columns | Class order matches the score columns; status and provenance are optional. |
+| Session ZIP | Metadata, heartbeat log, and frames | Every referenced frame exists in the archive. |
+
+Prediction `frame_index` may begin at 0 or 1, but it must then remain contiguous. Heartbeat indices, capture sequences, and elapsed times may contain gaps. The tool follows actual saved frames and recorded times; it never assumes exact 1 Hz sampling.
+
+> **Fail closed:** Any mismatch in row count, order, time, sequence, filename, or SHA-256 stops the build. Do not edit the inputs to bypass an error.
+
+### Recommended local layout
+
+Use a local data root outside the source repository. The names below are illustrative only and contain no real experimental path:
+
+```text
+<local-data-root>\<run-name>\
+  source\growth_session.zip
+  predictions\model_A.csv
+  specs\model_A.json
+  output\
+  exports\
+```
+
+## 6. Build and open a report safely
+
+### In brief
+
+1. Select the preserved ZIP and each correctly paired prediction/specification row.
+2. Choose a new or empty output directory outside Git.
+3. Build, wait for success, and keep the entire generated report directory together.
+4. Use CLI overwrite only when you understand its strict safety boundary.
+
+1. Choose the preserved archive copy in **Session ZIP**.
+2. Add one Prediction CSV and Model-spec JSON row for every model to display. Pairing is positional, so preserve row order.
+3. Choose a new or empty directory outside the repository. The desktop labeler will not overwrite a non-empty directory.
+4. Enter a report title. Review quality changes only the lossy review images; it never changes archived pixels or model predictions. The default value of 78 is suitable for routine use.
+5. Click **Build report and open**. Wait for success and for `interactive_report.html` to open automatically.
+
+### PowerShell fallback
+
+```powershell
+Set-Location '<GUI repository>'
+conda activate ai4mbe-gui
+python -m tools.rheed_postprocessing_labeling build `
+  --session '<local-data-root>\growth_session.zip' `
+  --predictions '<local-data-root>\predictions.csv' `
+  --model-spec '<local-data-root>\model_spec.json' `
+  --output-dir '<local-data-root>\labeling-output'
+```
+
+### Copy the entire report directory
+
+The report consists of `interactive_report.html`, `images/`, `vendor/`, and `run_manifest.json`. Copy the entire directory during handoff. Preserve the original prediction CSV and model-spec JSON separately outside the report directory.
+
+> **Advanced CLI overwrite boundary:** The desktop application always refuses a non-empty output directory. CLI `--overwrite` may replace only a recognized, unmodified tool output. It validates the new inputs and stages a complete replacement first. If the old report changes during the build, replacement stops and the original content is restored. Filesystem roots, repository paths, the current directory, and directories containing inputs are always rejected.
+
+## 7. Label temporal segments like an editing timeline
+
+### In brief
+
+1. Move the synchronized playhead to the first saved frame and select **Mark In**.
+2. Move to the inclusive final frame and select **Mark Out**.
+3. Choose a label, identify the labeler, add useful notes, and save the segment.
+4. Review endpoints frame by frame; adjacent segments are allowed, but overlap is rejected.
+
+![Timeline segment editor with generated RHEED frames](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_timeline_editor.png)
+
+> **Screenshot status:** This is the actual English browser editor with generated RHEED frames, synthetic model curves, saved human segments, and a synchronized playhead.
+
+1. Move the Frame playhead or click a model plot to locate the first saved frame of a segment. Click **Mark In**.
+2. Move to the final saved frame of the segment and click **Mark Out**. The Out marker is inclusive.
+3. Choose a reconstruction label, enter the labeler name, add notes when useful, and click **Add segment**.
+4. Select a saved segment to edit it. Update preserves its annotation ID. Adjacent segments are allowed; overlapping segments are rejected.
+
+The displayed and exported saved-frame ordinal is 1-based. Every endpoint also records heartbeat index, capture sequence, UTC, and frame SHA-256. This preserves traceability even when the sampling interval or sequence contains gaps.
+
+> **Frame-bound interval semantics:** Labels cover the saved frames from In through Out, inclusive. They do not claim that unsaved camera frames or every capture-sequence number in between was reviewed.
+
+## 8. Review, display controls, and drafts
+
+### In brief
+
+- The main timeline, plots, image, metadata, and enlarged-view timeline remain synchronized.
+- Brightness, contrast, zoom, and enlargement change review display only, not source data or predictions.
+- Export JSON frequently; browser localStorage is only a draft.
+- Treat labels as model-assisted surface-reconstruction review, not acquisition QC or blind-gold truth.
+
+### All time indicators remain synchronized
+
+| Action | Must update together | Must not change |
+| --- | --- | --- |
+| Move the main timeline | Current RHEED image, model guides, enlarged-view timeline | Archive and prediction values |
+| Click a model curve | Main playhead, image, and metadata | Saved segments |
+| Adjust brightness or contrast | On-screen appearance | Pixels, SHA-256, and model outputs |
+| Enlarge the image | Zoom view and its adjustable timeline | Source image and segment boundaries |
+
+![Enlarged RHEED frame and synchronized timeline](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_timeline_zoom.png)
+
+> **Screenshot status:** This is the actual enlarged-frame dialog. Its timeline changes the selected frame while preserving zoom, pan, and display adjustments.
+
+### Drafts and editing
+
+- The browser stores a draft scoped by both dataset ID and model-context fingerprint in localStorage. This is not a durable backup.
+- Export JSON frequently, especially during long reviews and before changing computers, browsers, or cache settings.
+- **Delete selected** requires confirmation. Undo restores only the most recent annotation mutation.
+- Import JSON validates before replacement. On failure, the current segment set remains unchanged.
+
+### Interpretation
+
+Labels describe the dominant surface-reconstruction category seen by the reviewer during the interval. The displayed **Uncertain** label exports as `unknown`; **1x1 / none-weak** exports as `none_weak`. Never overwrite a human selection with model argmax, and never interpret `unknown` as acquisition-quality rejection.
+
+> **Display adjustment is not data modification:** Brightness, contrast, zoom, and image enlargement aid inspection only. Brightness and contrast are stored with each segment; zoom is not exported. The report never rewrites archived images or model outputs.
+
+Use a four-pass review rhythm: survey the full run, confirm every In and Out frame, inspect gaps and uncertain labels, then export and validate the canonical JSON.
+
+## 9. Export, import, and fail-closed validation
+
+### In brief
+
+- Export JSON is the canonical artifact; CSV is only a convenient table.
+- Validate the JSON against the exact original report before downstream use.
+- Provenance binds the session, ordered frames, model context, and every segment endpoint.
+- Never bypass a validation failure.
+
+### JSON is the canonical artifact
+
+Use **Export JSON** to resume work, validate provenance, and support downstream processing. Export CSV is useful for meetings and tabular analysis, but it does not replace the complete nested provenance in JSON.
+
+| Binding | Purpose |
+| --- | --- |
+| `dataset_id` and source archive SHA-256 | Bind the source session. |
+| Ordered-frame fingerprint | Bind frame order and per-frame SHA-256. |
+| `model_context_fingerprint` | Bind the visible predictions and model specifications. |
+| Endpoint provenance | Bind saved-frame ordinal, heartbeat, UTC, sequence, and SHA-256. |
+| `model_outputs_visible=true` | Disclose that the models were visible. |
+| `eligible_for_gold=false` | Prevent blind-gold misuse. |
+
+### Validate in the desktop application
+
+1. Select the original `interactive_report.html`.
+2. Select the exported annotation JSON.
+3. Click **Validate annotations**. Continue only when the application says **Annotation JSON is valid for this report**.
+
+### PowerShell validation
+
+```powershell
+python -m tools.rheed_postprocessing_labeling validate `
+  --report '<local-data-root>\labeling-output\interactive_report.html' `
+  --annotations '<local-data-root>\exports\segment_annotations.json'
+```
+
+> **Never bypass a validation failure:** A wrong run, changed model context, altered endpoint, overlapping segment, invalid label, or gold-data claim causes validation to fail. Return to the correct report and original export and investigate the exact message.
+
+Browser Import performs immediate client-side provenance checks before replacing the current draft. Desktop **Validate annotations** is the authoritative full fail-closed validation.
+
+## 10. Data safety and scientific boundaries
+
+### In brief
+
+- Keep real archives, images, logs, predictions, reports, annotations, checkpoints, and unpublished results out of Git by default.
+- Preserve an immutable source ZIP, canonical JSON, hashes, and the complete report directory.
+- These labels are model-assisted review of bare STO surface reconstruction, not blind-gold data or FeSe film-quality judgments.
+
+### What belongs in Git
+
+| May be tracked | Keep out by default |
+| --- | --- |
+| Tool code, templates, tests, and documentation | Real session ZIP files, raw RHEED images, and sensor logs |
+| Example model specifications | Real predictions, generated reports, and annotation JSON or CSV |
+| Sanitized documentation screenshots made with generated demo inputs | Checkpoints, unpublished results, and experiment-specific screenshots |
+
+### Safe handling sequence
+
+1. Keep the source session ZIP read-only or preserve an immutable copy, and record its SHA-256.
+2. Create a dedicated working directory outside the repository. Keep reports, exports, and screenshots there.
+3. For handoff, copy the complete report directory and canonical JSON. Separately preserve the original prediction CSV, model-spec JSON, and SHA manifest. Never send only the HTML.
+4. Run statistics or training-data preparation only after validation, and preserve the original export unchanged.
+
+> **Model-assisted review, not blind-gold:** Model plots and lossy review images are visible during labeling. These annotations are eligible only as model-assisted review. Formal blind-gold labels require a separate workflow that hides model and Equalizer outputs and preserves the required audit evidence.
+
+> **Do not over-interpret the output:** The current classification target is bare STO surface reconstruction before growth. Do not interpret a reconstruction label as FeSe film quality. Do not equate reconstruction `unknown` with acquisition-quality `QC_REJECT`.
+
+## 11. Troubleshooting
+
+### In brief
+
+1. Preserve the exact error, time, branch, commit, selected paths, and launcher name.
+2. Do not begin by deleting environments, changing global variables, or force-resetting Git.
+3. Follow the fail-visible message and gather the minimum evidence below.
+4. Do not guess interface settings or edit data to bypass provenance checks.
+
+First preserve the exact error text, occurrence time, branch, commit, and selected paths. Do not begin by deleting environments, changing global variables, or force-resetting Git. A live-driver warning is fail-visible behavior, not a prompt for ad hoc dependency installation.
+
+| Symptom | Likely cause | Safe action |
+| --- | --- | --- |
+| Desktop shortcut is absent or opens an old checkout | Installer was not run after the checkout moved | Run the shortcut installer from the current repository root. |
+| Growth Monitor shows the wrong chamber | Wrong launcher was used | Close normally and use only the Ch-MBE launcher. |
+| Launcher window closes immediately | Environment or dependency failure | Read the newest launcher log; if needed, run the same CMD from PowerShell. |
+| Temperature or RHEED has no valid reading | Interface, vendor window, or selected mode issue | Record connected, error, and mode; do not guess global settings. |
+| Labeler rejects Build | Missing input, mismatched pair, or non-empty output | Check the session, each positional pair, and a new output directory. |
+| Provenance mismatch | Predictions do not belong to the ZIP or rows changed | Find the matching predictions and spec; do not edit the CSV. |
+| HTML has no images or curves | Only the HTML was copied or assets are missing | Restore the complete report directory and relative paths. |
+| Draft disappeared | Browser, computer, or localStorage changed | Import the latest JSON and export more frequently. |
+| Import or validation fails | Run, context, endpoint, overlap, or label mismatch | Use the original report and JSON; read the fail-closed message. |
+
+### Minimum evidence for the maintainer
+
+- Full error text and occurrence time. Do not report only that it does not work.
+- Output of `git status --short --branch` and `git rev-parse HEAD`.
+- Launcher name, environment path, input filenames, and output directory. Keep sensitive data out of public channels.
+- For labeling issues, report-manifest and annotation-JSON SHA values. Raw images are not initially required.
+
+## 12. Version verification and quick checklist
+
+### In brief
+
+- Record the repository, commit, environment, and Python version before acquisition or labeling.
+- Stop if the version or Git state differs from the team-specified state.
+- Hash the source ZIP, canonical JSON, and manual.
+- Complete the checklist before handoff; stop on unexplained instrument, stale-data, version, provenance, or validation states.
+
+### Record versions before acquisition or labeling
+
+```powershell
+Set-Location '<GUI repository>'
+git status --short --branch
+git rev-parse HEAD
+conda env list
+conda activate ai4mbe-gui
+python --version
+python -m tools.rheed_postprocessing_labeling --help
+```
+
+Use the resolved Python interpreter and repository path recorded by the launcher. Read `AI4MBE_GUI_PYTHON` only when it is already configured on that workstation; do not create it ad hoc. If the branch or commit differs from the team-specified version, or Git reports unknown modifications, stop and verify.
+
+### Integrity hashes
+
+```powershell
+Get-FileHash '<local-data-root>\growth_session.zip' -Algorithm SHA256
+Get-FileHash '<local-data-root>\exports\segment_annotations.json' -Algorithm SHA256
+Get-FileHash '.\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf' -Algorithm SHA256
+```
+
+### Companion text and AI prompts
+
+Use this Markdown manual for searchable text and the [English AI prompt pack](RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md) for constrained AI-assisted reading. The prompt pack does not authorize an AI to invent pending defaults or make instrument-control decisions.
+
+### Quick checklist
+
+- [ ] Use the Ch-MBE launcher and confirm the chamber identity.
+- [ ] Confirm live status, frame sequence, temperature, and logging behavior under the experiment SOP.
+- [ ] Preserve a read-only source ZIP and its SHA-256.
+- [ ] Open the offline labeler with the dedicated launcher.
+- [ ] Pair every prediction CSV with the correct model-spec JSON.
+- [ ] Use a new or empty output directory outside Git.
+- [ ] Review boundaries frame by frame; allow no overlaps.
+- [ ] Export JSON and validate it against the original report.
+- [ ] Record branch, commit, environment, manifest, and export hashes.
+- [ ] Handoff the complete report and declare model-assisted, not blind-gold.
+
+> **Stop condition:** Stop and contact the maintainer when instrument state, stale data, version identity, provenance, or validation cannot be explained.
+
+---
+
+Application screenshots were captured from the actual software using generated demo inputs. They contain no experimental data and are not production configuration references.

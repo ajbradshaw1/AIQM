@@ -32,7 +32,12 @@ repository root, and writes diagnostics under
 instrument settings. The two root-level `Start *.cmd` files can also be
 double-clicked directly. See
 [`docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf`](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf)
-for the English operator workflow and troubleshooting guide. The earlier
+for the English operator workflow and troubleshooting guide. A searchable
+[Markdown edition](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md)
+and a constrained
+[AI prompt pack](docs/RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md)
+are provided alongside it. Every numbered chapter begins with an `In brief`
+summary. The earlier
 [bilingual edition](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
 remains available.
 
