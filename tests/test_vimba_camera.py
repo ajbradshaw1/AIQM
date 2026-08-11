@@ -1053,6 +1053,305 @@ def test_frame_luminance_rgb_includes_r_and_b() -> None:
     assert abs(_frame_luminance(frame) - expected) < 0.5
 
 
+# ---------------------------------------------------------------------------
+# Exposure hardening — raising feature lookup, and the restore path
+# ---------------------------------------------------------------------------
+
+class RaisingLookupCamera(FakeCamera):
+    """FakeCamera whose ``ExposureTimeAbs`` lookup raises, not returns None.
+
+    vmbpy resolves features through ``__getattr__`` against the live GenICam
+    node map, so an unavailable node can surface as an SDK error rather than
+    the AttributeError that ``getattr(..., default)`` absorbs. This camera
+    reproduces that shape: the legacy AVT spelling raises, and only the SFNC
+    spelling is present.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        del self.ExposureTimeAbs
+        self.ExposureTime = FakeSettable(
+            initial_value=300_000.0,
+            value_range=(100.0, 900_000.0),
+            increment=1.0,
+        )
+
+    def __getattr__(self, name):
+        # Only fires for attributes not found normally — i.e. the deleted
+        # ExposureTimeAbs, which is exactly the case under test.
+        if name == "ExposureTimeAbs":
+            raise FakeVmbCameraError("feature unavailable on this node map")
+        raise AttributeError(name)
+
+
+class ClampingFeature(FakeSettable):
+    """A device that clamps the first write, then honours the restore.
+
+    Models silent clamping: the requested value is accepted by ``set`` but
+    the node lands somewhere else, so the readback disagrees. The restore
+    write is honoured, which is what lets the test prove the original value
+    was actually put back rather than merely that ``set`` was called twice.
+    """
+
+    CLAMPED_TO = 111_111.0
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.set_values: list[float] = []
+
+    def set(self, value) -> None:  # noqa: A003
+        self.set_call_count += 1
+        self.set_values.append(value)
+        self.value = self.CLAMPED_TO if self.set_call_count == 1 else value
+
+
+class RaisingRangeFeature(FakeSettable):
+    """A feature that is present but whose ``get_range`` probe raises."""
+
+    def get_range(self):
+        raise FakeVmbCameraError("range unavailable")
+
+
+class RaisingRangeLookupFeature(FakeSettable):
+    """A feature where *accessing* ``get_range`` raises, before any call.
+
+    Distinct from RaisingRangeFeature, where the lookup succeeds and the
+    call raises. Both are failed reads and must fail closed identically;
+    routing the lookup through the tolerant camera-level helper would have
+    misclassified this one as an absent accessor.
+    """
+
+    @property
+    def get_range(self):
+        raise FakeVmbCameraError("get_range unavailable on this node")
+
+
+class RaisingAutoFeature(FakeSettable):
+    """An ExposureAuto that is present but cannot be read."""
+
+    def get(self):
+        raise FakeVmbCameraError("ExposureAuto unreadable")
+
+
+class RaisingLimitFeature(FakeSettable):
+    """An AcquisitionFrameRateLimit that is present but cannot be read."""
+
+    def get(self):
+        raise FakeVmbCameraError("frame-rate limit unreadable")
+
+
+def test_exposure_lookup_survives_a_raising_feature_and_falls_back() -> None:
+    """A raising ExposureTimeAbs must not hide a valid ExposureTime."""
+    try:
+        fake_cam = install_fake_vmbpy([RaisingLookupCamera()])
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(
+            trigger_hz=1.0, access_mode="full", exposure_us=250_000.0,
+        )
+        cam.connect()
+        assert fake_cam.ExposureTime.value == 250_000.0, (
+            "fell back to ExposureTime but did not apply the exposure"
+        )
+        assert cam.exposure_us == 250_000.0
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_out_of_range_exposure_fails_without_writing() -> None:
+    """A request outside the device range is refused before any set()."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        # Range is (100.0, 900_000.0); 50 us clears the constructor's
+        # 90%-of-period ceiling at 1 Hz but is below the device minimum.
+        cam = VmbCamera(
+            trigger_hz=1.0, access_mode="full", exposure_us=50.0,
+        )
+        raised = None
+        try:
+            cam.connect()
+        except Exception as exc:  # noqa: BLE001
+            raised = exc
+        assert raised is not None, "out-of-range exposure was not refused"
+        assert "outside the camera range" in str(raised), str(raised)
+        assert fake_cam.ExposureTimeAbs.set_call_count == 0, (
+            "driver wrote to the camera despite an out-of-range request"
+        )
+        assert fake_cam.ExposureTimeAbs.value == 300_000.0
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_bad_readback_restores_the_original_exposure() -> None:
+    """A disagreeing readback puts the original value back on the camera."""
+    try:
+        cam_stub = FakeCamera()
+        cam_stub.ExposureTimeAbs = ClampingFeature(
+            initial_value=300_000.0,
+            value_range=(100.0, 900_000.0),
+            increment=1.0,
+        )
+        install_fake_vmbpy([cam_stub])
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(
+            trigger_hz=1.0, access_mode="full", exposure_us=250_000.0,
+        )
+        raised = None
+        try:
+            cam.connect()
+        except Exception as exc:  # noqa: BLE001
+            raised = exc
+        assert raised is not None, "a bad readback was accepted as confirmed"
+        assert "readback" in str(raised), str(raised)
+        # The restore must carry the ORIGINAL value, not merely happen.
+        assert cam_stub.ExposureTimeAbs.set_values == [250_000.0, 300_000.0], (
+            f"expected attempt then restore-to-original, got "
+            f"{cam_stub.ExposureTimeAbs.set_values}"
+        )
+        assert cam_stub.ExposureTimeAbs.value == 300_000.0, (
+            "camera did not end up back at its original exposure"
+        )
+        assert cam.exposure_us == 300_000.0
+    finally:
+        uninstall_fake_vmbpy()
+
+
+# --- Present-but-unreadable safety reads must refuse, not skip -------------
+#
+# Absence and unreadability are different. A camera with no ExposureAuto has
+# no auto loop to race; a camera whose ExposureAuto cannot be read leaves
+# that precondition unproven. Skipping the check in the second case would
+# silently drop validation the driver's contract promises.
+
+def test_unreadable_exposure_auto_refuses_the_write() -> None:
+    try:
+        cam_stub = FakeCamera()
+        cam_stub.ExposureAuto = RaisingAutoFeature(initial_value="Off")
+        install_fake_vmbpy([cam_stub])
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(
+            trigger_hz=1.0, access_mode="full", exposure_us=250_000.0,
+        )
+        raised = None
+        try:
+            cam.connect()
+        except Exception as exc:  # noqa: BLE001
+            raised = exc
+        assert raised is not None, "wrote exposure without proving auto is Off"
+        assert "ExposureAuto" in str(raised), str(raised)
+        assert cam_stub.ExposureTimeAbs.set_call_count == 0
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_unreadable_range_refuses_the_write() -> None:
+    try:
+        cam_stub = FakeCamera()
+        cam_stub.ExposureTimeAbs = RaisingRangeFeature(
+            initial_value=300_000.0, increment=1.0,
+        )
+        install_fake_vmbpy([cam_stub])
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(
+            trigger_hz=1.0, access_mode="full", exposure_us=250_000.0,
+        )
+        raised = None
+        try:
+            cam.connect()
+        except Exception as exc:  # noqa: BLE001
+            raised = exc
+        assert raised is not None, "wrote exposure without validating range"
+        assert "range" in str(raised), str(raised)
+        assert cam_stub.ExposureTimeAbs.set_call_count == 0
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_unreadable_range_lookup_refuses_the_write() -> None:
+    """A raising accessor *lookup* fails closed like a raising call."""
+    try:
+        cam_stub = FakeCamera()
+        cam_stub.ExposureTimeAbs = RaisingRangeLookupFeature(
+            initial_value=300_000.0, increment=1.0,
+        )
+        install_fake_vmbpy([cam_stub])
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(
+            trigger_hz=1.0, access_mode="full", exposure_us=250_000.0,
+        )
+        raised = None
+        try:
+            cam.connect()
+        except Exception as exc:  # noqa: BLE001
+            raised = exc
+        assert raised is not None, (
+            "a raising get_range lookup was treated as an absent accessor "
+            "and range validation was skipped"
+        )
+        assert "range" in str(raised), str(raised)
+        assert cam_stub.ExposureTimeAbs.set_call_count == 0
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_unreadable_frame_rate_limit_refuses_and_restores() -> None:
+    """Verification attempted and failed is not verification skipped."""
+    try:
+        cam_stub = FakeCamera()
+        cam_stub.ExposureTimeAbs = ClampingFeature(
+            initial_value=300_000.0,
+            value_range=(100.0, 900_000.0),
+            increment=1.0,
+        )
+        # Honour the first write so the readback passes and the limit check
+        # is actually reached.
+        cam_stub.ExposureTimeAbs.CLAMPED_TO = 250_000.0
+        cam_stub.AcquisitionFrameRateLimit = RaisingLimitFeature(
+            initial_value=3.3323,
+        )
+        install_fake_vmbpy([cam_stub])
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(
+            trigger_hz=1.0, access_mode="full", exposure_us=250_000.0,
+        )
+        raised = None
+        try:
+            cam.connect()
+        except Exception as exc:  # noqa: BLE001
+            raised = exc
+        assert raised is not None, "accepted an unverifiable frame-rate limit"
+        assert "AcquisitionFrameRateLimit" in str(raised), str(raised)
+        assert cam_stub.ExposureTimeAbs.set_values == [250_000.0, 300_000.0], (
+            f"exposure not restored: {cam_stub.ExposureTimeAbs.set_values}"
+        )
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_absent_optional_features_still_allow_a_valid_write() -> None:
+    """Absence is tolerated where unreadability is not — the other half."""
+    try:
+        cam_stub = FakeCamera()
+        # No ExposureAuto, no AcquisitionFrameRateLimit, no increment.
+        del cam_stub.ExposureAuto
+        del cam_stub.AcquisitionFrameRateLimit
+        cam_stub.ExposureTimeAbs = FakeSettable(
+            initial_value=300_000.0, value_range=(100.0, 900_000.0),
+        )
+        install_fake_vmbpy([cam_stub])
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(
+            trigger_hz=1.0, access_mode="full", exposure_us=250_000.0,
+        )
+        cam.connect()
+        assert cam_stub.ExposureTimeAbs.value == 250_000.0
+        assert cam.exposure_us == 250_000.0
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
 TESTS = [
     test_palette_intensity_in_all_channels,
     test_palette_bgw_output,
@@ -1084,6 +1383,14 @@ TESTS = [
     test_manual_exposure_requires_auto_off,
     test_manual_exposure_rejects_unsafe_trigger_pair_at_init,
     test_cached_vimba_frame_is_not_delivered_twice,
+    test_exposure_lookup_survives_a_raising_feature_and_falls_back,
+    test_out_of_range_exposure_fails_without_writing,
+    test_bad_readback_restores_the_original_exposure,
+    test_unreadable_exposure_auto_refuses_the_write,
+    test_unreadable_range_refuses_the_write,
+    test_unreadable_range_lookup_refuses_the_write,
+    test_unreadable_frame_rate_limit_refuses_and_restores,
+    test_absent_optional_features_still_allow_a_valid_write,
     test_read_mode_frame_not_yet_error_includes_read_context,
     test_full_mode_get_access_mode_raise_propagates,
     test_read_mode_get_access_mode_raise_is_logged_and_skipped,

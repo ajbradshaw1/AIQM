@@ -29,6 +29,24 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 
+class _Unreadable:
+    """Sentinel: a camera feature exists but its accessor raised.
+
+    Distinct from ``None``, which means the accessor is absent. A feature
+    that cannot be read is not a feature that is absent — the first leaves
+    a safety precondition unproven, the second means there is no
+    precondition to prove. See VmbCamera._optional_feature_call.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<unreadable>"
+
+
+UNREADABLE = _Unreadable()
+
+
 class FrameNotYetAvailableError(RuntimeError):
     """The driver is connected and streaming but has not yet produced a frame.
 
@@ -265,11 +283,64 @@ class VmbCamera(RheedCamera):
         )
 
     @staticmethod
-    def _optional_feature_call(feature, method_name: str, default=None):
-        method = getattr(feature, method_name, None)
+    def _optional_feature(owner, name: str):
+        """Look a feature up without trusting getattr's AttributeError guard.
+
+        vmbpy resolves features through ``__getattr__`` against the camera's
+        live GenICam node map, so an unavailable or unreadable node can
+        surface as an SDK-specific error rather than the AttributeError that
+        ``getattr(..., default)`` suppresses. That matters for the exposure
+        candidate search: an unguarded lookup of ``ExposureTimeAbs`` on a
+        camera that raises for it would abort before ``ExposureTime`` — the
+        valid alternative — is ever tried, and the camera would be reported
+        as having no exposure feature at all.
+        """
+        try:
+            return getattr(owner, name, None)
+        except Exception:  # noqa: BLE001 — vmbpy raises SDK-specific types
+            log.debug("Feature lookup for %r raised; treating as absent", name)
+            return None
+
+    @classmethod
+    def _optional_feature_call(cls, feature, method_name: str, default=None):
+        """Call an optional read accessor, distinguishing absent from broken.
+
+        Three outcomes, and the difference between the last two is the whole
+        point:
+
+        * accessor missing        -> ``default``    (feature cannot answer)
+        * accessor raised         -> ``UNREADABLE`` (feature exists, read failed)
+        * otherwise               -> the value
+
+        Collapsing "raised" into "absent" would silently skip validation that
+        the caller believes it performed. A camera whose ``ExposureAuto`` read
+        fails is not a camera without auto-exposure — it is a camera whose
+        auto-exposure state is unknown, and a manual write must refuse rather
+        than race the auto loop. Safety-critical callers therefore check for
+        ``UNREADABLE`` explicitly; only genuinely optional reads (increment)
+        treat it as absent.
+
+        The post-``set`` readback deliberately does **not** go through here —
+        there a raising ``get()`` must propagate so the original exposure is
+        restored.
+        """
+        # Deliberately NOT routed through _optional_feature: that helper maps
+        # a raising lookup to "absent", which is right for the camera-level
+        # candidate search (fall through to the next spelling) and wrong
+        # here. An accessor whose lookup raises is a failed read, not a
+        # missing one, and must fail closed like any other failed read.
+        try:
+            method = getattr(feature, method_name, None)
+        except Exception:  # noqa: BLE001 — vmbpy raises SDK-specific types
+            log.debug("Accessor lookup %r raised; unreadable", method_name)
+            return UNREADABLE
         if method is None or not callable(method):
             return default
-        return method()
+        try:
+            return method()
+        except Exception:  # noqa: BLE001 — vmbpy raises SDK-specific types
+            log.debug("Feature accessor %r raised; unreadable", method_name)
+            return UNREADABLE
 
     def _configure_exposure(self, cam, mode: str) -> None:
         """Read or apply the requested manual exposure before streaming.
@@ -283,7 +354,7 @@ class VmbCamera(RheedCamera):
         feature_name = next(
             (
                 name for name in self._EXPOSURE_FEATURE_CANDIDATES
-                if getattr(cam, name, None) is not None
+                if self._optional_feature(cam, name) is not None
             ),
             None,
         )
@@ -295,7 +366,7 @@ class VmbCamera(RheedCamera):
                 "ExposureTime exists on this camera"
             )
 
-        feature = getattr(cam, feature_name)
+        feature = self._optional_feature(cam, feature_name)
         current = self._optional_feature_call(feature, "get", None)
         if isinstance(current, (int, float)):
             self._exposure_us = float(current)
@@ -308,8 +379,17 @@ class VmbCamera(RheedCamera):
                 "to pretend the requested exposure was applied in Read mode."
             )
 
-        auto_feature = getattr(cam, "ExposureAuto", None)
+        # A camera with no ExposureAuto feature has no auto loop to race, so
+        # absence is tolerated. A feature that is present but unreadable
+        # leaves the precondition unproven and must refuse.
+        auto_feature = self._optional_feature(cam, "ExposureAuto")
         auto_value = self._optional_feature_call(auto_feature, "get", None)
+        if auto_value is UNREADABLE:
+            raise RuntimeError(
+                "Manual exposure requires ExposureAuto=Off, but ExposureAuto "
+                "could not be read — refusing rather than racing a possibly "
+                "active auto-exposure loop"
+            )
         if auto_value is not None and not str(auto_value).lower().endswith("off"):
             raise RuntimeError(
                 f"Manual exposure requires ExposureAuto=Off; camera reports "
@@ -330,6 +410,11 @@ class VmbCamera(RheedCamera):
 
         requested = float(self._requested_exposure_us)
         bounds = self._optional_feature_call(feature, "get_range", None)
+        if bounds is UNREADABLE:
+            raise RuntimeError(
+                f"{feature_name} exposes a range that could not be read — "
+                "refusing the write rather than skipping range validation"
+            )
         if isinstance(bounds, tuple) and len(bounds) == 2:
             low, high = float(bounds[0]), float(bounds[1])
             if not low <= requested <= high:
@@ -339,7 +424,11 @@ class VmbCamera(RheedCamera):
                 )
         else:
             low = 0.0
+        # Increment is genuinely optional: without it the write proceeds
+        # unquantized and the readback check catches any device rounding.
         increment = self._optional_feature_call(feature, "get_increment", None)
+        if increment is UNREADABLE:
+            increment = None
         if isinstance(increment, (int, float)) and increment > 0:
             requested = low + round((requested - low) / increment) * increment
 
@@ -359,8 +448,19 @@ class VmbCamera(RheedCamera):
                     f"match requested {requested:.0f} us"
                 )
 
-            limit_feature = getattr(cam, "AcquisitionFrameRateLimit", None)
+            limit_feature = self._optional_feature(
+                cam, "AcquisitionFrameRateLimit",
+            )
             limit = self._optional_feature_call(limit_feature, "get", None)
+            # Absent limit feature -> rely on the conservative 90%-of-period
+            # ceiling enforced at construction. Present but unreadable is a
+            # failed verification, not an absent one: refuse and restore.
+            if limit is UNREADABLE:
+                raise RuntimeError(
+                    "AcquisitionFrameRateLimit could not be read, so the "
+                    f"{self._trigger_hz:.3f} Hz trigger rate cannot be "
+                    "confirmed achievable at the requested exposure"
+                )
             if isinstance(limit, (int, float)) and self._trigger_hz > float(limit):
                 raise RuntimeError(
                     f"Camera reports a {float(limit):.3f} fps limit at "
