@@ -12,7 +12,7 @@ Test frames are small (32x32) so encodes finish in <1 s. Real growth
 frames are 656x492 but nothing here depends on that.
 
 Run:
-    QT_QPA_PLATFORM=offscreen python scripts/test_movie_export.py
+    python -m pytest -q tests/test_movie_export.py
 """
 from __future__ import annotations
 
@@ -198,6 +198,24 @@ class ExportMovieTests(unittest.TestCase):
             out_path = Path(tmp) / DEFAULT_MOVIE_NAME
             self.assertEqual(exporter.export_movie(out_path), "")
 
+    def test_cancel_removes_partial_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir, _ = _make_session_with_frames(tmp, n_frames=10)
+            exporter = MovieExporter(session_dir)
+            out_path = session_dir / DEFAULT_MOVIE_NAME
+            calls = 0
+
+            def cancel_after_first_frame() -> bool:
+                nonlocal calls
+                calls += 1
+                return calls > 1
+
+            self.assertEqual(
+                exporter.export_movie(out_path, cancel_cb=cancel_after_first_frame),
+                "",
+            )
+            self.assertFalse(out_path.exists())
+
 
 @unittest.skipUnless(HAS_CV2, "cv2 not installed")
 class MovieExportWorkerTests(unittest.TestCase):
@@ -205,7 +223,9 @@ class MovieExportWorkerTests(unittest.TestCase):
 
     def test_worker_encodes_and_emits_finished_ok(self):
         with tempfile.TemporaryDirectory() as tmp:
-            session_dir, _ = _make_session_with_frames(tmp, n_frames=6)
+            # Use enough tiny frames to clear the exporter's >1 KiB sanity
+            # threshold across supported OpenCV/FFmpeg wheel builds.
+            session_dir, _ = _make_session_with_frames(tmp, n_frames=10)
             exporter = MovieExporter(session_dir)
             out_path = session_dir / DEFAULT_MOVIE_NAME
             worker = MovieExportWorker(exporter, out_path)
@@ -225,9 +245,9 @@ class MovieExportWorkerTests(unittest.TestCase):
 
             self.assertEqual(len(captured_path), 1)
             self.assertEqual(captured_path[0], str(out_path))
-            # 6 progress events fired (one per frame), delivered via
+            # 10 progress events fired (one per frame), delivered via
             # queued connection to the main thread.
-            self.assertGreaterEqual(len(captured_progress), 6)
+            self.assertGreaterEqual(len(captured_progress), 10)
 
     def test_worker_empty_session_emits_failed(self):
         with tempfile.TemporaryDirectory() as tmp:

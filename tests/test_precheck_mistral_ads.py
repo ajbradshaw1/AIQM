@@ -6,7 +6,7 @@ evidence bundle writer, and CLI argparse. Does NOT touch pyads / real
 TwinCAT — that's on-Bulbasaur territory.
 
 Runs on Mac dev env with no lab dependencies:
-    PYTHONPATH=. python scripts/test_precheck_mistral_ads.py
+    python -m pytest -q tests/test_precheck_mistral_ads.py
 """
 from __future__ import annotations
 

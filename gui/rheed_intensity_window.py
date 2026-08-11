@@ -50,7 +50,7 @@ class RheedIntensityWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def on_camera_state(self, state: CameraState) -> None:
-        if not state.connected or math.isnan(state.intensity):
+        if not state.connected or not state.valid or math.isnan(state.intensity):
             return
         now = time.monotonic()
         if self._t0 is None:

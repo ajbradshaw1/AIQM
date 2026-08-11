@@ -4,6 +4,18 @@ PyQt6 software stack for the Yang Group's AI-driven MBE growth experiments.
 Two distinct applications live in this repository — see
 [Two GUI Applications](#two-gui-applications) below.
 
+## Installation
+
+For Bulbasaur's live Windows acquisition environment:
+
+```powershell
+python -m pip install -r requirements-windows-live.txt
+```
+
+The overlay pins the WGC package used by `screengrab`. Vimba direct-camera
+mode still requires the vendor Vimba X SDK and its matching `vmbpy` package.
+Classifier2 has its own PyTorch/checkpoint installation requirements.
+
 ## Two GUI Applications
 
 | Product | Launch | Window title | Tabs |
@@ -29,6 +41,8 @@ Automates the growth-log workflow during an MBE growth session:
   buffers around detected reconstruction transitions.
 - **Commit log** — timestamped grower notes via the LOG ENTRY button
   capture the moment with the current sensor snapshot.
+- **RHEED view/QC log** — explicit gun-alignment boundaries, camera-history
+  resets, and one-frame acquisition-QC labels without deleting frames.
 - **Growth-log export** — auto-generated `growth_log.xlsx` at session
   end.
 
@@ -39,13 +53,16 @@ Configure in the Session tab → Config form before ARM/START:
 
 | Channel | Modes |
 |---|---|
-| RHEED camera | `direct` (vmbpy SDK, bypasses kSA) / `screengrab` (reads kSA Live Video window) / `dummy` |
+| RHEED camera | `vimba` (vmbpy SDK, bypasses kSA) / `screengrab` (WGC reads detached kSA Live Video by HWND) / `screengrab_mss` (legacy diagnostic) / `dummy` |
 | Pyrometer | `modbus` (Modbus RTU on COM4) / `exactus` (binary serial alternative) / `screengrab` (TemperaSure UI) / `dummy` |
 | EvapControl | `elog` (parses EvapControl's own `.elo` binary log directly) / `screengrab` (OCR) / `dummy` |
 | MISTRAL | `screengrab` (OCR) / `dummy` — no direct-read driver yet |
 
-Direct-read modes avoid the window-positioning fragility of screengrab
-(grower can't multitask during a growth) and the OCR mis-read failure mode.
+WGC RHEED capture is independent of desktop z-order, so covering or moving
+the detached Live Video window does not contaminate the image. It fails closed
+if the window is minimized, closed, or stops producing frames. OCR screengrabs
+remain monitor-pixel based; direct-read modes also avoid their positioning and
+OCR mis-read failure modes.
 
 ### Output per session
 
@@ -54,9 +71,16 @@ Each session creates a directory containing:
 - `commit_log.csv` — grower LOG ENTRY records with attached frame paths
 - `auto_capture_events.csv` — detector-flagged events with buffer dumps
 - `heartbeat_log.csv` — periodic-capture index
+- `rheed_view_events.csv` — alignment, visual generation, history, and
+  explicit `qc_pass`/`qc_reject` events
 - `frames/` — RHEED frame PNGs (heartbeat + per-event buffers)
 - `session_metadata.json`
 - `growth_log.xlsx` (auto-generated on STOP)
+
+Rows that save a RHEED image include `capture_backend`, `captured_at_utc`,
+`capture_sequence`, `frame_age_ms`, and `source_hwnd`. The capture timestamp
+is when Python received the WGC frame, not the camera exposure time; it supports
+software alignment but is not hardware synchronization.
 
 ## Repository layout
 

@@ -10,8 +10,7 @@ matplotlib), so they cover the data layer even if matplotlib is
 absent. Chart tests are the only ones that pull matplotlib in.
 
 Run:
-    QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg \\
-        python scripts/test_growth_profile_explorer.py
+    python -m pytest -q tests/test_growth_profile_explorer.py
 """
 from __future__ import annotations
 

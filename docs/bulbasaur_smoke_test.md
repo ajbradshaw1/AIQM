@@ -1,133 +1,58 @@
-# Bulbasaur Smoke Test — Auto-Capture Pre-Lab Checklist
+# Bulbasaur WGC Smoke Test
 
-Goal: confirm the auto-capture wiring (commits `4d408c2` → `9dcdc67` on
-`v2-evap-mistral-capture`) launches and works correctly on Bulbasaur
-*before* taking it into the lab on a real OMBE growth.
+This procedure validates only read-only RHEED capture on the O-MBE
+workstation. Do not change instrument setpoints, unplug interfaces, or power
+down equipment. Keep complete images and long logs under `logs/`, outside Git.
 
-## 1. Pull the latest
+## Install and Launch
 
 ```powershell
-cd C:\path\to\AIQM-Software-Hardware-Integration
 git fetch origin
-git checkout v2-evap-mistral-capture
-git pull
-```
-
-Expected: 5 commits since your last pull (auto-capture wiring, offline
-script, buffer-mean mode, kSA crop, OCR debug).
-
-## 2. Confirm dependencies
-
-```powershell
-.\.venv\Scripts\python.exe -m pip list | Select-String -Pattern "Pillow|matplotlib|pytesseract|mss|PyQt6"
-```
-
-Expected: all five present. If `Pillow` or `matplotlib` is missing on
-Bulbasaur, install them (they were added to the Mac venv in this
-session but Bulbasaur may need separate install):
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install Pillow matplotlib
-```
-
-## 3. GUI launch — does it boot?
-
-```powershell
+git switch codex/wgc-rheed-live-test
+.\.venv\Scripts\python.exe -m pip install -r requirements-windows-live.txt
+.\.venv\Scripts\python.exe -m pip show windows-capture-interpreter
 .\.venv\Scripts\python.exe growth_monitor_app.py
 ```
 
-Verify visually:
-- [ ] Window opens with title "OMBE Growth Monitor"
-- [ ] Top bar: Grower / Sample ID / ARM-START-STOP buttons present
-- [ ] Monitor tab: value displays + RHEED area + recon sliders + LOG ENTRY button
-- [ ] **NEW:** thin gray footer at bottom of Monitor tab reads `Auto-capture: idle`
-- [ ] No crashes / Python tracebacks in the console
+The package version must be exactly `1.5.1`. In kSA 400, detach **Live
+Video** into its own top-level window. Select camera mode `screengrab`; use
+`screengrab_mss` only for an explicit legacy diagnostic. WGC never silently
+falls back to MSS.
 
-If the GUI doesn't launch, check the console output for the actual error.
+## Interactive Checks
 
-## 4. Dummy session — does the auto-capture path run?
+- ARM and confirm RHEED frames update with backend `wgc`.
+- Cover Live Video completely, move it, and change foreground/background.
+  The covering window must never appear in captured frames.
+- Verify the 75 px top / 30 px bottom crop at the active Windows DPI.
+- Minimize Live Video. Within one camera-worker cycle the displayed frame,
+  classifier source, heartbeat, Live Equalizer save, and auto-capture image
+  writes must stop.
+- Restore the window and click **Reconnect RHEED**. A fresh timestamp must
+  arrive, and its sequence must exceed the last pre-failure sequence.
+- Repeat by closing and reopening Live Video.
 
-In the GUI:
-- [ ] Set `Camera mode` = `dummy` (Session tab → Config)
-- [ ] Set `Pyrometer mode` = `dummy`
-- [ ] Set `MISTRAL mode` = `dummy`
-- [ ] Set `Evap Control mode` = `dummy`
-- [ ] Enter a Grower name and Sample ID like `smoketest_apr27`
-- [ ] Click **ARM**
-- [ ] Click **START**
-- [ ] Wait ~30 seconds. The footer should change from `idle` to
-      `Auto-capture: armed (warmup)` then to
-      `Auto-capture: armed | score: X.XX | events: 0`.
-- [ ] Click **STOP**
+## Evidence Probe and One-Hour Run
 
-Verify the session output:
-- [ ] Look in `logs/growths/growth_smoketest_apr27_<timestamp>/`
-- [ ] File exists: `auto_capture_events.csv` (header at minimum, may be empty
-      since dummy frames are random — events possible but not guaranteed)
-- [ ] Existing files still produced: `sensor_log.csv`, `commit_log.csv`,
-      `session_metadata.json`, `growth_log.xlsx`
-
-If any of those are missing or there's a crash on STOP, capture the
-console output and report back.
-
-## 5. kSA window crop verification (when kSA is open)
-
-The crop defaults to 75 px from the top, 30 px from the bottom of the
-captured kSA window. These values were measured from a screenshot
-(`/Users/aj/Downloads/entry_002_154807.png`); they may need adjustment
-if Bulbasaur's kSA has a different DPI / theme.
-
-To verify:
-- [ ] Start a session with `Camera mode = screengrab` while kSA Live Video
-      is open
-- [ ] After a few seconds, look at the saved frame in
-      `logs/growths/<session>/frames/` (LOG ENTRY to save one). The frame
-      should contain *only* the green RHEED image — no title bar, no
-      "Exposure: 999.00 ms" status text at the bottom.
-
-If the crop is wrong:
-- Too much cropped → set `chrome_top_px=60` (or similar) in
-  `gui/workers.py` where `ScreenGrabCamera` is instantiated
-- Bottom status text still visible → increase `chrome_bottom_px`
-- Or disable cropping entirely with `crop_chrome=False`
-
-## 6. OCR debug crop-save
-
-Run the GUI with the debug env var:
+Use the durable launcher because these commands exceed ten seconds:
 
 ```powershell
-$env:AIQM_OCR_DEBUG="1"
-.\.venv\Scripts\python.exe growth_monitor_app.py
+$job = 'C:\O-MBE-validation\jobs\wgc-one-hour'
+$raw = 'C:\O-MBE-validation\raw\wgc-one-hour'
+& 'C:\Users\Yao_Yufan\.codex\skills\managed-long-jobs\scripts\managed_job.cmd' launch --output-dir $job --cwd $PWD -- .\.venv\Scripts\python.exe scripts\test_wgc_capture.py --duration-s 3600 --interval 1 --save-every 10 --output-dir $raw
+& 'C:\Users\Yao_Yufan\.codex\skills\managed-long-jobs\scripts\managed_job.cmd' status --output-dir $job
 ```
 
-(After this session, unset with `Remove-Item Env:AIQM_OCR_DEBUG`.)
+Poll status about every 30 seconds. The probe always writes `summary.json`,
+`capture_metadata.json`, and `sha256_manifest.json`, including on capture
+failure or operator interruption. It records native OS thread counts so Rust
+WGC threads are included.
 
-Verify:
-- [ ] After arming with screengrab modes for MISTRAL + Evap, check that
-      `logs/ocr_debug/` exists and is filling with `mistral_*.png` and
-      `evap_*.png` files (one per OCR call, ~1/sec each)
-- [ ] Console shows `[OCR mistral] '...'` and `[OCR evap] '...'` lines
-- [ ] Saved crops should *visually contain* the V/I or pressure value —
-      this is the corpus for offline preprocessing experiments
+For an unobstructed WGC/MSS comparison, add `--compare-mss`. For the offline
+RHEED signal branch, run a separate corpus with `--save-every 1`; sparse
+one-in-ten images do not represent the GUI detector cadence.
 
-## 7. Stress test (optional, ~5 min)
-
-Run a 5-minute dummy session and confirm:
-- [ ] No memory leak (GUI memory stays roughly flat in Task Manager)
-- [ ] No crashes
-- [ ] `auto_capture_events.csv` has a reasonable count (hopefully 0–3 events
-      for dummy random data; lots of events would mean the threshold is
-      too low for synthetic noise — expected, not a bug)
-- [ ] All CSV files close cleanly on STOP (no "file in use" errors)
-
-## What to report back
-
-If anything fails:
-1. The exact step that failed
-2. Console output / traceback
-3. Whether the GUI crashed or just behaved wrong
-4. A screenshot of the failure if visual
-
-If everything passes:
-- "Smoke test passed, ready for lab" — and we're clear to plan the
-  first OMBE session.
+Record results in
+`docs/validation/ombe_wgc_live_test_template.md`. Commit only the completed
+Markdown report, small summaries, the hash manifest, and a few representative
+crops.

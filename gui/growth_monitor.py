@@ -61,7 +61,7 @@ def _default_save_path() -> str:
 
 from gui.state import (
     CameraState, ClassifierState, EvapControlState, MistralState,
-    PowerSupplyState, PyrometerState,
+    PowerSupplyState, PyrometerState, RheedQcState, WeakPrimaryShadowState,
 )
 from gui.widgets import ValueDisplay
 from gui.growth_logger import (
@@ -306,6 +306,7 @@ class GrowthMonitor(QWidget):
 
     arm_requested = pyqtSignal()
     disarm_requested = pyqtSignal()
+    reconnect_rheed_requested = pyqtSignal()
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     open_rheed_trend_requested = pyqtSignal()
@@ -323,6 +324,10 @@ class GrowthMonitor(QWidget):
     # three-concern architecture (capture / mark / label) that this signal
     # sits inside.
     manual_event_requested = pyqtSignal(dict)
+    # Structured acquisition-side RHEED events. Payload contains
+    # ``event_type``, ``elapsed_s``, and the optional queued note. GrowthApp
+    # owns the state machine and attaches the current frame/sensor snapshot.
+    rheed_view_event_requested = pyqtSignal(dict)
     export_requested = pyqtSignal()
     # Grower asks for an mp4 time-lapse of the session's heartbeat frames
     # (Jul 10 2026 workstream #5). GrowthApp handles the file dialog +
@@ -353,6 +358,14 @@ class GrowthMonitor(QWidget):
         # can pair the classifier's smoothed_percent with the grower's slider
         # values in every log entry (for Yuxin's #1 active-comparisons signal).
         self._latest_classifier: Optional[ClassifierState] = None
+        self._blind_labeling_mode = False
+        self._live_classifier_widgets: list[QWidget] = []
+        self._classifier_output_exposure_recorded = False
+        self._equalizer_output_exposure_recorded = False
+        # Operator-known acquisition state is independent of classifier
+        # Bad/OOD predictions and remains available when live classification
+        # is disabled.
+        self._rheed_qc_state = RheedQcState()
         # Grower-correction UI state (Jul 6 2026 — deliverable #5):
         #   _correction_active — True while the ✎ Correct toggle is on.
         #   _adjusting — reentrancy guard for Pattern A proportional
@@ -509,6 +522,7 @@ class GrowthMonitor(QWidget):
         recon_header.setContentsMargins(0, 0, 0, 0)
         recon_label = QLabel("Live Classification (%)")
         recon_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        self._live_classifier_widgets.append(recon_label)
         recon_header.addWidget(recon_label, 1)
 
         self.correction_btn = QPushButton("✎ Correct")
@@ -530,6 +544,7 @@ class GrowthMonitor(QWidget):
             "correction is a fresh decision."
         )
         self.correction_btn.clicked.connect(self._on_correction_toggled)
+        self._live_classifier_widgets.append(self.correction_btn)
         recon_header.addWidget(self.correction_btn, 0)
         right.addLayout(recon_header)
 
@@ -543,6 +558,7 @@ class GrowthMonitor(QWidget):
             lbl = QLabel(name)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet("font-size: 11px;")
+            self._live_classifier_widgets.append(lbl)
             col.addWidget(lbl)
             slider = QSlider(Qt.Orientation.Vertical)
             slider.setRange(0, 100)
@@ -552,10 +568,12 @@ class GrowthMonitor(QWidget):
             slider.setTickInterval(25)
             slider.setFixedHeight(90)
             slider.setStyleSheet(self._SLIDER_STYLE_LIVE)
+            self._live_classifier_widgets.append(slider)
             col.addWidget(slider, alignment=Qt.AlignmentFlag.AlignHCenter)
             val_lbl = QLabel("0%")
             val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             val_lbl.setStyleSheet("font-size: 11px; color: #0d9488;")
+            self._live_classifier_widgets.append(val_lbl)
             col.addWidget(val_lbl)
             recon_grid.addLayout(col)
             self._recon_sliders[name] = slider
@@ -578,7 +596,25 @@ class GrowthMonitor(QWidget):
         self._recon_status_label = QLabel("Classifier idle")
         self._recon_status_label.setStyleSheet("font-size: 10px; color: #888;")
         self._recon_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._live_classifier_widgets.append(self._recon_status_label)
         right.addWidget(self._recon_status_label)
+
+        self._weak_primary_shadow_label = QLabel(
+            "Brightness-robust 4-output shadow: disabled"
+        )
+        self._weak_primary_shadow_label.setWordWrap(True)
+        self._weak_primary_shadow_label.setStyleSheet(
+            "font-size: 10px; color: #a78bfa; border: 1px solid #4c1d95; "
+            "padding: 4px;"
+        )
+        self._weak_primary_shadow_label.setToolTip(
+            "Diagnostic only: all_extreme brightness-robust conditional "
+            "probabilities for Twinned, c(6x2), rt13 and HTR. The shadow "
+            "panel has no 1x1 column and is never used for advice, control, "
+            "or automatic capture."
+        )
+        self._live_classifier_widgets.append(self._weak_primary_shadow_label)
+        right.addWidget(self._weak_primary_shadow_label)
 
         # Note input
         note_label = QLabel("Log Entry")
@@ -634,6 +670,79 @@ class GrowthMonitor(QWidget):
         action_row.addWidget(self.commit_btn, 1)
 
         right.addLayout(action_row)
+
+        # Operator RHEED adjustments are lightweight timestamped annotations.
+        # They never pause acquisition or change classifier/Equalizer state.
+        # Explicit QC PASS/REJECT remains a separate one-frame label.
+        rheed_qc_row = QHBoxLayout()
+        rheed_qc_row.setSpacing(6)
+        self.rheed_qc_status_label = QLabel(
+            "RHEED: adjustment events ready"
+        )
+        self.rheed_qc_status_label.setWordWrap(True)
+        self.rheed_qc_status_label.setStyleSheet(
+            "color: #22c55e; font-size: 11px; padding: 3px 6px;"
+        )
+        rheed_qc_row.addWidget(self.rheed_qc_status_label, 1)
+
+        self.rheed_direction_btn = QPushButton("Sample direction")
+        self.rheed_direction_btn.setToolTip(
+            "Record that the sample direction was adjusted. This does not "
+            "change the view segment or pause any acquisition."
+        )
+        self.rheed_direction_btn.clicked.connect(
+            lambda: self._emit_rheed_adjustment_event(
+                "sample_direction_adjusted"
+            ),
+        )
+        rheed_qc_row.addWidget(self.rheed_direction_btn, 0)
+
+        self.rheed_current_btn = QPushButton("RHEED current")
+        self.rheed_current_btn.setToolTip(
+            "Record a RHEED beam-current adjustment without changing state."
+        )
+        self.rheed_current_btn.clicked.connect(
+            lambda: self._emit_rheed_adjustment_event(
+                "rheed_current_adjusted"
+            ),
+        )
+        rheed_qc_row.addWidget(self.rheed_current_btn, 0)
+
+        self.rheed_energy_btn = QPushButton("RHEED energy")
+        self.rheed_energy_btn.setToolTip(
+            "Record a RHEED beam-energy adjustment without changing state."
+        )
+        self.rheed_energy_btn.clicked.connect(
+            lambda: self._emit_rheed_adjustment_event(
+                "rheed_energy_adjusted"
+            ),
+        )
+        rheed_qc_row.addWidget(self.rheed_energy_btn, 0)
+
+        self.rheed_qc_pass_btn = QPushButton("QC PASS")
+        self.rheed_qc_pass_btn.setToolTip(
+            "Explicitly label the current full RHEED image as globally usable. "
+            "This is not a reconstruction label."
+        )
+        self.rheed_qc_pass_btn.clicked.connect(
+            lambda: self._emit_rheed_qc_label("qc_pass"),
+        )
+        rheed_qc_row.addWidget(self.rheed_qc_pass_btn, 0)
+
+        self.rheed_qc_reject_btn = QPushButton("QC REJECT")
+        self.rheed_qc_reject_btn.setToolTip(
+            "Explicitly label the current full RHEED image as unusable for "
+            "classification. Add a reason in the note box when possible."
+        )
+        self.rheed_qc_reject_btn.setStyleSheet(
+            "QPushButton { background-color: #7f1d1d; color: white; }"
+            "QPushButton:disabled { background-color: #222; color: #666; }"
+        )
+        self.rheed_qc_reject_btn.clicked.connect(
+            lambda: self._emit_rheed_qc_label("qc_reject"),
+        )
+        rheed_qc_row.addWidget(self.rheed_qc_reject_btn, 0)
+        right.addLayout(rheed_qc_row)
 
         # Keyboard shortcuts
         self._save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
@@ -702,6 +811,23 @@ class GrowthMonitor(QWidget):
             self._on_pause_auto_capture_clicked,
         )
         footer.addWidget(self.pause_auto_capture_btn, 0)
+
+        self.reconnect_rheed_btn = QPushButton("Reconnect RHEED")
+        self.reconnect_rheed_btn.setToolTip(
+            "Retry the detached kSA Live Video WGC connection without "
+            "ending the current growth session."
+        )
+        self.reconnect_rheed_btn.setStyleSheet(
+            "QPushButton { background-color: #7f1d1d; color: white; "
+            "border: 1px solid #ef4444; padding: 2px 10px; "
+            "font-size: 11px; font-weight: bold; }"
+            "QPushButton:disabled { background-color: #3f1d1d; color: #888; }"
+        )
+        self.reconnect_rheed_btn.clicked.connect(
+            self.reconnect_rheed_requested,
+        )
+        self.reconnect_rheed_btn.hide()
+        footer.addWidget(self.reconnect_rheed_btn, 0)
 
         _btn_style = (
             "QPushButton { background-color: #1a1a1a; color: #94a3b8; "
@@ -843,6 +969,9 @@ class GrowthMonitor(QWidget):
         self.events_tab.unreviewed_count_changed.connect(
             self._on_unreviewed_count_changed,
         )
+        self.events_tab.blind_labeling_mode_changed.connect(
+            self._on_blind_labeling_mode_changed,
+        )
 
     def _on_unreviewed_count_changed(self, count: int):
         """Repaint the Events tab header with the unreviewed-event count.
@@ -869,7 +998,37 @@ class GrowthMonitor(QWidget):
         surfaces (Events, Scrubber) with admin (Session) at the end.
         """
         self.live_equalizer_tab = LiveEqualizerTab()
-        self._tabs.addTab(self.live_equalizer_tab, "Live Equalizer")
+        self._live_equalizer_tab_index = self._tabs.addTab(
+            self.live_equalizer_tab, "Live Equalizer",
+        )
+        self._tabs.currentChanged.connect(self._on_main_tab_changed)
+
+    def _on_blind_labeling_mode_changed(self, active: bool) -> None:
+        """Suppress every in-app model/Equalizer answer during blind review."""
+        self._blind_labeling_mode = bool(active)
+        for widget in self._live_classifier_widgets:
+            widget.setVisible(not active)
+            if active:
+                widget.setEnabled(False)
+        if hasattr(self, "_live_equalizer_tab_index"):
+            self._tabs.setTabEnabled(self._live_equalizer_tab_index, not active)
+        if active and hasattr(self, "live_equalizer_tab"):
+            self.live_equalizer_tab.update_classifier_state(None)
+        elif not active:
+            self._apply_state()
+
+    def _on_main_tab_changed(self, index: int) -> None:
+        """Persist that the operator opened the model-assisted Equalizer UI."""
+        if (
+            self._blind_labeling_mode
+            or self._equalizer_output_exposure_recorded
+            or index != getattr(self, "_live_equalizer_tab_index", -1)
+        ):
+            return
+        recorded = self.events_tab.record_equalizer_output_visible()
+        self._equalizer_output_exposure_recorded = bool(recorded)
+        if not recorded:
+            self._tabs.setCurrentIndex(self._events_tab_index)
 
     # ----- Scrubber Tab ----------------------------------------------------
 
@@ -973,7 +1132,41 @@ class GrowthMonitor(QWidget):
         config_form.addRow("Filename prefix:", self.config_prefix)
 
         self.config_camera_mode = QComboBox()
-        self.config_camera_mode.addItems(["dummy", "screengrab", "vimba"])
+        self.config_camera_mode.addItems(
+            [
+                "dummy",
+                "dummy_c6x2",
+                "dummy_tw",
+                "dummy_rt13_tilted",
+                "screengrab",
+                "screengrab_mss",
+                "vimba",
+            ]
+        )
+        self.config_camera_mode.setItemData(
+            0,
+            "Stable experimental STO 1x1 frame for Equalizer alignment.",
+        )
+        self.config_camera_mode.setItemData(
+            1,
+            "Stable experimental STO c(6x2) frame for Equalizer alignment.",
+        )
+        self.config_camera_mode.setItemData(
+            2,
+            "Stable experimental STO Twinned (2x1) frame for alignment.",
+        )
+        self.config_camera_mode.setItemData(
+            3,
+            "RT13_20 experimental frame rotated 15 degrees for alignment demo.",
+        )
+        self.config_camera_mode.setItemData(
+            4,
+            "Windows Graphics Capture of the detached kSA Live Video window.",
+        )
+        self.config_camera_mode.setItemData(
+            5,
+            "Legacy monitor-pixel capture; overlays can contaminate frames.",
+        )
         config_form.addRow("Camera mode:", self.config_camera_mode)
 
         self.config_pyrometer_mode = QComboBox()
@@ -1037,6 +1230,17 @@ class GrowthMonitor(QWidget):
         self.config_classifier_enabled.setChecked(True)
         config_form.addRow("Live classifier:", self.config_classifier_enabled)
 
+        self.config_weak_primary_shadow_enabled = QCheckBox()
+        self.config_weak_primary_shadow_enabled.setChecked(False)
+        self.config_weak_primary_shadow_enabled.setToolTip(
+            "Run the complete 36-head all_extreme four-output ensemble as a "
+            "non-actionable diagnostic. It has no 1x1 output, never replaces "
+            "the deployed classifier, and does not drive automatic capture."
+        )
+        config_form.addRow(
+            "4-output shadow:", self.config_weak_primary_shadow_enabled,
+        )
+
         # Snapshot of the tooltips each config widget carries in its
         # "unlocked" (idle) state. When the session transitions to armed
         # or running, _set_config_widgets_enabled overwrites the tooltip
@@ -1058,6 +1262,7 @@ class GrowthMonitor(QWidget):
                 self.config_mistral_mode,
                 self.config_evap_mode,
                 self.config_classifier_enabled,
+                self.config_weak_primary_shadow_enabled,
             )
         }
 
@@ -1239,6 +1444,8 @@ class GrowthMonitor(QWidget):
             # Config panel: stays locked — session in progress.
             self._set_config_widgets_enabled(False)
 
+        self._update_rheed_qc_controls()
+
     def set_state(self, new_state: str):
         self._state = new_state
         self._apply_state()
@@ -1301,11 +1508,11 @@ class GrowthMonitor(QWidget):
 
     def update_mistral_state(self, state: MistralState):
         self._latest_mistral = state
-        if state.connected and state.v_actual is not None:
+        if state.connected and state.valid and state.v_actual is not None:
             self.voltage_display.set_value(state.v_actual)
         else:
             self.voltage_display.value.setText("---")
-        if state.connected and state.i_actual is not None:
+        if state.connected and state.valid and state.i_actual is not None:
             self.current_display.set_value(state.i_actual)
         else:
             self.current_display.value.setText("---")
@@ -1321,7 +1528,11 @@ class GrowthMonitor(QWidget):
         # A follow-up will add a dedicated MISTRAL PSU-state panel that
         # shows all `ads_cell_count` cells by number, decoupled from
         # _cell_displays.
-        if state.ads_cells and self._cfg.ads_display_confirmed:
+        if (
+            state.valid
+            and state.ads_cells
+            and self._cfg.ads_display_confirmed
+        ):
             for i, display in enumerate(self._cell_displays, start=1):
                 if i > self._cfg.ads_cell_count:
                     break   # skip cells that don't exist on this PLC
@@ -1336,7 +1547,7 @@ class GrowthMonitor(QWidget):
         # Monitor-tab pressure display (kept as-is; both screengrab
         # and elog modes source it).
         p = state.chamber_pressure_mbar
-        if state.connected and p is not None:
+        if state.connected and state.valid and p is not None:
             self.pressure_display.value.setText(f"{p:.2e} mbar")
         else:
             self.pressure_display.value.setText("---")
@@ -1350,7 +1561,7 @@ class GrowthMonitor(QWidget):
         # "screengrab" mode which only sources pressure, or "elog"
         # mode with the variable absent from the elog schema), same
         # "---".
-        connected = state.connected
+        connected = state.connected and state.valid
         # Cell displays: driven by EvapControlState fields when state_field
         # is set (O-MBE elog path). Ch-MBE cells have state_field=None and
         # are updated from ads_cells in update_mistral_state() instead.
@@ -1401,7 +1612,21 @@ class GrowthMonitor(QWidget):
             # not yet be constructed (early camera state emit races GUI
             # build).
             if hasattr(self, "live_equalizer_tab"):
-                self.live_equalizer_tab.update_camera_frame(state.frame)
+                self.live_equalizer_tab.update_camera_frame(
+                    state.frame, self.get_current_capture_metadata(),
+                )
+        else:
+            # Never retain a previously valid frame after a capture error.
+            # Heartbeat/manual/classifier paths all read this cache, so
+            # clearing it is the fail-closed boundary for image logging.
+            self._current_frame = None
+            self.rheed_image_label.clear()
+            self.rheed_image_label.setText("RHEED unavailable")
+            if hasattr(self, "live_equalizer_tab"):
+                self.live_equalizer_tab.clear_camera_frame(
+                    "RHEED unavailable",
+                )
+        self._update_rheed_qc_controls()
 
     # Value-label style presets. Kept as constants so update_classifier_state
     # doesn't allocate style strings per emission (5-slider hot path at 2 Hz).
@@ -1485,6 +1710,25 @@ class GrowthMonitor(QWidget):
         # Cache first — needed for _on_commit's classifier_recon_* fields
         # even when correction mode has suppressed slider updates.
         self._latest_classifier = state
+
+        if self._blind_labeling_mode:
+            return
+        if (
+            state.has_confident_data
+            and not state.loading
+            and not state.error
+            and not self._classifier_output_exposure_recorded
+        ):
+            recorded = self.events_tab.record_classifier_output_visible()
+            self._classifier_output_exposure_recorded = bool(recorded)
+            if not recorded:
+                self._recon_status_label.setText(
+                    "Classifier result withheld: audit state write failed"
+                )
+                self._recon_status_label.setStyleSheet(
+                    self._RECON_STATUS_STYLE_ERROR
+                )
+                return
 
         if self._correction_active:
             return
@@ -1602,11 +1846,85 @@ class GrowthMonitor(QWidget):
         if hasattr(self, "live_equalizer_tab"):
             self.live_equalizer_tab.update_classifier_state(state)
 
+    def update_weak_primary_shadow_state(
+        self, state: WeakPrimaryShadowState,
+    ) -> None:
+        """Render four outputs without feeding the five-class UI."""
+        if self._blind_labeling_mode:
+            return
+        if state.loading:
+            text = "Brightness-robust 4-output shadow: loading 36 heads…"
+        elif state.error:
+            text = f"Brightness-robust 4-output shadow unavailable: {state.error}"
+        elif state.last_frame_number < 0:
+            text = (
+                "Brightness-robust 4-output shadow "
+                f"({state.brightness_policy}, {state.checkpoint_count}/36); "
+                "waiting for frame"
+            )
+        else:
+            probability = state.conditional_probabilities
+            breakdown = " · ".join(
+                f"{name} {100.0 * float(probability.get(name, 0.0)):.1f}%"
+                for name in ("Twinned (2x1)", "c(6x2)", "rt13xrt13", "HTR")
+            )
+            text = (
+                "SHADOW ONLY · all_extreme · no 1x1 · " + breakdown
+                + f" · disagreement {state.checkpoint_disagreement:.3f}"
+                + f" · {state.inference_ms:.0f} ms"
+            )
+            if not self._classifier_output_exposure_recorded:
+                recorded = self.events_tab.record_classifier_output_visible()
+                self._classifier_output_exposure_recorded = bool(recorded)
+        self._weak_primary_shadow_label.setText(text)
+
+    def set_weak_primary_shadow_disabled(self) -> None:
+        self._weak_primary_shadow_label.setText(
+            "Brightness-robust 4-output shadow: disabled"
+        )
+
     # Documented for the tooltip messages so they stay in sync with
     # ClassifierWorker.OOD_QUALITY_THRESHOLD; hard-coded because the
     # worker class-level constant isn't cheap to reach from a Qt slot
     # hot-path. Update both if the threshold moves.
     _OOD_TOOLTIP_THRESHOLD = 0.3
+
+    def set_classifier_capture_unavailable(self, message: str) -> None:
+        """Invalidate classifier output when its RHEED source is lost."""
+        state = ClassifierState(
+            loading=False,
+            ready=False,
+            error=message,
+        )
+        self.update_classifier_state(state)
+        if hasattr(self, "live_equalizer_tab"):
+            self.live_equalizer_tab.update_classifier_state(None)
+
+    def reset_classifier_session_state(
+        self,
+        message: str = "Waiting for current-session classifier data…",
+    ) -> None:
+        """Clear cached scores at a START/STOP generation boundary."""
+        self._latest_classifier = None
+        self._classifier_output_exposure_recorded = False
+        self._equalizer_output_exposure_recorded = False
+        if self._correction_active:
+            self.correction_btn.setChecked(False)
+            self._on_correction_toggled(False)
+        for name, slider in self._recon_sliders.items():
+            slider.blockSignals(True)
+            slider.setValue(0)
+            slider.blockSignals(False)
+            self._recon_value_labels[name].setText("—")
+            self._recon_value_labels[name].setStyleSheet(
+                self._RECON_VAL_STYLE_PLACEHOLDER
+            )
+        self._recon_status_label.setText(message)
+        self._recon_status_label.setStyleSheet(
+            self._RECON_STATUS_STYLE_INFO
+        )
+        if hasattr(self, "live_equalizer_tab"):
+            self.live_equalizer_tab.update_classifier_state(None)
 
     def set_classifier_disabled(self):
         """Show explicit "disabled" state — invoked from GrowthApp._on_arm
@@ -1869,6 +2187,110 @@ class GrowthMonitor(QWidget):
         finally:
             self._adjusting = False
 
+    # ----- RHEED acquisition QC -------------------------------------------
+
+    def _emit_rheed_adjustment_event(self, event_type: str):
+        """Record an operator adjustment without changing acquisition state."""
+        buttons = {
+            "sample_direction_adjusted": self.rheed_direction_btn,
+            "rheed_current_adjusted": self.rheed_current_btn,
+            "rheed_energy_adjusted": self.rheed_energy_btn,
+        }
+        button = buttons.get(event_type)
+        if button is None or not button.isEnabled():
+            return
+        self.rheed_view_event_requested.emit({
+            "event_type": event_type,
+            "elapsed_s": self.get_elapsed_seconds(),
+            "note": self.log_note_input.toPlainText().strip(),
+        })
+
+    def _emit_rheed_qc_label(self, event_type: str):
+        """Request a one-frame explicit global QC PASS/REJECT label."""
+        button = (
+            self.rheed_qc_pass_btn
+            if event_type == "qc_pass"
+            else self.rheed_qc_reject_btn
+        )
+        if not button.isEnabled():
+            return
+        self.rheed_view_event_requested.emit({
+            "event_type": event_type,
+            "elapsed_s": self.get_elapsed_seconds(),
+            "note": self.log_note_input.toPlainText().strip(),
+        })
+
+    def update_rheed_qc_state(self, state: RheedQcState) -> None:
+        """Render the app-owned acquisition state without inferring labels."""
+        self._rheed_qc_state = state
+        if hasattr(self, "live_equalizer_tab"):
+            self.live_equalizer_tab.update_qc_context(
+                session_active=state.session_active,
+                view_segment_id=state.view_segment_id,
+                visual_history_generation=state.visual_history_generation,
+                gun_aligned=state.gun_aligned,
+                realignment_active=state.realignment_active,
+            )
+        self._update_rheed_qc_controls()
+
+    def _update_rheed_qc_controls(self) -> None:
+        """Refresh status text, transition label, and state-dependent gates."""
+        if not hasattr(self, "rheed_direction_btn"):
+            return
+
+        state = self._rheed_qc_state
+        running = self._state == "running" and state.session_active
+        fresh_frame = self._has_fresh_rheed_frame()
+
+        if state.history_required <= 0:
+            status = (
+                f"RHEED: segment {state.view_segment_id}; "
+                "single-frame classifier only, temporal advice not deployed"
+            )
+            color = "#d97706"
+        elif state.history_ready:
+            status = (
+                f"RHEED: segment {state.view_segment_id} ready "
+                f"({state.history_frame_count}/{state.history_required})"
+            )
+            color = "#22c55e"
+        else:
+            status = (
+                f"RHEED: segment {state.view_segment_id} warming "
+                f"({state.history_frame_count}/{state.history_required}); "
+                "temporal advice not actionable"
+            )
+            color = "#d97706"
+
+        self.rheed_qc_status_label.setText(status)
+        self.rheed_qc_status_label.setStyleSheet(
+            f"color: {color}; font-size: 11px; padding: 3px 6px;"
+        )
+        self.rheed_direction_btn.setEnabled(running)
+        self.rheed_current_btn.setEnabled(running)
+        self.rheed_energy_btn.setEnabled(running)
+        self.rheed_qc_reject_btn.setEnabled(running and fresh_frame)
+        self.rheed_qc_pass_btn.setEnabled(
+            running
+            and fresh_frame
+        )
+
+    def _has_fresh_rheed_frame(self) -> bool:
+        """Return whether operator labels can bind to a current capture."""
+        metadata = self.get_current_capture_metadata()
+        if self._current_frame is None or not metadata:
+            return False
+        try:
+            age_ms = float(metadata.get("frame_age_ms", float("inf")))
+        except (TypeError, ValueError):
+            return False
+        if not np.isfinite(age_ms) or age_ms > 3000.0:
+            return False
+        return bool(
+            int(metadata.get("capture_sequence") or 0) > 0
+            or metadata.get("captured_at_utc")
+        )
+
     # ----- MARK EVENT handler ---------------------------------------------
 
     def _on_mark_event(self):
@@ -2045,7 +2467,16 @@ class GrowthMonitor(QWidget):
         # correction is on, these are the grower's belief — Pattern A
         # keeps their sum at 100.
         for name, slider in self._recon_sliders.items():
-            entry[f"recon_{name}"] = str(slider.value())
+            entry[f"recon_{name}"] = (
+                str(slider.value()) if self._correction_active else ""
+            )
+        entry["recon_label_source"] = (
+            "human_corrected" if self._correction_active else ""
+        )
+        entry["recon_labeler"] = (
+            self.grower_input.text().strip() if self._correction_active else ""
+        )
+        entry["recon_confidence"] = ""
 
         # Snapshot the classifier's live prediction alongside the
         # grower's slider values so every log entry becomes a paired
@@ -2077,11 +2508,33 @@ class GrowthMonitor(QWidget):
                 entry["classifier_status"] = "LOADING"
             else:
                 entry["classifier_status"] = "OK"
+            entry["classifier_input_mode"] = (
+                self._latest_classifier.model_input_mode
+            )
+            entry["classifier_prediction_actionable"] = str(
+                bool(self._latest_classifier.prediction_actionable)
+            )
+            entry["classifier_view_segment_id"] = (
+                ""
+                if self._latest_classifier.view_segment_id is None
+                else str(self._latest_classifier.view_segment_id)
+            )
+            entry["classifier_visual_history_generation"] = str(
+                self._latest_classifier.visual_history_generation
+            )
+            entry["classifier_history_ready"] = str(
+                bool(self._latest_classifier.history_ready)
+            )
         else:
             for name in self._recon_sliders:
                 entry[f"classifier_recon_{name}"] = ""
             entry["grower_corrected"] = ""
             entry["classifier_status"] = "DISABLED"
+            entry["classifier_input_mode"] = ""
+            entry["classifier_prediction_actionable"] = ""
+            entry["classifier_view_segment_id"] = ""
+            entry["classifier_visual_history_generation"] = ""
+            entry["classifier_history_ready"] = ""
 
         # Add row to Growth Notes table
         self._add_growth_note_row(entry)
@@ -2189,6 +2642,44 @@ class GrowthMonitor(QWidget):
     def get_current_frame(self) -> Optional[np.ndarray]:
         return self._current_frame
 
+    def get_current_capture_metadata(self) -> dict:
+        """Return provenance paired with the currently cached camera frame."""
+        import time
+
+        state = self._latest_camera
+        if (
+            state is None or state.frame is None
+            or not state.connected or not state.valid
+        ):
+            return {}
+        frame_age_ms = state.frame_age_ms
+        if state.captured_monotonic_ns:
+            frame_age_ms = max(
+                0.0,
+                (time.perf_counter_ns() - state.captured_monotonic_ns)
+                / 1_000_000,
+            )
+        return {
+            "capture_backend": state.capture_backend,
+            "capture_geometry_id": state.capture_geometry_id,
+            "captured_at_utc": state.captured_at_utc,
+            # Internal-only source clock. CSV writers intentionally ignore it;
+            # Equalizer snapshots use it to recompute age at Save time.
+            "captured_monotonic_ns": state.captured_monotonic_ns,
+            "capture_sequence": state.capture_sequence,
+            "frame_age_ms": frame_age_ms,
+            "source_hwnd": state.source_hwnd,
+            "camera_width": state.width,
+            "camera_height": state.height,
+            "session_active": self._rheed_qc_state.session_active,
+            "view_segment_id": self._rheed_qc_state.view_segment_id,
+            "visual_history_generation": (
+                self._rheed_qc_state.visual_history_generation
+            ),
+            "gun_aligned": self._rheed_qc_state.gun_aligned,
+            "realignment_active": self._rheed_qc_state.realignment_active,
+        }
+
     def set_auto_capture_status(self, text: str):
         """Update the auto-capture footer label. Called by GrowthApp on
         each evaluated frame and on session start/stop."""
@@ -2224,6 +2715,20 @@ class GrowthMonitor(QWidget):
             self.pause_auto_capture_btn.setChecked(False)
             self.pause_auto_capture_btn.setText("Pause Auto-Capture")
 
+    def is_auto_capture_paused(self) -> bool:
+        """Return the grower's explicit auto-capture pause selection."""
+        return self.pause_auto_capture_btn.isChecked()
+
+    def set_rheed_reconnect_required(
+        self, required: bool, *, in_progress: bool = False,
+    ) -> None:
+        """Show the in-session manual WGC reconnect control when needed."""
+        self.reconnect_rheed_btn.setVisible(required or in_progress)
+        self.reconnect_rheed_btn.setEnabled(required and not in_progress)
+        self.reconnect_rheed_btn.setText(
+            "Reconnecting RHEED\u2026" if in_progress else "Reconnect RHEED"
+        )
+
     def _on_pause_auto_capture_clicked(self):
         """Toggle handler — flips label text and emits the request signal."""
         paused = self.pause_auto_capture_btn.isChecked()
@@ -2244,6 +2749,9 @@ class GrowthMonitor(QWidget):
             "mistral_mode": mistral_mode,
             "evap_mode": self.config_evap_mode.currentText(),
             "pyrometer_mode": self.config_pyrometer_mode.currentText(),
+            "weak_primary_shadow_enabled": (
+                self.config_weak_primary_shadow_enabled.isChecked()
+            ),
         }
         # ADS profile provenance — record the exact PLC endpoint + cell
         # count that produced this session's sensor log. Makes old CSVs
@@ -2276,6 +2784,7 @@ class GrowthMonitor(QWidget):
             d.value.setText("---")
         self.plasma_group.setVisible(False)
         self.rheed_image_label.clear()
+        self.reconnect_rheed_btn.hide()
         self.auto_capture_label.setText("Auto-capture: idle")
         # Force grower correction off before wiping slider state so the
         # next session starts on a clean classifier-driven display, and
@@ -2300,6 +2809,7 @@ class GrowthMonitor(QWidget):
             )
         self._recon_status_label.setText("Classifier idle")
         self._recon_status_label.setStyleSheet(self._RECON_STATUS_STYLE_INFO)
+        self.set_weak_primary_shadow_disabled()
         self._start_time = None
         self._current_frame = None
         self._latest_psu = None
@@ -2308,6 +2818,8 @@ class GrowthMonitor(QWidget):
         self._latest_mistral = None
         self._latest_evap = None
         self._latest_classifier = None
+        self._rheed_qc_state = RheedQcState()
+        self._update_rheed_qc_controls()
         # Manual-event counter belongs to the session — a fresh session
         # gets a fresh count. Footer label re-renders to "Manual events: 0"
         # so the next armed session starts on a clean slate.

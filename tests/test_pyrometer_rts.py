@@ -71,6 +71,13 @@ class ConfigSurfaceTests(unittest.TestCase):
         """
         self.assertEqual(CHALCOGENIDE_MBE.pyrometer_port, "COM3")
 
+    def test_chmbe_uses_verified_raw_false_configuration(self):
+        """Ch-MBE COM3 answered raw Modbus with RTS de-asserted."""
+        self.assertEqual(CHALCOGENIDE_MBE.pyrometer_port, "COM3")
+        self.assertEqual(CHALCOGENIDE_MBE.pyrometer_baudrate, 115200)
+        self.assertIs(CHALCOGENIDE_MBE.pyrometer_rts, False)
+        self.assertEqual(CHALCOGENIDE_MBE.pyrometer_modbus_backend, "raw_serial")
+
     def test_setting_is_per_chamber_not_module_global(self):
         """A future edit must not collapse this into one shared constant."""
         self.assertIn("pyrometer_rts", MBESystemConfig.__dataclass_fields__)
@@ -168,5 +175,7 @@ class WorkerWiringTests(unittest.TestCase):
 
         sensor = PyrometerWorker(
             mode="modbus", rts=CHALCOGENIDE_MBE.pyrometer_rts,
+            modbus_backend=CHALCOGENIDE_MBE.pyrometer_modbus_backend,
         )._create_sensor()
         self.assertIs(sensor._rts, False)
+        self.assertEqual(sensor._backend, "raw_serial")

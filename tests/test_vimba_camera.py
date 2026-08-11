@@ -12,7 +12,7 @@ produce mock frames on demand, and record which methods were called
 so tests can assert on the driver's behavior.
 
 Usage:
-    PYTHONPATH=. python scripts/test_vimba_camera.py
+    python -m pytest -q tests/test_vimba_camera.py
 
 Exits 0 on success; raises AssertionError with a diagnostic on failure.
 

@@ -44,6 +44,13 @@ class ClassifierBridge:
         Confidence threshold for "bad image" detection (default 0.6).
     """
 
+    # The deployed ``evaluate.classify_winrate`` path accepts exactly one
+    # image.  Do not advertise a temporal warm-up until a bridge actually
+    # supplies the 32-frame tensor expected by the experimental GRU.
+    input_mode = "single_frame"
+    uses_temporal_history = False
+    history_frames_required = 0
+
     def __init__(
         self,
         ai_repo_root: str | Path,

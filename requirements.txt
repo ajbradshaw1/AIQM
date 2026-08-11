@@ -1,9 +1,14 @@
 PyQt6
+pyqtgraph
 numpy
 matplotlib
 scikit-learn
+scipy
 Pillow
+pytest
 opencv-python
+timm==1.0.28
+requests
 pyvisa
 pytesseract
 pymodbus

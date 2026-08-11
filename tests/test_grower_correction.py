@@ -11,7 +11,7 @@ Instantiates a real ``GrowthMonitor`` widget so the tests exercise the
 same signal/slot wiring that ships. ClassifierState dataclasses are
 built directly — no worker, no torch, no model file.
 
-Run: ``python scripts/test_grower_correction.py`` or under pytest.
+Run: ``python -m pytest -q tests/test_grower_correction.py``.
 """
 from __future__ import annotations
 
@@ -76,6 +76,13 @@ def _make_classifier_state(
         has_confident_data=has_confident_data,
         inference_ms=13.0,
         model_version=model_version,
+        view_segment_id=3,
+        visual_history_generation=7,
+        gun_aligned=True,
+        history_required=0,
+        history_ready=False,
+        prediction_actionable=False,
+        model_input_mode="single_frame",
     )
 
 
@@ -422,6 +429,45 @@ class UpdateClassifierStateGuardTests(unittest.TestCase):
         )
 
 
+class BlindLabelingSuppressionTests(unittest.TestCase):
+    """Model-derived answers are unavailable during audited blind review."""
+
+    def setUp(self):
+        self.monitor = GrowthMonitor()
+
+    def tearDown(self):
+        self.monitor.deleteLater()
+
+    def test_blind_mode_hides_classifier_and_disables_live_equalizer(self):
+        self.monitor._on_blind_labeling_mode_changed(True)
+        self.assertTrue(all(
+            widget.isHidden()
+            for widget in self.monitor._live_classifier_widgets
+        ))
+        self.assertFalse(self.monitor._tabs.isTabEnabled(
+            self.monitor._live_equalizer_tab_index,
+        ))
+
+        self.monitor._on_blind_labeling_mode_changed(False)
+        self.assertTrue(all(
+            not widget.isHidden()
+            for widget in self.monitor._live_classifier_widgets
+        ))
+        self.assertTrue(self.monitor._tabs.isTabEnabled(
+            self.monitor._live_equalizer_tab_index,
+        ))
+
+    def test_visible_classifier_output_is_audited_once(self):
+        with unittest.mock.patch.object(
+            self.monitor.events_tab,
+            "record_classifier_output_visible",
+        ) as record:
+            state = _make_classifier_state()
+            self.monitor.update_classifier_state(state)
+            self.monitor.update_classifier_state(state)
+        record.assert_called_once_with()
+
+
 # ---------------------------------------------------------------------------
 # _on_commit enrichment + auto-lock
 # ---------------------------------------------------------------------------
@@ -453,14 +499,21 @@ class CommitTests(unittest.TestCase):
         # Sliders mirror classifier (correction off) → recon_* ==
         # classifier_recon_*.
         for name in RECON_LABELS:
-            self.assertEqual(
-                entry[f"recon_{name}"],
-                entry[f"classifier_recon_{name}"],
-                f"mismatch on {name}",
-            )
+            self.assertEqual(entry[f"recon_{name}"], "")
+            self.assertNotEqual(entry[f"classifier_recon_{name}"], "")
         self.assertEqual(entry["grower_corrected"], "False")
+        self.assertEqual(entry["recon_label_source"], "")
         # Fully-ready classifier → OK.
         self.assertEqual(entry["classifier_status"], "OK")
+        self.assertEqual(entry["classifier_input_mode"], "single_frame")
+        self.assertEqual(
+            entry["classifier_prediction_actionable"], "False"
+        )
+        self.assertEqual(entry["classifier_view_segment_id"], "3")
+        self.assertEqual(
+            entry["classifier_visual_history_generation"], "7"
+        )
+        self.assertEqual(entry["classifier_history_ready"], "False")
 
     def test_commit_correction_on_captures_both(self):
         # Classifier says Twinned; grower disagrees and says 1x1.
@@ -490,6 +543,7 @@ class CommitTests(unittest.TestCase):
             self.assertEqual(int(entry[f"classifier_recon_{name}"]), v)
 
         self.assertEqual(entry["grower_corrected"], "True")
+        self.assertEqual(entry["recon_label_source"], "human_corrected")
         # Classifier still OK — correction mode doesn't change lifecycle.
         self.assertEqual(entry["classifier_status"], "OK")
 
@@ -503,6 +557,8 @@ class CommitTests(unittest.TestCase):
         self.assertEqual(entry["grower_corrected"], "")
         # DISABLED because _latest_classifier is None.
         self.assertEqual(entry["classifier_status"], "DISABLED")
+        self.assertEqual(entry["classifier_input_mode"], "")
+        self.assertEqual(entry["classifier_prediction_actionable"], "")
 
     def test_commit_classifier_status_error(self):
         # Worker emits an error state (e.g. missing best_model.pth).

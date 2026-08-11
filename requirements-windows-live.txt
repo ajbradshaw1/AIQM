@@ -1,0 +1,14 @@
+-r requirements.txt
+
+# Production RHEED window capture. Keep pinned until a newer wheel is
+# validated against the detached kSA Live Video window on Bulbasaur.
+windows-capture-interpreter==1.5.1
+
+# Existing Windows instrument and logging paths.
+mss
+pywinauto
+pytesseract
+pyserial
+pymodbus
+openpyxl
+opencv-python

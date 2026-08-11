@@ -19,6 +19,8 @@ import logging
 import math
 import os
 import re
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -84,6 +86,8 @@ class EvapControl:
         self._bbox = bbox
         self._hwnd = 0
         self._connected = False
+        self._last_capture_at_utc: Optional[str] = None
+        self._last_capture_monotonic_ns: Optional[int] = None
 
     def connect(self) -> None:
         self._hwnd = find_window(self._substring)
@@ -96,6 +100,8 @@ class EvapControl:
 
     def read(self) -> dict[str, Optional[float]]:
         result: dict[str, Optional[float]] = {"chamber_pressure_mbar": None}
+        self._last_capture_at_utc = None
+        self._last_capture_monotonic_ns = None
         if not self._connected or not self._hwnd:
             return result
 
@@ -103,6 +109,10 @@ class EvapControl:
             frame = capture_window(self._hwnd)
         except Exception:
             return result
+        self._last_capture_monotonic_ns = time.perf_counter_ns()
+        self._last_capture_at_utc = datetime.now(timezone.utc).isoformat(
+            timespec="milliseconds",
+        )
 
         if self._bbox is not None:
             bbox = self._bbox
@@ -138,6 +148,15 @@ class EvapControl:
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def last_capture_at_utc(self) -> Optional[str]:
+        """Python time immediately after the OCR source screenshot."""
+        return self._last_capture_at_utc
+
+    @property
+    def last_capture_monotonic_ns(self) -> Optional[int]:
+        return self._last_capture_monotonic_ns
 
     @property
     def hwnd(self) -> int:
@@ -245,6 +264,7 @@ class ElogReader:
         # invalidated when the log file rotates (re-checked).
         self._schema_present: Optional[list[str]] = None
         self._schema_log_path: Optional[Path] = None
+        self._last_source_at_utc: Optional[str] = None
 
     def connect(self) -> None:
         # Resolve once at connect to fail fast — re-resolves at each read
@@ -282,6 +302,9 @@ class ElogReader:
         result: dict[str, Optional[float]] = {
             out_key: None for out_key in self._var_map.values()
         }
+        # This property describes only the current read attempt. Clearing it
+        # prevents a failed tail read from being paired with an older record.
+        self._last_source_at_utc = None
         if not self._connected:
             return result
 
@@ -323,10 +346,13 @@ class ElogReader:
 
         # Batch read all present vars in one open+schema+tail.
         try:
-            _ts, var_values = latest_record(path, self._schema_present)
+            source_ts, var_values = latest_record(path, self._schema_present)
         except (KeyError, OSError, ValueError) as exc:
             log.debug("ElogReader read failed: %s", exc)
             return result
+        if source_ts.tzinfo is None:
+            source_ts = source_ts.replace(tzinfo=timezone.utc)
+        self._last_source_at_utc = source_ts.astimezone(timezone.utc).isoformat()
 
         for elog_name, (val, _fmt) in var_values.items():
             out_key = self._var_map[elog_name]
@@ -353,11 +379,17 @@ class ElogReader:
         self._last_log_path = None
         self._schema_present = None
         self._schema_log_path = None
+        self._last_source_at_utc = None
         self._connected = False
 
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def last_source_at_utc(self) -> Optional[str]:
+        """UTC timestamp embedded in the last successfully read Elog record."""
+        return self._last_source_at_utc
 
     @property
     def hwnd(self) -> int:

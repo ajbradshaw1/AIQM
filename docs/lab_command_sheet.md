@@ -48,15 +48,15 @@ New-Item -ItemType Directory -Path $evidence -Force
 Runnable from Mac dev env too — no lab hardware needed:
 
 ```powershell
-python scripts\test_vimba_camera.py                    # VmbCamera + Read fallback
-python scripts\test_pyrometer_physical_debug.py        # pyrometer debug script
-python scripts\test_pyrometer_worker.py                # pyrometer worker + has_valid_reading
-python scripts\test_pyrometer_downstream_consumers.py  # log_sensors / heartbeat / commit
-python scripts\test_pyrometer_modbus_discover.py       # baud × device_id discovery sweep
-python scripts\test_pyrometer_active_exactus_query.py  # Report Version query (non-state-changing)
-python scripts\test_pyrometer_force_modbus.py          # expert-gated mode-switch write
-python scripts\test_precheck_mistral_ads.py            # MISTRAL ADS precheck
-python scripts\test_audit_session_sensor_log.py        # sensor-log audit
+python -m pytest -q tests\test_vimba_camera.py                    # VmbCamera + Read fallback
+python -m pytest -q tests\test_pyrometer_physical_debug.py        # pyrometer debug logic
+python -m pytest -q tests\test_pyrometer_worker.py                # worker + has_valid_reading
+python -m pytest -q tests\test_pyrometer_downstream_consumers.py  # log_sensors / heartbeat / commit
+python -m pytest -q tests\test_pyrometer_modbus_discover.py       # mocked discovery sweep
+python -m pytest -q tests\test_pyrometer_active_exactus_query.py  # mocked Report Version query
+python -m pytest -q tests\test_pyrometer_force_modbus.py          # expert-gate logic only
+python -m pytest -q tests\test_precheck_mistral_ads.py            # offline ADS precheck logic
+python -m pytest -q tests\test_audit_session_sensor_log.py        # sensor-log audit
 ```
 
 All should exit `0` with green summaries. Failures here mean something

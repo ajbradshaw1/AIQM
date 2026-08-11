@@ -12,7 +12,7 @@ camera hardware. Signal emissions verified via direct assertion on
 frame_captured's spy list.
 
 Run:
-    QT_QPA_PLATFORM=offscreen python scripts/test_auto_capture.py
+    python -m pytest -q tests/test_auto_capture.py
 """
 from __future__ import annotations
 
@@ -259,8 +259,28 @@ class AutoCaptureEngineTests(unittest.TestCase):
         # Mutate the returned array
         frames[0][:] = 999.0
         # Internal buffer should still hold the original values
-        internal = engine._context_buffer[0]
+        internal, _metadata = engine._context_buffer[0]
         self.assertNotEqual(float(internal[0, 0]), 999.0)
+
+    def test_capture_metadata_is_paired_and_copied(self):
+        engine = AutoCaptureEngine(warmup_frames=1)
+        engine.enabled = True
+        metadata = {
+            "capture_backend": "wgc",
+            "capture_sequence": 123,
+            "captured_at_utc": "2026-07-27T12:00:00.000Z",
+        }
+        engine.evaluate(_frame(fill=42.0, seed=2), metadata)
+        metadata["capture_sequence"] = 999
+
+        captures = engine.get_recent_captures()
+        self.assertEqual(captures[0][1]["capture_sequence"], 123)
+        captures[0][0][:] = 999.0
+        captures[0][1]["capture_sequence"] = -1
+
+        internal_frame, internal_metadata = engine._context_buffer[0]
+        self.assertNotEqual(float(internal_frame[0, 0]), 999.0)
+        self.assertEqual(internal_metadata["capture_sequence"], 123)
 
     def test_adaptive_threshold_uses_baseline_after_warmup(self):
         # With adaptive_sigma set + baseline filled, effective_threshold

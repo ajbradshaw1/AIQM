@@ -13,7 +13,7 @@ choices for the flag itself.
 
 No hardware. Runs from Mac dev env:
 
-    PYTHONPATH=. python scripts/test_precheck_direct_camera.py
+    python -m pytest -q tests/test_precheck_direct_camera.py
 """
 from __future__ import annotations
 

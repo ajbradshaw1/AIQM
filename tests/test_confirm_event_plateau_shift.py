@@ -12,7 +12,7 @@ Exercise the plateau-shift confirmation test on synthetic data:
 
 Run from repo root:
 
-    python scripts/test_confirm_event_plateau_shift.py
+    python -m pytest -q tests/test_confirm_event_plateau_shift.py
 """
 from __future__ import annotations
 

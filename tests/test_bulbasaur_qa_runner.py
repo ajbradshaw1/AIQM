@@ -6,7 +6,7 @@ silently break if refactored: queue integrity, report format,
 resume parser.
 
 Run:
-    PYTHONPATH=. python scripts/test_bulbasaur_qa_runner.py
+    python -m pytest -q tests/test_bulbasaur_qa_runner.py
 """
 from __future__ import annotations
 

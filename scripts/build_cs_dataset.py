@@ -258,12 +258,24 @@ def catalog_session(session_dir: Path) -> Optional[CatalogEntry]:
         return None
 
     duration_s = _duration_seconds(artifacts)
+    rheed_view_rows = 0
+    rheed_view_path = session_dir / "rheed_view_events.csv"
+    try:
+        if rheed_view_path.exists():
+            with rheed_view_path.open(
+                newline="", encoding="utf-8"
+            ) as stream:
+                rheed_view_rows = sum(1 for _ in csv.DictReader(stream))
+    except (OSError, UnicodeError, csv.Error):
+        return None
+
     counts = {
         "sensor_rows": len(artifacts.sensor_rows),
         "commit_rows": len(artifacts.commit_rows),
         "auto_capture_rows": len(artifacts.auto_capture_rows),
         "manual_event_rows": len(artifacts.manual_event_rows),
         "heartbeat_rows": len(artifacts.heartbeat_rows),
+        "rheed_view_event_rows": rheed_view_rows,
         "event_label_rows": len(artifacts.event_label_rows),
     }
 
@@ -325,6 +337,7 @@ _BUNDLED_CSVS: list[str] = [
     "commit_log.csv",
     "auto_capture_events.csv",
     "manual_events.csv",
+    "rheed_view_events.csv",
     "heartbeat_log.csv",
     "events_labels.csv",
     "live_labels.csv",
@@ -337,8 +350,9 @@ def _frame_paths_for_session(session_dir: Path) -> list[Path]:
     """Collect every RHEED frame path referenced by any CSV in a session.
 
     Reads commit_log.csv:frame_path, manual_events.csv:frame_path,
-    heartbeat_log.csv:frame_path, live_labels.csv:frame_path and
-    auto_capture_events.csv:buffer_dir/*.bmp. Deduplicates.
+    rheed_view_events.csv:frame_path, heartbeat_log.csv:frame_path,
+    live_labels.csv:frame_path and auto_capture_events.csv:buffer_dir/*.bmp.
+    Deduplicates.
     Returns absolute paths that still exist on disk.
     """
     seen: set[Path] = set()
@@ -356,6 +370,7 @@ def _frame_paths_for_session(session_dir: Path) -> list[Path]:
     for csv_name, col in (
         ("commit_log.csv", "frame_path"),
         ("manual_events.csv", "frame_path"),
+        ("rheed_view_events.csv", "frame_path"),
         ("heartbeat_log.csv", "frame_path"),
         ("live_labels.csv", "frame_path"),
     ):
@@ -544,7 +559,8 @@ def _bundle_readme(entries: list[CatalogEntry],
         "catalog.json           # index of all included sessions",
         "schema.md              # full column reference",
         "sessions/<session_id>/",
-        "  {sensor,commit,auto_capture,manual,heartbeat,events_labels,live_labels}.csv",
+        "  {sensor,commit,auto_capture,manual,heartbeat,rheed_view_events}.csv",
+        "  {events_labels,live_labels,set_change_events}.csv",
         "  session_meta.json    # counts + quality flags",
     ]
     if include_frames:

@@ -90,6 +90,7 @@ class MovieExporter:
         output_path: Path,
         fps: int = DEFAULT_FPS,
         progress_cb: Optional[Callable[[int, int], None]] = None,
+        cancel_cb: Optional[Callable[[], bool]] = None,
     ) -> str:
         """Encode heartbeat frames into an mp4 at the requested fps.
 
@@ -131,9 +132,13 @@ class MovieExporter:
             return ""
 
         total = len(paths)
+        cancelled = False
         written = 0
         try:
             for i, path in enumerate(paths, 1):
+                if cancel_cb is not None and cancel_cb():
+                    cancelled = True
+                    break
                 frame = cv2.imread(path)
                 if frame is not None:
                     # Frames from continuous capture should all be the
@@ -149,6 +154,13 @@ class MovieExporter:
                     progress_cb(i, total)
         finally:
             writer.release()
+
+        if cancelled:
+            try:
+                Path(output_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            return ""
 
         # Sanity check the output: cv2 won't raise if it wrote 0 bytes.
         # A fixed byte floor is codec-dependent (short clips of small
@@ -191,12 +203,17 @@ class MovieExportWorker(QThread):
         self._output_path = Path(output_path)
         self._fps = fps
 
+    def stop(self) -> None:
+        """Request cooperative cancellation at the next frame boundary."""
+        self.requestInterruption()
+
     def run(self):
         try:
             path = self._exporter.export_movie(
                 self._output_path,
                 fps=self._fps,
                 progress_cb=lambda c, t: self.progress.emit(c, t),
+                cancel_cb=self.isInterruptionRequested,
             )
         except Exception as exc:  # broad on purpose — background thread
             self.failed.emit(f"{type(exc).__name__}: {exc}")
@@ -204,6 +221,8 @@ class MovieExportWorker(QThread):
         if path:
             self.finished_ok.emit(path)
         else:
+            if self.isInterruptionRequested():
+                return
             # Distinguish the three most common failure modes with a
             # human-readable hint the status bar can display verbatim.
             if not self._exporter.frame_count():

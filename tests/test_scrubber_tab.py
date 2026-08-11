@@ -9,7 +9,7 @@ Two layers:
     Requires QT_QPA_PLATFORM=offscreen on headless environments.
 
 Run:
-    QT_QPA_PLATFORM=offscreen python scripts/test_scrubber_tab.py
+    python -m pytest -q tests/test_scrubber_tab.py
 """
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ def _make_session_dir(
     tmp: str,
     heartbeat_rows: list[dict] = (),
     manual_rows: list[dict] = (),
+    view_rows: list[dict] = (),
     auto_rows: list[dict] = (),
 ) -> Path:
     """Build a synthetic session dir with the three frame-emitting CSVs.
@@ -76,6 +77,16 @@ def _make_session_dir(
              "pyrometer_temp_C", "voltage_V", "current_A",
              "psu_source", "frame_path", "note"],
             list(manual_rows),
+        )
+    if view_rows:
+        _write_csv(
+            session_dir / "rheed_view_events.csv",
+            [
+                "timestamp", "elapsed_s", "event_idx", "event_type",
+                "view_segment_id", "gun_aligned", "history_ready",
+                "qc_reason", "frame_path", "note",
+            ],
+            list(view_rows),
         )
     if auto_rows:
         _write_csv(
@@ -143,7 +154,12 @@ class FrameIndexBuildTests(unittest.TestCase):
                  "buffer_count": "20", "buffer_dir": "",
                  "event_state": "pending", "state_changed_at": ""},
             ]
-            session_dir = _make_session_dir(tmp, hb, manual, auto)
+            session_dir = _make_session_dir(
+                tmp,
+                heartbeat_rows=hb,
+                manual_rows=manual,
+                auto_rows=auto,
+            )
             idx = build_frame_index(session_dir)
             elapsed_order = [e.elapsed_s for e in idx]
             self.assertEqual(elapsed_order, [3.0, 5.0, 7.0, 10.0])
@@ -204,6 +220,27 @@ class FrameIndexBuildTests(unittest.TestCase):
             self.assertEqual(md["V"], "12.3")
             self.assertEqual(md["I"], "0.7")
 
+    def test_rheed_view_event_is_indexed_with_state_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            view = [{
+                "timestamp": "t0",
+                "elapsed_s": "8.00",
+                "event_idx": "2",
+                "event_type": "realign_end",
+                "view_segment_id": "1",
+                "gun_aligned": "True",
+                "history_ready": "False",
+                "qc_reason": "",
+                "frame_path": "",
+                "note": "focus locked",
+            }]
+            session_dir = _make_session_dir(tmp, view_rows=view)
+            idx = build_frame_index(session_dir)
+            self.assertEqual(len(idx), 1)
+            self.assertEqual(idx[0].source, "view")
+            self.assertEqual(idx[0].metadata["event_type"], "realign_end")
+            self.assertEqual(idx[0].metadata["segment"], "1")
+
 
 class FormatMetadataTests(unittest.TestCase):
     """One-liner display formatter used under the scrubber image."""
@@ -242,6 +279,27 @@ class FormatMetadataTests(unittest.TestCase):
         self.assertIn("score 1.50", text)
         self.assertIn("[kept_explicit]", text)
 
+    def test_view_entry_shows_alignment_state(self):
+        entry = FrameIndexEntry(
+            elapsed_s=8.0,
+            source="view",
+            source_idx=2,
+            frame_path="",
+            metadata={
+                "event_type": "realign_end",
+                "segment": "1",
+                "gun_aligned": "True",
+                "history_ready": "False",
+                "qc_reason": "",
+                "note": "focus locked",
+            },
+        )
+        text = _format_metadata(entry)
+        self.assertIn("realign_end", text)
+        self.assertIn("segment 1", text)
+        self.assertIn("aligned=True", text)
+        self.assertIn('"focus locked"', text)
+
     def test_blank_fields_are_skipped(self):
         # An entry with no pyro / no note should not produce empty
         # "pyro " or 'note ""' fragments.
@@ -270,6 +328,9 @@ class SourceColorTests(unittest.TestCase):
 
     def test_auto_color_grey(self):
         self.assertEqual(_SOURCE_COLORS["auto"], "#888888")
+
+    def test_view_color_is_distinct(self):
+        self.assertEqual(_SOURCE_COLORS["view"], "#a855f7")
 
 
 # --- Qt-side tests -----------------------------------------------------------

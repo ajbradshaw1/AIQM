@@ -361,7 +361,7 @@ VALIDATION_QUEUE: list[ValidationItem] = [
         ),
         steps=[
             "Verify MISTRAL Kestrel is running at 10.0.42.231:9000",
-            "Run: python scripts/test_mistral_jsonrpc.py "
+            "Run: python scripts/test_mistral_jsonrpc_discovery.py "
             "(needs live Kestrel)",
             "Verify probe queries return valid JSON-RPC replies",
             "Check no unexpected errors in stderr",

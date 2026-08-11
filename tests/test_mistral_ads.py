@@ -13,7 +13,7 @@ Validates:
 Runs entirely Mac-side; no real ADS connection needed.
 
 Usage:
-    PYTHONPATH=. python scripts/test_mistral_ads.py
+    python -m pytest -q tests/test_mistral_ads.py
 """
 
 from __future__ import annotations

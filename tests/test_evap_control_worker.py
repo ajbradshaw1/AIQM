@@ -11,7 +11,7 @@ source is off (all-None state from ``ElogReader``'s NaN-filter), and
 ``reset_displays`` clears everything back to ``"---"`` on disarm.
 
 Runs headless via ``QT_QPA_PLATFORM=offscreen``.
-Run: ``python scripts/test_evap_control_worker.py``, or under pytest.
+Run: ``python -m pytest -q tests/test_evap_control_worker.py``.
 """
 from __future__ import annotations
 
@@ -60,6 +60,7 @@ def _make_evap_state(
     return EvapControlState(
         mode=mode,
         connected=connected,
+        valid=connected,
         error="",
         chamber_pressure_mbar=chamber_pressure_mbar,
         substrate_temp_pv_C=substrate_temp_pv_C,
@@ -278,6 +279,7 @@ class DirectReadTabTests(unittest.TestCase):
         screengrab_state = EvapControlState(
             mode="screengrab",
             connected=True,
+            valid=True,
             error="",
             chamber_pressure_mbar=1e-9,
             # All elog-direct fields left at their None defaults.

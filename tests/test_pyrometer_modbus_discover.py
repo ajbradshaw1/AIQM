@@ -7,7 +7,7 @@ the two-file test convention from test_pyrometer_physical_debug.py.
 No hardware, no serial, no pymodbus reads on the wire — every serial
 touchpoint is mocked. Runs from Mac dev env:
 
-    PYTHONPATH=. python scripts/test_pyrometer_modbus_discover.py
+    python -m pytest -q tests/test_pyrometer_modbus_discover.py
 """
 from __future__ import annotations
 

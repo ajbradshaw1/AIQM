@@ -1,10 +1,7 @@
 name: tests
 
-# Runs the headless unittest suite on push + PR. Hardware-dependent
-# smoke tests (drivers with real cameras/pyrometers, live kSA TCP,
-# EvapControl .elo readers) are excluded by name — they can only run
-# on Bulbasaur. See scripts/README-like conventions.
-
+# Hardware probes stay in scripts/. pytest.ini restricts automated collection
+# to offline tests under tests/ so CI never opens cameras or instrument links.
 on:
   push:
     branches: [main]
@@ -24,12 +21,8 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # Cache key comes from requirements.txt (added 2026-07-29).
 
       - name: Install Linux Qt runtime deps
-        # PyQt6 offscreen platform needs libxkbcommon + libEGL on
-        # Ubuntu even though we never open a display. These are the
-        # minimum set; adding more only if a specific test needs them.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -39,51 +32,11 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          # Pin nothing yet — repo tolerates drift across minor
-          # versions. Add == pins if a break happens.
           pip install -r requirements.txt
 
-      - name: Run headless unittest suite
+      - name: Run headless pytest suite
         env:
           QT_QPA_PLATFORM: offscreen
           MPLBACKEND: Agg
           PYTHONPATH: ${{ github.workspace }}
-          # Hardware-dependent smoke tests. Skipped by name via the
-          # grep check below. Whitespace-delimited so a grep -w
-          # match works cleanly. Bash case statements can't line-
-          # continue pattern lists (the original CI attempt died
-          # here in 5s parsing this), so we ditched case entirely.
-          SKIP_TESTS: >-
-            test_modbus_pyrometer.py test_exactus_pyrometer.py
-            test_pyrometer.py test_vimba_camera.py
-            test_screengrab_camera.py test_ksa_single.py
-            test_ksa_comm.py test_mistral_jsonrpc.py
-            test_mistral_jsonrpc_discovery.py test_ocr.py
-            test_confirm_event_plateau_shift.py test_elog.py
-            test_elog_synthetic.py test_ads_read.py
-        # File-by-file loop matches the local run pattern. Fail-fast
-        # off so a single flake doesn't hide other failures in the
-        # report.
-        run: |
-          set +e
-          failed=""
-          # Pytest suites moved from scripts/ to tests/ (2026-07-29);
-          # scripts/ keeps hardware probes, which never run in CI.
-          for f in tests/test_*.py; do
-            name=$(basename "$f")
-            if echo " $SKIP_TESTS " | grep -q " $name "; then
-              echo "SKIP $name (hardware-dependent)"
-              continue
-            fi
-            echo "=== $name ==="
-            python "$f"
-            rc=$?
-            if [ $rc -ne 0 ]; then
-              failed="$failed $name"
-            fi
-          done
-          if [ -n "$failed" ]; then
-            echo "FAILED test files:$failed"
-            exit 1
-          fi
-          echo "All headless suites passed."
+        run: python -m pytest -q

@@ -9,14 +9,14 @@ downstream loggers persisted ``0.0`` as a real measurement.
 The fix:
   * ``PyrometerState.temperature`` / ``temperature_std`` now default to
     ``None`` (Optional[float]); ``temperature_n`` defaults to ``0``.
-  * ``has_valid_reading`` property gates on ``connected AND temperature
+  * ``has_valid_reading`` gates on ``connected AND valid AND temperature
     is not None AND math.isfinite(temperature)``.
   * Worker emits the post-connect state with the None sentinels; also
     resets to None when a poll batch fails entirely (previously the
     stale last-good value leaked into the next emission).
 
-Runs via ``PYTHONPATH=. python scripts/test_pyrometer_worker.py`` or
-under pytest. No hardware, no serial, no drivers.pyrometer imports —
+Run with ``python -m pytest -q tests/test_pyrometer_worker.py``.
+No hardware, no serial, no drivers.pyrometer imports —
 uses a FakeSensor injected via ``_create_sensor``.
 """
 from __future__ import annotations
@@ -172,8 +172,12 @@ class HasValidReadingTests(unittest.TestCase):
         self.assertFalse(s.has_valid_reading)
 
     def test_connected_and_numeric_is_valid(self):
-        s = PyrometerState(connected=True, temperature=650.5)
+        s = PyrometerState(connected=True, valid=True, temperature=650.5)
         self.assertTrue(s.has_valid_reading)
+
+    def test_explicit_invalid_rejects_retained_numeric_value(self):
+        s = PyrometerState(connected=True, valid=False, temperature=650.5)
+        self.assertFalse(s.has_valid_reading)
 
     def test_nan_temperature_is_not_valid(self):
         """A driver with dual-endian ambiguity can produce NaN.
@@ -182,14 +186,20 @@ class HasValidReadingTests(unittest.TestCase):
         float arithmetic don't get poisoned. Codex round 4 regression
         guard.
         """
-        s = PyrometerState(connected=True, temperature=float("nan"))
+        s = PyrometerState(
+            connected=True, valid=True, temperature=float("nan"),
+        )
         self.assertFalse(s.has_valid_reading)
 
     def test_inf_temperature_is_not_valid(self):
         """Same rationale as NaN — inf is not a plausible temperature."""
-        s = PyrometerState(connected=True, temperature=float("inf"))
+        s = PyrometerState(
+            connected=True, valid=True, temperature=float("inf"),
+        )
         self.assertFalse(s.has_valid_reading)
-        s2 = PyrometerState(connected=True, temperature=float("-inf"))
+        s2 = PyrometerState(
+            connected=True, valid=True, temperature=float("-inf"),
+        )
         self.assertFalse(s2.has_valid_reading)
 
     def test_negative_finite_still_valid(self):
@@ -199,7 +209,7 @@ class HasValidReadingTests(unittest.TestCase):
         check themselves (matches ModbusPyrometer.TEMP_MIN_C bounds).
         The predicate only guarantees "a real number is here."
         """
-        s = PyrometerState(connected=True, temperature=-40.0)
+        s = PyrometerState(connected=True, valid=True, temperature=-40.0)
         self.assertTrue(s.has_valid_reading)
 
 
@@ -297,6 +307,31 @@ class PyrometerWorkerRunTests(unittest.TestCase):
             self.assertEqual(valid.temperature_n, 3)
             self.assertIsNotNone(valid.temperature_std)
             self.assertEqual(valid.error, "")
+        finally:
+            self._stop_and_wait(w)
+
+    def test_nonfinite_batch_does_not_advance_success_sequence(self):
+        """NaN/Inf are failed polls, not successful timing samples."""
+        sensor = FakeSensor(
+            temps=lambda n: 500.0 if n < 3 else float("nan"),
+        )
+        w, states = _make_worker(sensor, poll_interval=0.01, samples_per_poll=3)
+
+        w.start()
+        try:
+            self.assertTrue(_wait_for(
+                lambda: any("non-finite" in s.error for s in states),
+            ))
+            successful = next(s for s in states if s.has_valid_reading)
+            failed = next(s for s in states if "non-finite" in s.error)
+            self.assertEqual(successful.sample_sequence, 1)
+            self.assertEqual(failed.sample_sequence, 1)
+            self.assertEqual(
+                failed.received_monotonic_ns,
+                successful.received_monotonic_ns,
+            )
+            self.assertFalse(failed.valid)
+            self.assertIsNone(failed.temperature)
         finally:
             self._stop_and_wait(w)
 

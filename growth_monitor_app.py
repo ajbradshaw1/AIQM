@@ -20,7 +20,7 @@ from pathlib import Path
 # Best-effort: if torch isn't installed, ClassifierBridge will still
 # surface a clean "Failed to load classifier" error and the rest of
 # the app runs unchanged (same failure semantics covered by
-# scripts/test_classifier_worker.py::test_startup_emits_error_on_bridge_failure).
+# tests/test_classifier_worker.py::test_startup_emits_error_on_bridge_failure).
 # On macOS/Linux the two-level dynamic linker doesn't have this
 # issue — no-op there.
 #

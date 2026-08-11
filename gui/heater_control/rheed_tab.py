@@ -77,7 +77,8 @@ class RheedImageLabel(QLabel):
 class RheedTab(QWidget):
     """RHEED camera monitoring tab with live display and intensity oscillation plot."""
 
-    connect_requested = pyqtSignal(str)  # mode: "direct", "screengrab", "dummy"
+    # mode: "direct", "screengrab", "screengrab_mss", or "dummy"
+    connect_requested = pyqtSignal(str)
     disconnect_requested = pyqtSignal()
     save_frame_requested = pyqtSignal()  # single frame capture
     stream_start_requested = pyqtSignal(float, float)  # (duration_s, freq_hz)
@@ -104,7 +105,12 @@ class RheedTab(QWidget):
         top_bar = QHBoxLayout()
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Screen Grab (kSA)", "Direct Camera", "Dummy (Test)"])
+        self.mode_combo.addItems([
+            "Windows Capture (kSA)",
+            "Legacy mss (diagnostic)",
+            "Direct Camera",
+            "Dummy (Test)",
+        ])
         top_bar.addWidget(QLabel("Mode:"))
         top_bar.addWidget(self.mode_combo)
 
@@ -184,7 +190,7 @@ class RheedTab(QWidget):
 
     def _mode_string(self) -> str:
         idx = self.mode_combo.currentIndex()
-        return ["screengrab", "direct", "dummy"][idx]
+        return ["screengrab", "screengrab_mss", "direct", "dummy"][idx]
 
     def _on_connect_clicked(self):
         if self.connect_btn.text() == "Connect Camera":
@@ -222,10 +228,14 @@ class RheedTab(QWidget):
     def update_state(self, state: CameraState):
         """Handle camera state update from worker."""
         if not state.connected and state.error:
+            self._current_frame = None
+            self.image_label.clear()
             self.status_label.setText(f"Error: {state.error}")
             return
 
         if not state.connected:
+            self._current_frame = None
+            self.image_label.clear()
             return
 
         self.status_label.setText("Connected")

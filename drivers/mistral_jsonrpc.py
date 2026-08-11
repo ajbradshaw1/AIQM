@@ -31,7 +31,7 @@ Once methods are known, populate via :meth:`set_read_config` from a
 config file, GUI setting, or the probe script's discovery output.
 
 See ``scripts/test_mistral_jsonrpc_discovery.py`` for the Bulbasaur
-probe runner and ``scripts/test_mistral_jsonrpc.py`` for the Mac-side
+probe runner and ``tests/test_mistral_jsonrpc.py`` for the offline
 smoke test against an in-process mock server.
 """
 

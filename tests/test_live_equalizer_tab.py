@@ -1,555 +1,717 @@
-"""Unit tests for the Live Equalizer tab + record_live_label logger method.
+"""Focused offscreen tests for the provenance-bound Live Equalizer tab.
 
-Two layers:
-  - ``LiveEqualizerTab`` — Qt widget. Tests instantiate + drive it via
-    the public methods (``update_camera_frame``, ``update_classifier_state``,
-    ``set_save_enabled``, ``reset_for_new_session``) and verify slider
-    mechanics + signal emission.
-  - ``GrowthLogger.record_live_label`` — pure Python (+ optional PIL).
-    Round-trip tests against a synthetic session directory.
+Run with the Bulbasaur GUI environment::
 
-Run:
-    QT_QPA_PLATFORM=offscreen python scripts/test_live_equalizer_tab.py
+    python -m pytest -q tests/test_live_equalizer_tab.py
 """
 from __future__ import annotations
 
-import csv
+from contextlib import redirect_stderr
+import io
 import os
 import sys
-import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-# QApplication precedes any QWidget creation across the test module.
 from PyQt6.QtWidgets import QApplication  # noqa: E402
-_app = QApplication.instance() or QApplication(sys.argv)  # noqa: F841
 
-from gui.growth_logger import GrowthLogger  # noqa: E402
-from gui.live_equalizer_tab import (  # noqa: E402
-    CLASS_LABELS,
-    CLASSIFIER_LABEL_MAP,
-    LiveEqualizerTab,
+_app = QApplication.instance() or QApplication(sys.argv)
+
+from gui.equalizer_alignment import (  # noqa: E402
+    ACTIVE_SIMULATOR_LABELS,
+    AlignmentCandidate,
+    BasisAsset,
+    BasisBundle,
+    CalibrationRecord,
+    LandmarkDetection,
+    PROCESS_H,
+    PROCESS_W,
 )
+from gui.live_equalizer_tab import CLASS_LABELS, LiveEqualizerTab  # noqa: E402
 from gui.state import ClassifierState  # noqa: E402
 
 
-def _rgb_frame(color: int = 128) -> np.ndarray:
-    """Solid-color RGB frame that PIL can decode via fromarray()."""
-    return np.full((64, 96, 3), color, dtype=np.uint8)
+LANDMARKS = np.array(
+    [[30.0, 55.0], [64.0, 35.0], [98.0, 55.0]], dtype=np.float64,
+)
 
 
-# --- LiveEqualizerTab tests -------------------------------------------------
+def _spot_image(offset: float = 0.0) -> np.ndarray:
+    yy, xx = np.mgrid[:PROCESS_H, :PROCESS_W]
+    image = np.full((PROCESS_H, PROCESS_W), offset, dtype=np.float32)
+    for index, (x, y) in enumerate(LANDMARKS):
+        image += (180.0 + 20.0 * index) * np.exp(
+            -((xx - x) ** 2 + (yy - y) ** 2) / (2.0 * 2.5**2),
+        )
+    return np.clip(image, 0, 255).astype(np.float32)
 
 
-class TabConstructionTests(unittest.TestCase):
-    """Tab constructs cleanly + starts in the expected state."""
+def _bundle() -> BasisBundle:
+    base = _spot_image()
+    assets = []
+    for index, label in enumerate(ACTIVE_SIMULATOR_LABELS):
+        assets.append(BasisAsset(
+            label=label,
+            image=np.clip(base + index * 3, 0, 255),
+            active=True,
+            source_kind="simulator",
+            source_path=f"test/{label}.png",
+        ))
+    assets.append(BasisAsset(
+        label="HTR",
+        image=None,
+        active=False,
+        source_kind="unavailable",
+        unavailable_reason="canonical simulator basis pending",
+    ))
+    return BasisBundle(tuple(assets), version="test-v1")
 
-    def setUp(self):
-        self.tab = LiveEqualizerTab()
 
-    def tearDown(self):
+def _detection() -> LandmarkDetection:
+    return LandmarkDetection.detected(
+        LANDMARKS,
+        method="test",
+        confidence=1.0,
+        peak_snr=20.0,
+    )
+
+
+def _rgb(gray: np.ndarray | None = None) -> np.ndarray:
+    if gray is None:
+        gray = _spot_image()
+    u8 = np.clip(gray, 0, 255).astype(np.uint8)
+    return np.repeat(u8[..., None], 3, axis=2)
+
+
+def _metadata(
+    sequence: int = 1,
+    *,
+    hwnd: int = 1234,
+    monotonic_ns: int | None = None,
+    backend: str = "wgc",
+    geometry_id: str = "test-wgc-roi-v1:dpi-getdpiforwindow-96",
+    width: int = PROCESS_W,
+    height: int = PROCESS_H,
+) -> dict:
+    return {
+        "capture_backend": backend,
+        "captured_at_utc": "2026-07-31T12:00:00+00:00",
+        "captured_monotonic_ns": (
+            time.monotonic_ns() if monotonic_ns is None else monotonic_ns
+        ),
+        "capture_sequence": sequence,
+        "source_hwnd": hwnd,
+        "capture_geometry_id": geometry_id,
+        "camera_width": width,
+        "camera_height": height,
+        "view_segment_id": 4,
+        "visual_history_generation": 2,
+    }
+
+
+def _identity_candidate() -> AlignmentCandidate:
+    matrix = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    return AlignmentCandidate(
+        matrix=matrix,
+        parity="normal",
+        endpoint_order="forward",
+        basis_points=LANDMARKS,
+        live_points=LANDMARKS,
+        projected_points=LANDMARKS,
+        residuals_px=np.zeros(3),
+        scale=1.0,
+        rotation_deg=0.0,
+        translation_xy=(0.0, 0.0),
+        rms_residual_px=0.0,
+        max_residual_px=0.0,
+        valid_coverage=1.0,
+        correlation=1.0,
+        valid=True,
+    )
+
+
+class EqualizerTabCase(unittest.TestCase):
+    retrospective = False
+
+    def setUp(self) -> None:
+        self.bundle = _bundle()
+        self._loader = patch(
+            "scripts.equalizer_ui.load_basis_bundle", return_value=self.bundle,
+        )
+        self._basis_detector = patch(
+            "gui.live_equalizer_tab.detect_basis_landmarks",
+            return_value=_detection(),
+        )
+        self._loader.start()
+        self._basis_detector.start()
+        self.tab = LiveEqualizerTab(retrospective=self.retrospective)
+
+    def tearDown(self) -> None:
         self.tab.deleteLater()
+        self._basis_detector.stop()
+        self._loader.stop()
 
-    def test_five_sliders_registered(self):
-        self.assertEqual(len(self.tab._sliders), 5)
-        self.assertEqual(set(self.tab._sliders.keys()), set(CLASS_LABELS))
+    def make_live(self, *, sequence: int = 1, hwnd: int = 1234) -> None:
+        self.tab.set_session_id("SESSION-A")
+        self.tab.set_save_enabled(True)
+        self.tab.update_qc_context(
+            session_active=True,
+            view_segment_id=4,
+            visual_history_generation=2,
+            gun_aligned=True,
+            realignment_active=False,
+        )
+        self.tab.update_camera_frame(_rgb(), _metadata(sequence, hwnd=hwnd))
 
-    def test_five_classifier_value_labels_registered(self):
-        self.assertEqual(len(self.tab._classifier_value_labels), 5)
-        self.assertEqual(
-            set(self.tab._classifier_value_labels.keys()), set(CLASS_LABELS),
+    def accepted_record(self) -> CalibrationRecord:
+        snapshot = self.tab.get_current_snapshot()
+        assert snapshot is not None
+        return CalibrationRecord.from_candidate(
+            _identity_candidate(), self.bundle, snapshot,
+        ).accepted(
+            "unit-test",
+            snapshot.orientation_evidence_sha256(),
+            orientation_evidence_kind="RT13",
         )
 
-    def test_initial_slider_state_is_uniform(self):
-        # _reset_to_uniform runs in __init__ → each slider at 20 (1/5).
-        for slider in self.tab._sliders.values():
-            self.assertEqual(slider.value(), 20)
+    def confirm_handedness(self, kind: str = "RT13") -> None:
+        index = self.tab._handedness_evidence_combo.findData(kind)
+        self.assertGreaterEqual(index, 0)
+        self.tab._handedness_evidence_combo.setCurrentIndex(index)
+        self.tab._handedness_confirm.setChecked(True)
+        self.assertEqual(self.tab.get_handedness_evidence_kind(), kind)
 
-    def test_save_button_starts_disabled(self):
-        # Session isn't running at construction; Save must be off.
+    def activate_calibration(self) -> CalibrationRecord:
+        record = self.accepted_record()
+        self.assertTrue(self.tab.set_accepted_calibration(record))
+        return record
+
+
+class ConstructionAndHtrTests(EqualizerTabCase):
+    def test_htr_is_visible_but_unavailable(self) -> None:
+        self.assertEqual(set(self.tab._sliders), set(CLASS_LABELS))
+        self.assertFalse(self.tab._sliders["HTR"].isEnabled())
+        self.assertEqual(self.tab._sliders["HTR"].value(), 0)
+        self.assertEqual(self.tab._slider_value_labels["HTR"].text(), "N/A")
+        self.assertIn("canonical", self.tab._sliders["HTR"].toolTip())
+
+    def test_reset_normalizes_only_four_active_classes(self) -> None:
+        weights = self.tab._current_weights()
+        self.assertEqual(weights["HTR"], None)
+        self.assertAlmostEqual(
+            sum(float(weights[label]) for label in ACTIVE_SIMULATOR_LABELS),
+            1.0,
+        )
+        for label in ACTIVE_SIMULATOR_LABELS:
+            self.assertEqual(self.tab._sliders[label].value(), 25)
+
+    def test_stable_widget_names(self) -> None:
+        self.assertEqual(self.tab._selected_view.objectName(), "selectedRheedView")
+        self.assertEqual(
+            self.tab._constructed_view.objectName(), "constructedRheedView",
+        )
+        self.assertEqual(
+            self.tab._candidate_combo.objectName(), "alignmentCandidateSelector",
+        )
+        self.assertEqual(self.tab._save_btn.objectName(), "saveLiveLabelButton")
+        self.assertEqual(
+            self.tab._preview_basis_combo.objectName(),
+            "alignmentPreviewBasisSelector",
+        )
+        self.assertEqual(
+            self.tab._handedness_evidence_combo.objectName(),
+            "handednessEvidenceSelector",
+        )
+
+
+class LocalDemoGateTests(EqualizerTabCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.tab.set_session_id("")
+        self.tab.set_save_enabled(False)
+        self.tab.update_qc_context(
+            session_active=False,
+            view_segment_id=0,
+            visual_history_generation=0,
+            gun_aligned=False,
+            realignment_active=False,
+        )
+
+    def test_dummy_frame_allows_calibration_without_session_or_alignment(self) -> None:
+        self.tab.update_camera_frame(
+            _rgb(),
+            _metadata(
+                backend="dummy_c6x2",
+                hwnd=0,
+                monotonic_ns=1,
+                geometry_id="dummy:full",
+            ),
+        )
+        self.assertTrue(self.tab._calibrate_btn.isEnabled())
+
+        record = self.accepted_record()
+        self.assertTrue(self.tab.set_accepted_calibration(record))
+        self.assertTrue(self.tab._auto_fit_btn.isEnabled())
         self.assertFalse(self.tab._save_btn.isEnabled())
 
-    def test_classifier_labels_start_at_placeholder(self):
-        for label in self.tab._classifier_value_labels.values():
-            self.assertEqual(label.text(), "—%")
+    def test_real_camera_still_requires_session_and_alignment(self) -> None:
+        self.tab.update_camera_frame(_rgb(), _metadata(backend="wgc"))
+        self.assertFalse(self.tab._calibrate_btn.isEnabled())
+        self.assertIn("session", self.tab._cal_status_label.text())
 
 
-class SaveEnabledTests(unittest.TestCase):
-    """Save button gating via set_save_enabled."""
+class SnapshotAtomicityTests(EqualizerTabCase):
+    def test_camera_update_copies_source_arrays(self) -> None:
+        self.make_live()
+        source = _rgb(np.full((PROCESS_H, PROCESS_W), 77, dtype=np.float32))
+        self.tab.update_camera_frame(source, _metadata(2))
+        source[:] = 0
+        snapshot = self.tab.get_current_snapshot()
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(int(snapshot.rgb[0, 0, 0]), 77)
+        self.assertFalse(snapshot.rgb.flags.writeable)
 
-    def setUp(self):
-        self.tab = LiveEqualizerTab()
+    def test_calibration_snapshot_does_not_follow_new_frames(self) -> None:
+        self.make_live(sequence=10)
+        failure = LandmarkDetection.failure("no peaks")
+        with patch(
+            "gui.live_equalizer_tab.detect_live_landmarks", return_value=failure,
+        ):
+            self.tab._on_calibrate_clicked()
+        frozen = self.tab._calibration_snapshot
+        self.assertIsNotNone(frozen)
+        self.assertIs(self.tab.get_calibration_snapshot(), frozen)
+        frozen_pixels = np.array(frozen.rgb, copy=True)
 
-    def tearDown(self):
-        self.tab.deleteLater()
+        self.tab.update_camera_frame(
+            _rgb(np.full((PROCESS_H, PROCESS_W), 200, dtype=np.float32)),
+            _metadata(11),
+        )
+        self.assertEqual(self.tab.get_current_snapshot().capture_sequence, 11)
+        self.assertEqual(self.tab._calibration_snapshot.capture_sequence, 10)
+        self.assertTrue(np.array_equal(self.tab._calibration_snapshot.rgb, frozen_pixels))
 
-    def test_set_save_enabled_true_enables_button(self):
-        self.tab.set_save_enabled(True)
+    def test_clear_camera_fails_closed(self) -> None:
+        self.make_live()
+        self.activate_calibration()
+        reasons: list[str] = []
+        self.tab.calibration_invalidation_requested.connect(reasons.append)
+        self.tab.clear_camera_frame("RHEED unavailable")
+        self.assertIsNone(self.tab.get_current_snapshot())
+        self.assertIsNone(self.tab.get_calibration())
+        self.assertEqual(reasons, ["camera disconnected"])
+
+
+class CandidateReviewTests(EqualizerTabCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.make_live()
+
+    def start_detected_calibration(self) -> None:
+        with patch(
+            "gui.live_equalizer_tab.detect_live_landmarks",
+            return_value=_detection(),
+        ):
+            self.tab._on_calibrate_clicked()
+
+    def test_detection_generates_reviewable_normal_and_mirror_hypotheses(self) -> None:
+        self.start_detected_calibration()
+        aliases = {
+            alias
+            for candidate in self.tab._candidates
+            for alias in candidate.equivalent_hypotheses
+        }
+        self.assertTrue(any(alias.startswith("normal:") for alias in aliases))
+        self.assertTrue(any(alias.startswith("mirrored:") for alias in aliases))
+        self.assertGreater(self.tab._candidate_combo.count(), 0)
+        self.assertIsNone(self.tab.get_calibration())
+        self.assertIn("Request acceptance", self.tab._calibrate_btn.text())
+
+    def test_accept_button_emits_pending_record_only(self) -> None:
+        self.start_detected_calibration()
+        self.confirm_handedness()
+        emitted: list[CalibrationRecord] = []
+        self.tab.calibration_accept_requested.connect(emitted.append)
+        self.tab._request_candidate_acceptance()
+        self.assertEqual(len(emitted), 1)
+        self.assertFalse(emitted[0].grower_accepted)
+        self.assertIsNone(self.tab.get_calibration())
+        self.assertFalse(self.tab._save_btn.isEnabled())
+
+    def test_app_confirmation_activates_calibration(self) -> None:
+        self.start_detected_calibration()
+        self.confirm_handedness("c(6x2)")
+        emitted: list[CalibrationRecord] = []
+        self.tab.calibration_accept_requested.connect(emitted.append)
+        self.tab._request_candidate_acceptance()
+        snapshot = self.tab.get_calibration_snapshot()
+        self.assertIsNotNone(snapshot)
+        accepted = emitted[0].accepted(
+            "grower",
+            snapshot.orientation_evidence_sha256(),
+            orientation_evidence_kind=self.tab.get_handedness_evidence_kind(),
+        )
+        self.assertTrue(self.tab.set_accepted_calibration(accepted))
+        self.assertEqual(self.tab.get_calibration().calibration_id, accepted.calibration_id)
+        self.assertTrue(self.tab._auto_fit_btn.isEnabled())
         self.assertTrue(self.tab._save_btn.isEnabled())
 
-    def test_set_save_enabled_false_disables_button(self):
-        self.tab.set_save_enabled(True)
-        self.tab.set_save_enabled(False)
+    def test_acceptance_requires_explicit_asymmetric_evidence(self) -> None:
+        self.start_detected_calibration()
+        emitted: list[CalibrationRecord] = []
+        self.tab.calibration_accept_requested.connect(emitted.append)
+
+        self.assertFalse(self.tab._calibrate_btn.isEnabled())
+        self.tab._request_candidate_acceptance()
+        self.assertEqual(emitted, [])
+        self.assertIn("asymmetric", self.tab._cal_status_label.text())
+
+        evidence_index = self.tab._handedness_evidence_combo.findData("RT13")
+        self.tab._handedness_evidence_combo.setCurrentIndex(evidence_index)
+        self.assertFalse(self.tab._calibrate_btn.isEnabled())
+        self.tab._handedness_confirm.setChecked(True)
+        self.assertTrue(self.tab._calibrate_btn.isEnabled())
+        self.tab._request_candidate_acceptance()
+        self.assertEqual(len(emitted), 1)
+
+    def test_preview_switches_all_four_warped_bases(self) -> None:
+        self.start_detected_calibration()
+        self.assertEqual(
+            tuple(
+                self.tab._preview_basis_combo.itemData(index)
+                for index in range(self.tab._preview_basis_combo.count())
+            ),
+            ACTIVE_SIMULATOR_LABELS,
+        )
+        for label in ACTIVE_SIMULATOR_LABELS:
+            with self.subTest(label=label):
+                index = self.tab._preview_basis_combo.findData(label)
+                with patch.object(self.tab, "_set_scene_rgb") as render:
+                    self.tab._preview_basis_combo.setCurrentIndex(index)
+                    self.tab._render_candidate_preview(
+                        self.tab._selected_candidate,
+                    )
+                self.assertEqual(self.tab._preview_basis_label, label)
+                overlay = render.call_args.args[1]
+                expected = int(np.clip(
+                    self.tab._warped_basis[label][0, 0], 0, 255,
+                ))
+                self.assertEqual(int(overlay[0, 0, 0]), expected)
+                self.assertEqual(int(overlay[0, 0, 2]), expected)
+
+    def test_candidate_change_resets_handedness_confirmation(self) -> None:
+        self.start_detected_calibration()
+        self.confirm_handedness("streak/tail")
+        first = self.tab.get_handedness_evidence()
+        self.assertTrue(first["confirmed"])
+        self.assertEqual(first["kind"], "streak/tail")
+        self.tab._candidate_combo.setCurrentIndex(1)
+        self.assertEqual(self.tab.get_handedness_evidence_kind(), "")
+        self.assertFalse(self.tab._handedness_confirm.isChecked())
+
+    def test_reconstruction_evidence_must_match_previewed_basis(self) -> None:
+        self.start_detected_calibration()
+        self.confirm_handedness("c(6x2)")
+        self.assertEqual(self.tab._preview_basis_label, "c(6x2)")
+
+        preview_index = self.tab._preview_basis_combo.findData("1x1")
+        self.assertGreaterEqual(preview_index, 0)
+        self.tab._preview_basis_combo.setCurrentIndex(preview_index)
+        self.tab._handedness_confirm.setChecked(True)
+
+        self.assertEqual(self.tab.get_handedness_evidence_kind(), "")
+        self.assertFalse(self.tab._calibrate_btn.isEnabled())
+
+        # Streak/tail evidence is independent of the reconstruction preview.
+        evidence_index = self.tab._handedness_evidence_combo.findData(
+            "streak/tail",
+        )
+        self.tab._handedness_evidence_combo.setCurrentIndex(evidence_index)
+        self.tab._handedness_confirm.setChecked(True)
+        self.assertEqual(
+            self.tab.get_handedness_evidence_kind(),
+            "streak/tail",
+        )
+
+    def test_failed_auto_detection_enters_manual_mode(self) -> None:
+        with patch(
+            "gui.live_equalizer_tab.detect_live_landmarks",
+            return_value=LandmarkDetection.failure("low SNR"),
+        ):
+            self.tab._on_calibrate_clicked()
+        self.assertTrue(self.tab._calibrating)
+        self.assertEqual(self.tab._manual_clicks, [])
+        self.assertIn("Automatic detection failed", self.tab._cal_status_label.text())
+
+    def test_retry_keeps_original_frozen_snapshot(self) -> None:
+        self.start_detected_calibration()
+        original_sequence = self.tab._calibration_snapshot.capture_sequence
+        self.tab.update_camera_frame(_rgb(), _metadata(sequence=99))
+        self.tab._on_clear_cal_clicked()
+        self.assertEqual(
+            self.tab._calibration_snapshot.capture_sequence,
+            original_sequence,
+        )
+        self.assertEqual(self.tab.get_current_snapshot().capture_sequence, 99)
+
+    def test_review_invalidates_on_every_capture_geometry_discontinuity(self) -> None:
+        reasons: list[str] = []
+        self.tab.calibration_invalidation_requested.connect(reasons.append)
+        discontinuities = (
+            ("backend", {"backend": "mss"}, _rgb()),
+            ("HWND", {"hwnd": 5678}, _rgb()),
+            (
+                "dimensions",
+                {"width": PROCESS_W + 1},
+                np.pad(_rgb(), ((0, 0), (0, 1), (0, 0))),
+            ),
+            (
+                "geometry/DPI",
+                {
+                    "geometry_id": (
+                        "test-wgc-roi-v1:dpi-getdpiforwindow-144"
+                    ),
+                },
+                _rgb(),
+            ),
+        )
+        for sequence, (name, overrides, frame) in enumerate(
+            discontinuities,
+            start=20,
+        ):
+            with self.subTest(discontinuity=name):
+                self.tab.update_camera_frame(_rgb(), _metadata(sequence))
+                self.start_detected_calibration()
+                self.assertTrue(self.tab._calibrating)
+                before = len(reasons)
+                self.tab.update_camera_frame(
+                    frame,
+                    _metadata(sequence + 100, **overrides),
+                )
+                self.assertEqual(len(reasons), before + 1)
+                self.assertFalse(self.tab._calibrating)
+                self.assertIsNone(self.tab._calibration_snapshot)
+                self.assertIsNone(self.tab._pending_calibration)
+                self.assertIsNone(self.tab._selected_candidate)
+
+    def test_pending_review_observes_discontinuity_while_paused(self) -> None:
+        self.start_detected_calibration()
+        self.confirm_handedness("RT13")
+        emitted: list[CalibrationRecord] = []
+        self.tab.calibration_accept_requested.connect(emitted.append)
+        self.tab._request_candidate_acceptance()
+        self.assertEqual(len(emitted), 1)
+        self.assertIsNotNone(self.tab._pending_calibration)
+        frozen_sequence = self.tab.get_current_snapshot().capture_sequence
+
+        self.tab._pause_btn.setChecked(True)
+        self.tab.update_camera_frame(
+            _rgb(),
+            _metadata(
+                44,
+                geometry_id="test-wgc-roi-v1:dpi-getdpiforwindow-144",
+            ),
+        )
+        self.assertEqual(
+            self.tab.get_current_snapshot().capture_sequence,
+            frozen_sequence,
+        )
+        self.assertFalse(self.tab._calibrating)
+        self.assertIsNone(self.tab._calibration_snapshot)
+        self.assertIsNone(self.tab._pending_calibration)
+
+    def test_geometry_change_away_then_back_does_not_restore_review(self) -> None:
+        self.start_detected_calibration()
+        self.tab.update_camera_frame(
+            _rgb(),
+            _metadata(
+                50,
+                geometry_id="test-wgc-roi-v1:dpi-getdpiforwindow-144",
+            ),
+        )
+        self.assertFalse(self.tab._calibrating)
+        self.assertIsNone(self.tab._calibration_snapshot)
+
+        self.tab.update_camera_frame(_rgb(), _metadata(51))
+        self.assertFalse(self.tab._calibrating)
+        self.assertIsNone(self.tab._calibration_snapshot)
+        self.assertIsNone(self.tab._pending_calibration)
+
+
+class SaveAndQcGateTests(EqualizerTabCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.make_live()
+
+    def test_save_requires_accepted_calibration_and_emits_htr_none(self) -> None:
+        self.assertFalse(self.tab._save_btn.isEnabled())
+        self.activate_calibration()
+        emitted: list[dict] = []
+        self.tab.live_label_save_requested.connect(emitted.append)
+        self.tab._save_btn.click()
+        self.assertEqual(len(emitted), 1)
+        self.assertIsNone(emitted[0]["final_weights"]["HTR"])
+        self.assertIsNone(emitted[0]["normalized_weights"]["HTR"])
+        self.assertEqual(emitted[0]["schema_version"], 1)
+        self.assertEqual(emitted[0]["label_source"], "equalizer_manual")
+        self.assertGreaterEqual(emitted[0]["residual_rms"], 0.0)
+
+    def test_qc_view_segment_change_invalidates_and_emits(self) -> None:
+        self.activate_calibration()
+        emitted: list[str] = []
+        self.tab.calibration_invalidation_requested.connect(emitted.append)
+        self.tab.update_qc_context(
+            session_active=True,
+            view_segment_id=5,
+            visual_history_generation=3,
+            gun_aligned=True,
+            realignment_active=False,
+        )
+        self.assertIsNone(self.tab.get_calibration())
+        self.assertFalse(self.tab._save_btn.isEnabled())
+        self.assertEqual(emitted, ["view segment changed"])
+
+    def test_realign_start_invalidates(self) -> None:
+        self.activate_calibration()
+        self.tab.update_qc_context(
+            session_active=True,
+            view_segment_id=4,
+            visual_history_generation=2,
+            gun_aligned=True,
+            realignment_active=True,
+        )
+        self.assertIsNone(self.tab.get_calibration())
+
+    def test_camera_hwnd_change_invalidates(self) -> None:
+        self.activate_calibration()
+        self.tab.update_camera_frame(_rgb(), _metadata(2, hwnd=5678))
+        self.assertIsNone(self.tab.get_calibration())
         self.assertFalse(self.tab._save_btn.isEnabled())
 
-
-class ClassifierStateRoutingTests(unittest.TestCase):
-    """update_classifier_state populates the 5 classifier % labels."""
-
-    def setUp(self):
-        self.tab = LiveEqualizerTab()
-
-    def tearDown(self):
-        self.tab.deleteLater()
-
-    def test_none_state_shows_dashes(self):
-        self.tab.update_classifier_state(None)
-        for lbl in self.tab._classifier_value_labels.values():
-            self.assertEqual(lbl.text(), "—%")
-
-    def test_smoothed_percent_populates_labels(self):
-        # ClassifierState.smoothed_percent keys use Monitor-tab spellings;
-        # tab translates via CLASSIFIER_LABEL_MAP.
-        smoothed = {
-            "1x1":            60,
-            "Twinned (2x1)":  20,
-            "c(6x2)":         10,
-            "rt13xrt13":       5,
-            "HTR":             5,
-        }
-        state = ClassifierState(
-            ready=True, smoothed_percent=smoothed,
+    def test_wgc_dpi_change_invalidates_accepted_calibration(self) -> None:
+        self.activate_calibration()
+        self.tab.update_camera_frame(
+            _rgb(),
+            _metadata(
+                2,
+                geometry_id="test-wgc-roi-v1:dpi-getdpiforwindow-144",
+            ),
         )
-        self.tab.update_classifier_state(state)
-        self.assertEqual(self.tab._classifier_value_labels["1x1"].text(), "60%")
-        self.assertEqual(
-            self.tab._classifier_value_labels["Tw(2x1)"].text(), "20%",
-        )
-        self.assertEqual(
-            self.tab._classifier_value_labels["c(6x2)"].text(), "10%",
-        )
-        self.assertEqual(self.tab._classifier_value_labels["RT13"].text(), "5%")
-        self.assertEqual(self.tab._classifier_value_labels["HTR"].text(), "5%")
+        self.assertIsNone(self.tab.get_calibration())
+        self.assertFalse(self.tab._save_btn.isEnabled())
+        self.assertIn("geometry changed", self.tab._cal_status_label.text())
 
-    def test_empty_smoothed_percent_shows_dashes(self):
-        # Ready state with no percentages yet — same fallback as None.
-        state = ClassifierState(ready=True, smoothed_percent={})
-        self.tab.update_classifier_state(state)
-        for lbl in self.tab._classifier_value_labels.values():
-            self.assertEqual(lbl.text(), "—%")
+    def test_programmatic_invalidation_does_not_emit(self) -> None:
+        self.activate_calibration()
+        emitted: list[str] = []
+        self.tab.calibration_invalidation_requested.connect(emitted.append)
+        self.tab.invalidate_calibration("app-owned invalidation", emit=False)
+        self.assertEqual(emitted, [])
 
 
-class CameraFrameRoutingTests(unittest.TestCase):
-    """update_camera_frame caches the frame + updates the Selected pane."""
+class PauseAndClassifierTests(EqualizerTabCase):
+    def test_pause_preserves_displayed_snapshot(self) -> None:
+        self.make_live(sequence=1)
+        self.tab._pause_btn.setChecked(True)
+        self.tab.update_camera_frame(_rgb(), _metadata(2))
+        self.assertEqual(self.tab.get_current_snapshot().capture_sequence, 1)
+        self.tab._pause_btn.setChecked(False)
+        self.tab.update_camera_frame(_rgb(), _metadata(3))
+        self.assertEqual(self.tab.get_current_snapshot().capture_sequence, 3)
 
-    def setUp(self):
-        self.tab = LiveEqualizerTab()
-
-    def tearDown(self):
-        self.tab.deleteLater()
-
-    def test_frame_cached_on_update(self):
-        frame = _rgb_frame(color=180)
-        self.tab.update_camera_frame(frame)
-        cached = self.tab.get_current_full_frame()
-        self.assertIsNotNone(cached)
-        self.assertTrue(np.array_equal(cached, frame))
-
-    def test_none_frame_does_not_crash(self):
-        # Camera hot-path can occasionally pass None; must silently no-op.
-        self.tab.update_camera_frame(None)
-        self.assertIsNone(self.tab.get_current_full_frame())
-
-    def test_current_target_downsampled_to_process_wh(self):
-        from scripts.equalizer_ui import PROCESS_WH
-        frame = _rgb_frame(color=100)
-        self.tab.update_camera_frame(frame)
-        target = self.tab._current_target
-        self.assertIsNotNone(target)
-        # PROCESS_WH is (W, H); numpy shape is (H, W).
-        self.assertEqual(target.shape, (PROCESS_WH[1], PROCESS_WH[0]))
-
-
-class SliderMechanicsTests(unittest.TestCase):
-    """Slider values, weight round-trip, reset."""
-
-    def setUp(self):
-        self.tab = LiveEqualizerTab()
-
-    def tearDown(self):
-        self.tab.deleteLater()
-
-    def test_current_weights_are_fractions(self):
-        # Uniform state → each weight ≈ 0.20.
-        w = self.tab._current_weights()
-        self.assertEqual(set(w.keys()), set(CLASS_LABELS))
-        for v in w.values():
-            self.assertAlmostEqual(v, 0.20, places=2)
-
-    def test_set_weights_moves_all_sliders_atomically(self):
-        target = {
-            "1x1":     0.60,
-            "Tw(2x1)": 0.20,
-            "c(6x2)":  0.10,
-            "RT13":    0.05,
-            "HTR":     0.05,
-        }
-        self.tab._set_weights(target)
-        actual = self.tab._current_weights()
-        for label, expected in target.items():
-            self.assertAlmostEqual(actual[label], expected, places=2)
-
-    def test_reset_to_uniform_puts_each_at_20(self):
-        self.tab._set_weights({
-            "1x1": 1.0, "Tw(2x1)": 0.0, "c(6x2)": 0.0,
-            "RT13": 0.0, "HTR": 0.0,
-        })
-        self.tab._reset_to_uniform()
-        for label, slider in self.tab._sliders.items():
-            self.assertEqual(slider.value(), 20)
-
-
-class SaveSignalTests(unittest.TestCase):
-    """Save button emits the live_label_save_requested signal with weights."""
-
-    def setUp(self):
-        self.tab = LiveEqualizerTab()
-
-    def tearDown(self):
-        self.tab.deleteLater()
-
-    def test_save_click_emits_signal_with_current_weights(self):
-        # Set a known mixture and click Save.
-        self.tab._set_weights({
-            "1x1":     0.50,
-            "Tw(2x1)": 0.30,
-            "c(6x2)":  0.10,
-            "RT13":    0.05,
-            "HTR":     0.05,
-        })
-        self.tab.set_save_enabled(True)
-
-        captured: list[dict] = []
-        self.tab.live_label_save_requested.connect(captured.append)
-        self.tab._save_btn.click()
-
-        self.assertEqual(len(captured), 1)
-        weights = captured[0]
-        self.assertAlmostEqual(weights["1x1"], 0.50, places=2)
-        self.assertAlmostEqual(weights["Tw(2x1)"], 0.30, places=2)
-
-
-class ResetForNewSessionTests(unittest.TestCase):
-    """reset_for_new_session wipes frame + classifier state, keeps sliders."""
-
-    def setUp(self):
-        self.tab = LiveEqualizerTab()
-
-    def tearDown(self):
-        self.tab.deleteLater()
-
-    def test_reset_clears_current_frame(self):
-        self.tab.update_camera_frame(_rgb_frame())
-        self.assertIsNotNone(self.tab.get_current_full_frame())
-        self.tab.reset_for_new_session()
-        self.assertIsNone(self.tab.get_current_full_frame())
-
-    def test_reset_clears_classifier_labels(self):
+    def test_classifier_mapping_is_preserved(self) -> None:
         self.tab.update_classifier_state(ClassifierState(
-            ready=True, smoothed_percent={"1x1": 80},
+            ready=True,
+            smoothed_percent={
+                "1x1": 50,
+                "Twinned (2x1)": 20,
+                "c(6x2)": 10,
+                "rt13xrt13": 15,
+                "HTR": 5,
+            },
         ))
+        self.assertEqual(self.tab._classifier_value_labels["Tw(2x1)"].text(), "20%")
+        self.assertEqual(self.tab._classifier_value_labels["RT13"].text(), "15%")
+
+
+class RetrospectiveGateTests(EqualizerTabCase):
+    retrospective = True
+
+    def test_historical_snapshot_ignores_age_and_current_session_gate(self) -> None:
+        self.tab.set_session_id("HISTORICAL-SESSION")
+        self.tab.update_qc_context(
+            session_active=False,
+            view_segment_id=4,
+            visual_history_generation=2,
+            gun_aligned=True,
+            realignment_active=False,
+        )
+        metadata = _metadata(monotonic_ns=1)
+        metadata["frame_age_ms"] = 27.5
+        self.tab.update_camera_frame(_rgb(), metadata)
+        record = self.accepted_record()
+        self.assertTrue(self.tab.set_accepted_calibration(record))
+        self.assertTrue(self.tab._save_btn.isEnabled())
         self.assertEqual(
-            self.tab._classifier_value_labels["1x1"].text(), "80%",
-        )
-        self.tab.reset_for_new_session()
-        self.assertEqual(self.tab._classifier_value_labels["1x1"].text(), "—%")
-
-    def test_reset_returns_sliders_to_uniform(self):
-        self.tab._set_weights({
-            "1x1": 1.0, "Tw(2x1)": 0.0, "c(6x2)": 0.0,
-            "RT13": 0.0, "HTR": 0.0,
-        })
-        self.tab.reset_for_new_session()
-        for slider in self.tab._sliders.values():
-            self.assertEqual(slider.value(), 20)
-
-
-class PauseButtonTests(unittest.TestCase):
-    """Freeze frame / Resume live toggle behavior (Jul 14 2026 addition).
-
-    Locks the three-part invariant: (1) button label describes the NEXT
-    action, not the current state; (2) paused = camera frames dropped
-    while cached frame preserved; (3) session reset restores unpaused
-    default so the next armed session doesn't start frozen.
-    """
-
-    def setUp(self):
-        self.tab = LiveEqualizerTab()
-
-    def tearDown(self):
-        self.tab.deleteLater()
-
-    def test_initial_state_is_unpaused_with_freeze_label(self):
-        # Fresh tab: not paused, button says what pressing it will do.
-        self.assertFalse(self.tab._paused)
-        self.assertFalse(self.tab._pause_btn.isChecked())
-        self.assertEqual(self.tab._pause_btn.text(), "Freeze frame")
-
-    def test_toggle_on_pauses_and_flips_label(self):
-        self.tab._pause_btn.setChecked(True)
-        self.assertTrue(self.tab._paused)
-        # Label now describes the NEXT action (resume), not the current
-        # state (paused).
-        self.assertEqual(self.tab._pause_btn.text(), "Resume live")
-
-    def test_toggle_off_resumes_and_flips_label_back(self):
-        self.tab._pause_btn.setChecked(True)
-        self.tab._pause_btn.setChecked(False)
-        self.assertFalse(self.tab._paused)
-        self.assertEqual(self.tab._pause_btn.text(), "Freeze frame")
-
-    def test_paused_update_camera_frame_is_ignored(self):
-        # Seed with a first frame so we have a known "frozen" state to
-        # compare against.
-        seed_frame = _rgb_frame(color=90)
-        self.tab.update_camera_frame(seed_frame)
-        cached_at_pause = self.tab.get_current_full_frame()
-        self.assertIsNotNone(cached_at_pause)
-
-        # Pause, then try to push a new frame.
-        self.tab._pause_btn.setChecked(True)
-        new_frame = _rgb_frame(color=200)
-        self.tab.update_camera_frame(new_frame)
-
-        # Cache still points at the pre-pause frame — new frame ignored.
-        cached_after = self.tab.get_current_full_frame()
-        self.assertTrue(np.array_equal(cached_after, seed_frame))
-        self.assertFalse(np.array_equal(cached_after, new_frame))
-
-    def test_paused_frame_still_saveable(self):
-        # Frozen frame must still be reachable via get_current_full_frame
-        # so the Save path (GrowthApp -> record_live_label) snapshots the
-        # frame the grower was actually looking at.
-        frame = _rgb_frame(color=120)
-        self.tab.update_camera_frame(frame)
-        self.tab._pause_btn.setChecked(True)
-        # get_current_full_frame is what growth_app._on_live_label_save
-        # reads.
-        self.assertTrue(
-            np.array_equal(self.tab.get_current_full_frame(), frame)
+            self.tab.get_current_capture_metadata()["frame_age_ms"],
+            27.5,
         )
 
-    def test_resume_lets_new_frames_land(self):
-        # After unpausing, the next update_camera_frame call updates the
-        # cache. Guards against a bug where _paused stays True after the
-        # button uncheck (state-machine leak).
-        self.tab.update_camera_frame(_rgb_frame(color=50))
-        self.tab._pause_btn.setChecked(True)
-        # New frame while paused: ignored.
-        self.tab.update_camera_frame(_rgb_frame(color=200))
-        # Unpause + push a distinctive frame.
-        self.tab._pause_btn.setChecked(False)
-        new_frame = _rgb_frame(color=175)
-        self.tab.update_camera_frame(new_frame)
-        self.assertTrue(
-            np.array_equal(self.tab.get_current_full_frame(), new_frame)
+    def test_historical_mode_still_requires_session_id(self) -> None:
+        self.tab.update_qc_context(
+            session_active=False,
+            view_segment_id=4,
+            visual_history_generation=2,
+            gun_aligned=True,
+            realignment_active=False,
         )
-
-    def test_reset_for_new_session_clears_pause(self):
-        # Set up a paused state, then reset → button unchecked, label
-        # back to Freeze frame, _paused False.
-        self.tab.update_camera_frame(_rgb_frame(color=80))
-        self.tab._pause_btn.setChecked(True)
-        self.assertTrue(self.tab._paused)
-
-        self.tab.reset_for_new_session()
-
-        self.assertFalse(self.tab._paused)
-        self.assertFalse(self.tab._pause_btn.isChecked())
-        self.assertEqual(self.tab._pause_btn.text(), "Freeze frame")
+        self.tab.update_camera_frame(_rgb(), _metadata(monotonic_ns=1))
+        self.assertFalse(self.tab._calibrate_btn.isEnabled())
 
 
-class TabRegistrationTests(unittest.TestCase):
-    """Live Equalizer is mounted at the expected tab index in GrowthMonitor."""
+class StandaloneDisabledTests(unittest.TestCase):
+    def test_direct_entry_returns_nonzero_with_growth_monitor_guidance(self) -> None:
+        from scripts import equalizer_ui
 
-    def setUp(self):
-        from gui.growth_monitor import GrowthMonitor
-        self.monitor = GrowthMonitor()
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            result = equalizer_ui.main()
+        self.assertNotEqual(result, 0)
+        self.assertIn("Growth Monitor", stderr.getvalue())
 
-    def tearDown(self):
-        self.monitor.deleteLater()
+    def test_legacy_window_cannot_save_or_call_callback(self) -> None:
+        from scripts.equalizer_ui import EqualizerWindow
 
-    def test_tab_registered_between_scrubber_and_session(self):
-        labels = [
-            self.monitor._tabs.tabText(i)
-            for i in range(self.monitor._tabs.count())
-        ]
-        self.assertIn("Live Equalizer", labels)
-        idx = labels.index("Live Equalizer")
-        self.assertEqual(labels[idx - 1], "Scrubber")
-        self.assertEqual(labels[idx + 1], "Session")
-
-    def test_live_equalizer_tab_attribute_exposed(self):
-        self.assertTrue(hasattr(self.monitor, "live_equalizer_tab"))
-
-
-# --- GrowthLogger.record_live_label tests -----------------------------------
-
-
-class LiveLabelSchemaTests(unittest.TestCase):
-    """LIVE_LABEL_FIELDS shape locked so downstream readers can rely on it."""
-
-    def test_schema_contains_expected_columns(self):
-        expected = {
-            "timestamp", "elapsed_s", "label_idx",
-            "recon_1x1", "recon_tw", "recon_c6x2",
-            "recon_rt13", "recon_HTR",
-            "pyrometer_temp_C",
-            "voltage_V", "current_A", "psu_source",
-            "frame_path",
-        }
-        self.assertEqual(set(GrowthLogger.LIVE_LABEL_FIELDS), expected)
-
-    def test_label_idx_is_third_column(self):
-        # Ordering matches manual_events + auto_capture_events pattern
-        # (timestamp, elapsed_s, idx, ...) for cross-file consistency.
-        self.assertEqual(GrowthLogger.LIVE_LABEL_FIELDS[0], "timestamp")
-        self.assertEqual(GrowthLogger.LIVE_LABEL_FIELDS[1], "elapsed_s")
-        self.assertEqual(GrowthLogger.LIVE_LABEL_FIELDS[2], "label_idx")
-
-
-class LiveLabelLifecycleTests(unittest.TestCase):
-    """File open on start_session, close on end_session, counter reset."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.logger = GrowthLogger(base_dir=self.tmp.name)
-
-    def tearDown(self):
+        callbacks: list[dict] = []
+        with patch(
+            "scripts.equalizer_ui.load_class_means",
+            return_value=self._basis_images(),
+        ):
+            window = EqualizerWindow(on_save_callback=callbacks.append)
         try:
-            self.logger.end_session()
-        except Exception:
-            pass
-        self.tmp.cleanup()
+            self.assertFalse(window._standalone_save_btn.isEnabled())
+            window.action_save()
+            self.assertEqual(callbacks, [])
+            self.assertIn("Growth Monitor", window.statusbar.currentMessage())
+        finally:
+            window.deleteLater()
 
-    def test_live_labels_csv_created_on_start_session(self):
-        self.logger.start_session("TEST_LIVE_A")
-        self.assertTrue(
-            (self.logger.session_dir / "live_labels.csv").exists()
-        )
-
-    def test_header_matches_schema(self):
-        self.logger.start_session("TEST_LIVE_HEADER")
-        with open(self.logger.session_dir / "live_labels.csv") as f:
-            header = next(csv.reader(f))
-        self.assertEqual(header, GrowthLogger.LIVE_LABEL_FIELDS)
-
-    def test_counter_resets_across_sessions(self):
-        self.logger.start_session("TEST_LIVE_C1")
-        idx1 = self.logger.record_live_label(elapsed_s=1.0, weights={"1x1": 1.0})
-        self.logger.end_session()
-        self.logger.start_session("TEST_LIVE_C2")
-        idx2 = self.logger.record_live_label(elapsed_s=2.0, weights={"1x1": 1.0})
-        self.assertEqual(idx1, 1)
-        self.assertEqual(idx2, 1)
-
-    def test_no_session_returns_zero(self):
-        self.assertEqual(
-            self.logger.record_live_label(elapsed_s=1.0, weights={}), 0,
-        )
-
-
-class LiveLabelRecordTests(unittest.TestCase):
-    """End-to-end row writes + optional frame snapshot."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.logger = GrowthLogger(base_dir=self.tmp.name)
-        self.logger.start_session("TEST_LIVE_RECORD")
-        self.csv_path = self.logger.session_dir / "live_labels.csv"
-
-    def tearDown(self):
-        try:
-            self.logger.end_session()
-        except Exception:
-            pass
-        self.tmp.cleanup()
-
-    def _rows(self) -> list[dict]:
-        with open(self.csv_path) as f:
-            return list(csv.DictReader(f))
-
-    def test_bare_call_writes_row(self):
-        idx = self.logger.record_live_label(
-            elapsed_s=42.0, weights={"1x1": 1.0},
-        )
-        self.assertEqual(idx, 1)
-        rows = self._rows()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["elapsed_s"], "42.00")
-        self.assertEqual(rows[0]["label_idx"], "1")
-        self.assertEqual(rows[0]["recon_1x1"], "1.0000")
-        # Sliders the caller didn't set → default 0.0.
-        self.assertEqual(rows[0]["recon_HTR"], "0.0000")
-
-    def test_full_payload_populates_all_columns(self):
-        weights = {
-            "1x1":     0.60,
-            "Tw(2x1)": 0.20,
-            "c(6x2)":  0.10,
-            "RT13":    0.05,
-            "HTR":     0.05,
+    @staticmethod
+    def _basis_images() -> dict[str, np.ndarray]:
+        base = _spot_image()
+        return {
+            label: np.array(base, copy=True)
+            for label in ACTIVE_SIMULATOR_LABELS
         }
-        idx = self.logger.record_live_label(
-            elapsed_s=123.45,
-            weights=weights,
-            pyro_temp=640.7,
-            voltage_V=12.345,
-            current_A=0.678,
-            psu_source="mistral",
-        )
-        self.assertEqual(idx, 1)
-        rows = self._rows()
-        self.assertEqual(rows[0]["recon_1x1"], "0.6000")
-        self.assertEqual(rows[0]["recon_tw"], "0.2000")
-        self.assertEqual(rows[0]["recon_c6x2"], "0.1000")
-        self.assertEqual(rows[0]["recon_rt13"], "0.0500")
-        self.assertEqual(rows[0]["recon_HTR"], "0.0500")
-        self.assertEqual(rows[0]["pyrometer_temp_C"], "640.7")
-        self.assertEqual(rows[0]["voltage_V"], "12.345")
-        self.assertEqual(rows[0]["current_A"], "0.678")
-        self.assertEqual(rows[0]["psu_source"], "mistral")
-
-    def test_counter_monotonically_increments(self):
-        idxs = [
-            self.logger.record_live_label(
-                elapsed_s=float(i), weights={"1x1": 1.0},
-            )
-            for i in range(4)
-        ]
-        self.assertEqual(idxs, [1, 2, 3, 4])
-
-    def test_frame_saved_when_provided(self):
-        frame = _rgb_frame(color=140)
-        idx = self.logger.record_live_label(
-            elapsed_s=5.0, weights={"1x1": 0.5}, frame=frame,
-        )
-        rows = self._rows()
-        frame_path = rows[0]["frame_path"]
-        self.assertNotEqual(frame_path, "")
-        self.assertTrue(Path(frame_path).exists())
-        self.assertTrue(
-            Path(frame_path).name.startswith(f"live_label_{idx:03d}_"),
-        )
-        self.assertTrue(frame_path.endswith(".bmp"))
 
 
 if __name__ == "__main__":

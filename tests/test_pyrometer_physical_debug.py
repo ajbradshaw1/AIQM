@@ -5,7 +5,7 @@ Covers the READ-ONLY safety invariants + the verdict-logic decision tree.
 Does NOT touch pyserial / pymodbus — that's on-hardware territory.
 
 Runs on Mac dev env with no lab dependencies:
-    PYTHONPATH=. python scripts/test_pyrometer_physical_debug.py
+    python -m pytest -q tests/test_pyrometer_physical_debug.py
 """
 from __future__ import annotations
 

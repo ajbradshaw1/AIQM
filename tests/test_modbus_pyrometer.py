@@ -13,7 +13,7 @@ Tests seed the queue with canned successful/failing/oddly-shaped responses
 and assert on the driver's behavior.
 
 Usage:
-    PYTHONPATH=. python scripts/test_modbus_pyrometer.py
+    python -m pytest -q tests/test_modbus_pyrometer.py
 
 Exits 0 on success; raises AssertionError with a diagnostic on failure.
 
@@ -577,15 +577,15 @@ def main() -> int:
             t()
         except BaseException as exc:  # noqa: BLE001
             failures.append((name, exc))
-            print(f"  ✗ {name}: {type(exc).__name__}: {exc}")
+            print(f"  FAIL {name}: {type(exc).__name__}: {exc}")
         else:
-            print(f"  ✓ {name}")
+            print(f"  PASS {name}")
 
     print()
     if failures:
-        print(f"FAIL — {len(failures)}/{len(TESTS)} tests failed")
+        print(f"FAIL - {len(failures)}/{len(TESTS)} tests failed")
         return 1
-    print(f"PASS — {len(TESTS)}/{len(TESTS)} tests passed")
+    print(f"PASS - {len(TESTS)}/{len(TESTS)} tests passed")
     return 0
 
 

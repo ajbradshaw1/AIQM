@@ -1,38 +1,14 @@
 #!/usr/bin/env python3
-"""RHEED Equalizer — interactive labeling tool (PyQt6 standalone).
+"""Shared Equalizer basis, fitting, palette, and legacy preview helpers.
 
-Per the May 8 group meeting and the May 14 design conversation: sliders
-correspond to **reconstruction types** (1x1, Tw(2x1), c(6x2), RT13, HTR),
-not abstract SVD components. The basis is the per-class **mean image**
-from Classifier2's STO_ideal_* training set. The grower drags sliders
-until the live "your blend" reconstruction matches the target image; the
-slider values *are* the label.
-
-This sidesteps the "decompose this image into 50% 1x1, 25% rt13, 25% HTR
-in your head" cognitive problem flagged at the May 8 meeting. The grower
-adjusts and sees the result, instead of estimating mixtures by inspection.
-
-Math:
-    basis     = stack(mean_image[class] for class in 5 classes)
-    weights   = (w_1x1, w_Tw, w_c6x2, w_RT13, w_HTR)
-    reconstr. = sum(w_i * basis_i)
-
-Auto-fit:
-    Least-squares onto the basis, clipped to non-negative, normalized to
-    sum=1. Gives the grower a sensible starting point to refine from.
-
-Saved labels go to:
-    ~/Downloads/equalizer_labels.csv
-    columns: timestamp, image_path, 1x1, Tw(2x1), c(6x2), RT13, HTR
-
-Run (Mac, AIQM .venv):
-    cd /Users/aj/AIQM-Software-Hardware-Integration
-    ./.venv/bin/python scripts/equalizer_ui.py
+The four active canonical simulator classes are 1x1, Tw(2x1), c(6x2), and
+RT13; HTR remains unavailable. Production labeling is deliberately confined
+to Growth Monitor, where an app-owned camera calibration, RHEED QC state, and
+capture provenance are mandatory. Direct execution exits nonzero and the
+legacy window cannot save labels.
 """
 from __future__ import annotations
 
-import csv
-import datetime
 import sys
 import os
 from pathlib import Path
@@ -40,6 +16,17 @@ from typing import Callable, Optional
 
 import numpy as np
 from PIL import Image
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from gui.equalizer_alignment import (
+    ACTIVE_SIMULATOR_LABELS,
+    BasisAsset,
+    BasisBundle,
+    PROCESS_WH as CANONICAL_PROCESS_WH,
+)
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
@@ -48,51 +35,55 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-
-# Training set provides the basis. Mirrors the prototype's paths.
-CLASSIFIER2_DATA_ROOT = Path(os.environ.get(
-    "AIQM_CLASSIFIER_DATA",
-    "/Users/aj/Documents/Research/Data/RHEED image classifier training data",
-))
-CLASS_DIRS: dict[str, str] = {
-    "1x1":     "STO_ideal_1x1",
-    "Tw(2x1)": "STO_ideal_Twinned2x1",
-    "c(6x2)":  "STO_ideal_c6x2",
-    "RT13":    "STO_ideal_RT13",
-    "HTR":     "STO_ideal_HTR",
-}
-CLASS_LABELS = list(CLASS_DIRS.keys())
+CLASS_LABELS = [*ACTIVE_SIMULATOR_LABELS, "HTR"]
+ACTIVE_CLASS_LABELS = list(ACTIVE_SIMULATOR_LABELS)
+INACTIVE_CLASS_LABELS = [
+    label for label in CLASS_LABELS if label not in ACTIVE_CLASS_LABELS
+]
 IMAGE_EXTS = {".png", ".bmp", ".jpg", ".jpeg", ".tif", ".tiff"}
+
+# Legacy cache-builder inputs retained for scripts/build_equalizer_cache.py.
+# The runtime loader below intentionally does not consume this empirical cache.
+CLASSIFIER2_DATA_ROOT = Path(
+    os.environ.get(
+        "AIQM_CLASSIFIER_DATA",
+        "/Users/aj/Documents/Research/Data/RHEED image classifier training data",
+    )
+)
+CLASS_DIRS: dict[str, str] = {
+    "1x1": "STO_ideal_1x1",
+    "Tw(2x1)": "STO_ideal_Twinned2x1",
+    "c(6x2)": "STO_ideal_c6x2",
+    "RT13": "STO_ideal_RT13",
+    "HTR": "STO_ideal_HTR",
+}
 
 # Internal processing resolution — matches the SVD prototype so basis
 # vectors are pixel-comparable. Display upscales for visibility.
 PROCESS_WH = (128, 96)
 DISPLAY_WH = (520, 390)
-LABELS_CSV = Path.home() / "Downloads" / "equalizer_labels.csv"
-
-# Pre-computed class means cache — lets the UI run on machines without the
-# training data (e.g., Bulbasaur). Build with scripts/build_equalizer_cache.py
-# on a machine that has CLASSIFIER2_DATA_ROOT, commit the resulting npz.
-MEANS_CACHE = Path(__file__).parent.parent / "data" / "equalizer_class_means.npz"
-# npz requires keys that are valid Python identifiers; map labels with parens.
+MEANS_CACHE = _REPO_ROOT / "data" / "equalizer_class_means.npz"
+STANDALONE_DISABLED_MESSAGE = (
+    "Standalone Equalizer labeling is disabled because it cannot prove camera "
+    "alignment, RHEED QC, or capture provenance. Use the Growth Monitor Live "
+    "Equalizer or Events workflow."
+)
 SAFE_KEYS = {
     label: label.replace("(", "_").replace(")", "_").replace(" ", "")
     for label in CLASS_LABELS
 }
-SAFE_KEYS_REVERSE = {v: k for k, v in SAFE_KEYS.items()}
 
 # Physics-simulated basis from Liu et al. (J. Vac. Sci. Technol. B 2022),
 # rendered from the parameters in their xlsx, exported via the PI's earlier
-# presentation. Used for the four well-defined reconstructions; HTR has no
-# closed-form physical model so it stays empirical (per AJ's clarification
-# May 19 2026 — HTR is a grower-side "catch-all" term, not a phase).
+# presentation. Used for the four well-defined reconstructions. HTR has no
+# canonical simulator-frame asset in v1 and is therefore unavailable.
 SIMULATED_BASIS_DIR = Path(__file__).parent.parent / "data" / "simulated_basis"
 SIMULATED_BASIS_FILES = {
     "1x1": "1x1.png",
     "Tw(2x1)": "Tw_2x1.png",
     "c(6x2)": "c_6x2.png",
     "RT13": "rt13.png",
-    # HTR intentionally omitted — empirical mean only.
+    # HTR intentionally omitted — canonical simulator basis pending.
 }
 
 # Sliders are integer 0-100 internally; UI weight is value/100.
@@ -103,91 +94,77 @@ SLIDER_MAX = 100
 # ----- Math helpers ------------------------------------------------------
 
 
-def load_grayscale(path: Path, target_wh: tuple[int, int]) -> np.ndarray:
-    """Load image, convert to grayscale, resize to target_wh (W, H)."""
-    img = Image.open(path).convert("L").resize(target_wh, Image.LANCZOS)
+def load_grayscale(
+    path: Path,
+    target_wh: tuple[int, int],
+    *,
+    trim_presentation_frame: bool = False,
+) -> np.ndarray:
+    """Load grayscale data, optionally removing the export's white frame."""
+    img = Image.open(path).convert("L")
+    if trim_presentation_frame:
+        values = np.asarray(img, dtype=np.uint8)
+        # The committed simulator exports came through a presentation and
+        # carry a thin near-white frame.  Its pixels otherwise become bright
+        # edges after downsampling and bias correlation/Auto-fit.  Black RHEED
+        # background supplies a stable content bounding box for these assets.
+        content = values < 200
+        ys, xs = np.nonzero(content)
+        if not len(xs):
+            raise ValueError(f"Canonical simulator asset has no dark field: {path}")
+        top, bottom = int(ys.min()), int(ys.max()) + 1
+        left, right = int(xs.min()), int(xs.max()) + 1
+        if bottom - top < values.shape[0] // 2 or right - left < values.shape[1] // 2:
+            raise ValueError(f"Canonical simulator crop is implausibly small: {path}")
+        img = Image.fromarray(values[top:bottom, left:right])
+    img = img.resize(target_wh, Image.Resampling.LANCZOS)
     return np.asarray(img, dtype=np.float32)
 
 
-def _load_means_from_cache() -> dict[str, np.ndarray] | None:
-    """Try to load pre-computed class means from the npz cache."""
-    if not MEANS_CACHE.exists():
-        return None
-    data = np.load(MEANS_CACHE)
-    means = {
-        SAFE_KEYS_REVERSE[k]: data[k].astype(np.float32)
-        for k in data.files
-        if k in SAFE_KEYS_REVERSE
-    }
-    return means or None
-
-
-def _load_simulated_basis(target_wh: tuple[int, int]) -> dict[str, np.ndarray]:
-    """Load the physics-simulated reference image for each well-defined class.
-
-    Returns a dict mapping class label → grayscale array at target_wh, only
-    for classes that have a committed simulation PNG. Classes without a
-    simulation (HTR) are absent from the returned dict; the caller layers
-    the empirical mean for those.
-    """
-    simulated: dict[str, np.ndarray] = {}
-    for label, filename in SIMULATED_BASIS_FILES.items():
-        path = SIMULATED_BASIS_DIR / filename
-        if not path.exists():
-            continue
-        simulated[label] = load_grayscale(path, target_wh)
-    return simulated
+def load_basis_bundle() -> BasisBundle:
+    """Load the four canonical simulator assets plus inactive HTR metadata."""
+    assets: list[BasisAsset] = []
+    for label in ACTIVE_CLASS_LABELS:
+        path = SIMULATED_BASIS_DIR / SIMULATED_BASIS_FILES[label]
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing canonical simulator basis: {path}")
+        assets.append(
+            BasisAsset(
+                label=label,
+                image=load_grayscale(
+                    path,
+                    CANONICAL_PROCESS_WH,
+                    trim_presentation_frame=True,
+                ),
+                active=True,
+                source_kind="simulator",
+                source_path=path.relative_to(_REPO_ROOT).as_posix(),
+            )
+        )
+    assets.append(
+        BasisAsset(
+            label="HTR",
+            image=None,
+            active=False,
+            source_kind="unavailable",
+            unavailable_reason="canonical simulator basis pending",
+        )
+    )
+    return BasisBundle(tuple(assets))
 
 
 def load_class_means(target_wh: tuple[int, int]) -> dict[str, np.ndarray]:
-    """Per-class basis image for each STO reconstruction class.
+    """Compatibility view of the four active canonical simulator assets.
 
-    Hybrid basis (per PI direction May 8 2026 + AJ's HTR clarification
-    May 19 2026):
-      - Four well-defined reconstructions (1x1, Tw(2x1), c(6x2), RT13)
-        use physics-simulated images from Liu et al. (JVSTB 2022).
-      - HTR has no closed-form physical model — it's a grower-side
-        "catch-all" — so it stays as the empirical class mean from
-        Classifier2's training data.
-
-    Resolution order:
-      1. Simulated PNG if present (4 classes)
-      2. Cached empirical mean (HTR, and fallback for missing simulations)
-      3. Recompute from CLASSIFIER2_DATA_ROOT (Mac dev only)
+    HTR is deliberately absent until it has a canonical simulator-frame
+    basis.  Returning an empirical HTR image here would mix coordinate frames.
     """
-    simulated = _load_simulated_basis(target_wh)
-    cached = _load_means_from_cache()
-
-    # If the cache matches target resolution, use it as the empirical fill.
-    empirical: dict[str, np.ndarray] = {}
-    if cached is not None:
-        sample = next(iter(cached.values()))
-        if sample.shape == (target_wh[1], target_wh[0]):
-            empirical = cached
-
-    # If we have no empirical fill and no training data either, return
-    # simulated-only — the UI will warn about missing HTR.
-    if not empirical and not CLASSIFIER2_DATA_ROOT.is_dir():
-        return dict(simulated)
-
-    # Need to compute empirical from training data (Mac dev path).
-    if not empirical:
-        for label, subdir in CLASS_DIRS.items():
-            class_dir = CLASSIFIER2_DATA_ROOT / subdir
-            if not class_dir.is_dir():
-                continue
-            rows: list[np.ndarray] = []
-            for p in sorted(class_dir.iterdir()):
-                if p.suffix.lower() not in IMAGE_EXTS:
-                    continue
-                rows.append(load_grayscale(p, target_wh))
-            if rows:
-                empirical[label] = np.stack(rows).mean(axis=0)
-
-    # Layer: simulated wins for the 4 well-defined classes, empirical for HTR.
-    means: dict[str, np.ndarray] = dict(empirical)
-    means.update(simulated)
-    return means
+    if tuple(target_wh) != CANONICAL_PROCESS_WH:
+        raise ValueError(
+            f"Equalizer alignment uses fixed canonical size {CANONICAL_PROCESS_WH}, "
+            f"not {target_wh}"
+        )
+    return load_basis_bundle().active_images(copy=True)
 
 
 def reconstruct(
@@ -202,6 +179,32 @@ def reconstruct(
     return np.clip(out, 0, 255)
 
 
+def auto_fit_details(
+    means: dict[str, np.ndarray], target: np.ndarray,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Return non-negative raw least-squares coefficients and normalization."""
+    labels_in_means = [label for label in ACTIVE_CLASS_LABELS if label in means]
+    if not labels_in_means:
+        raise ValueError("No active canonical basis images are available")
+    basis = np.stack(
+        [means[label].flatten() for label in labels_in_means], axis=1,
+    )
+    t = target.flatten()
+    coefficients, *_ = np.linalg.lstsq(basis, t, rcond=None)
+    coefficients = np.clip(coefficients, 0, None)
+    total = coefficients.sum()
+    if total <= 0:
+        normalized = np.full(
+            len(labels_in_means), 1.0 / len(labels_in_means),
+        )
+    else:
+        normalized = coefficients / total
+    return (
+        dict(zip(labels_in_means, coefficients)),
+        dict(zip(labels_in_means, normalized)),
+    )
+
+
 def auto_fit(
     means: dict[str, np.ndarray], target: np.ndarray,
 ) -> dict[str, float]:
@@ -211,20 +214,8 @@ def auto_fit(
     and normalizes so the weights sum to 1. Falls back to uniform if the
     fit collapses to all-zeros (e.g., black target image).
     """
-    basis = np.stack(
-        [means[label].flatten() for label in CLASS_LABELS if label in means],
-        axis=1,
-    )
-    t = target.flatten()
-    w, *_ = np.linalg.lstsq(basis, t, rcond=None)
-    w = np.clip(w, 0, None)
-    s = w.sum()
-    if s <= 0:
-        w = np.full(len(CLASS_LABELS), 1.0 / len(CLASS_LABELS))
-    else:
-        w = w / s
-    labels_in_means = [label for label in CLASS_LABELS if label in means]
-    return dict(zip(labels_in_means, w))
+    _raw, normalized = auto_fit_details(means, target)
+    return normalized
 
 
 def apply_green_palette(arr_u8: np.ndarray) -> np.ndarray:
@@ -274,16 +265,11 @@ def array_to_pixmap(
 
 
 class EqualizerWindow(QMainWindow):
-    """RHEED Equalizer labeling window.
+    """Legacy preview-only window retained for development inspection.
 
-    Standalone mode (no args): user picks an image via the Open dialog;
-    Save writes a row to ``~/Downloads/equalizer_labels.csv``.
-
-    Embedded mode (Events tab launcher, May 19 2026):
-      - ``pre_loaded_image`` skips the file dialog
-      - ``on_save_callback`` is invoked on Save with the slider weights
-        dict; the standalone CSV write is skipped so the events_labels.csv
-        write is the single source of truth.
+    It must not produce labels. Production Live and Events labels require the
+    shared Growth Monitor component, an app-owned accepted calibration, and
+    typed capture/QC provenance.
     """
 
     def __init__(
@@ -292,7 +278,7 @@ class EqualizerWindow(QMainWindow):
         on_save_callback: Optional["Callable[[dict[str, float]], None]"] = None,
     ) -> None:
         super().__init__()
-        title = "RHEED Equalizer"
+        title = "RHEED Equalizer (preview only)"
         if pre_loaded_image is not None:
             title = f"RHEED Equalizer — {pre_loaded_image.name}"
         self.setWindowTitle(title)
@@ -304,19 +290,16 @@ class EqualizerWindow(QMainWindow):
         if not self.means:
             QMessageBox.critical(
                 self, "Basis images missing",
-                f"Couldn't load per-class basis from either\n"
-                f"  simulated: {SIMULATED_BASIS_DIR}\n"
-                f"  cached:    {MEANS_CACHE}\n"
-                f"  training:  {CLASSIFIER2_DATA_ROOT}\n"
-                "Make sure at least one source is available.",
+                f"Couldn't load the canonical simulator basis from\n"
+                f"  {SIMULATED_BASIS_DIR}\n"
+                "All four active simulator assets are required.",
             )
             sys.exit(1)
-        missing = set(CLASS_LABELS) - set(self.means)
+        missing = set(ACTIVE_CLASS_LABELS) - set(self.means)
         if missing:
             QMessageBox.warning(
                 self, "Some classes missing",
-                f"Missing class basis images: {missing}.\n"
-                "Sliders for those classes will appear but do nothing.",
+                f"Missing active canonical basis images: {missing}.",
             )
 
         self.target: np.ndarray | None = None
@@ -365,6 +348,10 @@ class EqualizerWindow(QMainWindow):
         ]:
             btn = QPushButton(text)
             btn.clicked.connect(slot)
+            if text == "Save label":
+                self._standalone_save_btn = btn
+                btn.setEnabled(False)
+                btn.setToolTip(STANDALONE_DISABLED_MESSAGE)
             top.addWidget(btn)
         top.addStretch()
         root.addLayout(top)
@@ -421,6 +408,12 @@ class EqualizerWindow(QMainWindow):
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
             )
             value_label.setStyleSheet("font-family: monospace;")
+            if label in INACTIVE_CLASS_LABELS:
+                slider.setValue(0)
+                slider.setEnabled(False)
+                slider.setToolTip("N/A - canonical basis pending")
+                value_label.setText("N/A")
+                value_label.setToolTip("Canonical simulator-frame basis pending")
             sliders_layout.addWidget(name_label, i, 0)
             sliders_layout.addWidget(slider, i, 1)
             sliders_layout.addWidget(value_label, i, 2)
@@ -479,45 +472,14 @@ class EqualizerWindow(QMainWindow):
         self._reset_to_uniform()
 
     def action_save(self) -> None:
-        if self.target is None or self.target_path is None:
-            self.statusbar.showMessage("Load a target image first", 3000)
-            return
-        weights = self._current_weights()
-
-        # Embedded mode: hand off to the caller (Events tab), skip CSV write
-        # so events_labels.csv is the single source of truth for that label.
-        if self._on_save_callback is not None:
-            try:
-                self._on_save_callback(weights)
-                self.statusbar.showMessage("Saved label → events_labels.csv", 5000)
-            except Exception as e:
-                QMessageBox.critical(
-                    self, "Save failed",
-                    f"Save callback raised:\n{e}",
-                )
-            return
-
-        # Standalone mode: append to the default labels CSV.
-        LABELS_CSV.parent.mkdir(parents=True, exist_ok=True)
-        write_header = not LABELS_CSV.exists()
-        with open(LABELS_CSV, "a", newline="") as f:
-            writer = csv.writer(f)
-            if write_header:
-                writer.writerow(["timestamp", "image_path"] + CLASS_LABELS)
-            writer.writerow(
-                [
-                    datetime.datetime.now().isoformat(),
-                    str(self.target_path),
-                ]
-                + [f"{weights.get(label, 0.0):.4f}" for label in CLASS_LABELS]
-            )
-        self.statusbar.showMessage(f"Saved label → {LABELS_CSV}", 5000)
+        """Refuse the legacy path even if invoked programmatically."""
+        self.statusbar.showMessage(STANDALONE_DISABLED_MESSAGE, 10000)
 
     # ----- Slider state plumbing -----
 
     def _reset_to_uniform(self) -> None:
-        w = 1.0 / len(CLASS_LABELS)
-        self._set_weights({label: w for label in CLASS_LABELS})
+        w = 1.0 / len(ACTIVE_CLASS_LABELS)
+        self._set_weights({label: w for label in ACTIVE_CLASS_LABELS})
 
     def _set_weights(self, weights: dict[str, float]) -> None:
         """Set sliders without re-firing valueChanged per slider; one update at end."""
@@ -533,12 +495,15 @@ class EqualizerWindow(QMainWindow):
         return {
             label: slider.value() / SLIDER_MAX
             for label, slider in self.sliders.items()
+            if label in ACTIVE_CLASS_LABELS
         }
 
     def _on_slider_changed(self, *_: object) -> None:
         weights = self._current_weights()
         for label, w in weights.items():
             self.value_labels[label].setText(f"{w:.2f}")
+        for label in INACTIVE_CLASS_LABELS:
+            self.value_labels[label].setText("N/A")
         self._update_reconstruction()
 
     def _update_reconstruction(self) -> None:
@@ -555,12 +520,11 @@ class EqualizerWindow(QMainWindow):
             self.status_err.setText("")
 
 
-def main() -> None:
-    app = QApplication(sys.argv)
-    window = EqualizerWindow()
-    window.show()
-    sys.exit(app.exec())
+def main() -> int:
+    """Reject direct execution; helpers remain importable by Growth Monitor."""
+    print(STANDALONE_DISABLED_MESSAGE, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

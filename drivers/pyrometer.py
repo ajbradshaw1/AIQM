@@ -11,6 +11,7 @@ Two modes:
 
 import logging
 import struct
+import time
 from typing import Optional
 
 from heater_control import TemperatureSensor
@@ -46,6 +47,144 @@ def _regs_to_ascii(regs: list[int]) -> str:
     """Convert register array (1 ASCII byte per reg) to string."""
     b = bytes(r & 0xFF for r in regs)
     return b.split(b"\x00", 1)[0].decode("ascii", errors="ignore")
+
+
+def _crc16_modbus(payload: bytes) -> int:
+    """Return the CRC-16/MODBUS checksum for *payload*."""
+    crc = 0xFFFF
+    for byte in payload:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return crc
+
+
+class _RawReadResponse:
+    """Small pymodbus-compatible response used by the raw read backend."""
+
+    def __init__(self, registers=None, error: str = ""):
+        self.registers = list(registers or [])
+        self.error = error
+
+    def isError(self) -> bool:  # noqa: N802 - pymodbus compatibility
+        return bool(self.error)
+
+
+class _RawSerialModbusClient:
+    """Read-only Modbus RTU client that tolerates bytes before a reply.
+
+    Ch-MBE's IFD-5/PL2303GS path was verified with the raw probe on
+    2026-08-05, while pymodbus 3.14 timed out on the same COM3 link.  This
+    client scans the complete receive window for a CRC-valid function-03
+    frame instead of assuming that the reply begins at byte zero.
+    """
+
+    def __init__(
+        self,
+        *,
+        port: str,
+        baudrate: int,
+        parity: str,
+        stopbits: int,
+        bytesize: int,
+        timeout: float,
+        rts: Optional[bool],
+    ):
+        self._settings = {
+            "port": port,
+            "baudrate": baudrate,
+            "parity": parity,
+            "stopbits": stopbits,
+            "bytesize": bytesize,
+            "timeout": min(max(float(timeout), 0.01), 0.05),
+            "write_timeout": timeout,
+        }
+        self._response_timeout = float(timeout)
+        self._rts = rts
+        self.socket = None
+
+    def connect(self) -> bool:
+        try:
+            import serial
+        except ImportError as exc:
+            raise ImportError("pyserial not installed: pip install pyserial") from exc
+        self.socket = serial.Serial(**self._settings)
+        if self._rts is not None:
+            self.socket.rts = self._rts
+        return bool(getattr(self.socket, "is_open", True))
+
+    def close(self) -> None:
+        if self.socket is not None:
+            self.socket.close()
+            self.socket = None
+
+    @staticmethod
+    def _request(device_id: int, address: int, count: int) -> bytes:
+        body = struct.pack(">BBHH", device_id, 0x03, address, count)
+        return body + struct.pack("<H", _crc16_modbus(body))
+
+    @staticmethod
+    def _find_reply(data: bytes, device_id: int, count: int):
+        expected_bytes = count * 2
+        frame_len = 5 + expected_bytes
+        for offset in range(max(0, len(data) - frame_len + 1)):
+            if data[offset:offset + 3] != bytes((device_id, 0x03, expected_bytes)):
+                continue
+            frame = data[offset:offset + frame_len]
+            crc_rx = struct.unpack("<H", frame[-2:])[0]
+            if _crc16_modbus(frame[:-2]) != crc_rx:
+                continue
+            registers = struct.unpack(f">{count}H", frame[3:-2])
+            return _RawReadResponse(registers)
+
+        # A Modbus exception is five bytes: id, function|0x80, code, CRC.
+        for offset in range(max(0, len(data) - 4)):
+            frame = data[offset:offset + 5]
+            if len(frame) < 5 or frame[:2] != bytes((device_id, 0x83)):
+                continue
+            crc_rx = struct.unpack("<H", frame[-2:])[0]
+            if _crc16_modbus(frame[:-2]) == crc_rx:
+                return _RawReadResponse(error=f"Modbus exception 0x{frame[2]:02X}")
+        return None
+
+    def read_holding_registers(
+        self,
+        address: int,
+        count: int = 1,
+        *,
+        device_id: int = 1,
+        **_kwargs,
+    ):
+        if self.socket is None:
+            return _RawReadResponse(error="serial port is not open")
+        request = self._request(device_id, address, count)
+        self.socket.reset_input_buffer()
+        self.socket.write(request)
+        self.socket.flush()
+
+        received = bytearray()
+        deadline = time.monotonic() + self._response_timeout
+        while time.monotonic() < deadline:
+            waiting = int(getattr(self.socket, "in_waiting", 0) or 0)
+            chunk = self.socket.read(max(1, waiting))
+            if chunk:
+                received.extend(chunk)
+                response = self._find_reply(bytes(received), device_id, count)
+                if response is not None:
+                    return response
+            else:
+                time.sleep(0.005)
+        return _RawReadResponse(
+            error=(
+                f"no CRC-valid Modbus reply within {self._response_timeout:.2f}s "
+                f"({len(received)} bytes received)"
+            )
+        )
+
+    def write_register(self, *_args, **_kwargs):
+        raise RuntimeError(
+            "The raw_serial pyrometer backend is read-only; writes are disabled."
+        )
 
 
 class ModbusPyrometer(TemperatureSensor):
@@ -87,6 +226,7 @@ class ModbusPyrometer(TemperatureSensor):
         stopbits: int = 1,
         bytesize: int = 8,
         rts: Optional[bool] = None,
+        backend: str = "pymodbus",
     ):
         """``rts`` controls the RTS line — see ``connect``.
 
@@ -109,26 +249,42 @@ class ModbusPyrometer(TemperatureSensor):
         self._stopbits = stopbits
         self._bytesize = bytesize
         self._rts = rts
+        if backend not in {"pymodbus", "raw_serial"}:
+            raise ValueError(
+                "pyrometer Modbus backend must be 'pymodbus' or 'raw_serial', "
+                f"got {backend!r}"
+            )
+        self._backend = backend
         self._client = None
         self._connected = False
         self._word_swap = False
 
     def connect(self) -> None:
-        try:
-            from pymodbus.client import ModbusSerialClient
-        except ImportError as exc:
-            raise ImportError(
-                "pymodbus not installed: pip install pymodbus pyserial"
-            ) from exc
-
-        self._client = ModbusSerialClient(
-            port=self._port,
-            baudrate=self._baudrate,
-            parity=self._parity,
-            stopbits=self._stopbits,
-            bytesize=self._bytesize,
-            timeout=self._timeout,
-        )
+        if self._backend == "raw_serial":
+            self._client = _RawSerialModbusClient(
+                port=self._port,
+                baudrate=self._baudrate,
+                parity=self._parity,
+                stopbits=self._stopbits,
+                bytesize=self._bytesize,
+                timeout=self._timeout,
+                rts=self._rts,
+            )
+        else:
+            try:
+                from pymodbus.client import ModbusSerialClient
+            except ImportError as exc:
+                raise ImportError(
+                    "pymodbus not installed: pip install pymodbus pyserial"
+                ) from exc
+            self._client = ModbusSerialClient(
+                port=self._port,
+                baudrate=self._baudrate,
+                parity=self._parity,
+                stopbits=self._stopbits,
+                bytesize=self._bytesize,
+                timeout=self._timeout,
+            )
         if not self._client.connect():
             raise RuntimeError(
                 f"Could not open serial port {self._port}. "
@@ -183,9 +339,10 @@ class ModbusPyrometer(TemperatureSensor):
         self._detect_word_order()
         self._connected = True
         log.info(
-            "ModbusPyrometer connected: %s @ %d 8%s%d id=%d word_swap=%s",
+            "ModbusPyrometer connected: %s @ %d 8%s%d id=%d "
+            "backend=%s word_swap=%s",
             self._port, self._baudrate, self._parity, self._stopbits,
-            self._device_id, self._word_swap,
+            self._device_id, self._backend, self._word_swap,
         )
 
     def _detect_word_order(self) -> None:
@@ -397,8 +554,11 @@ class ModbusPyrometer(TemperatureSensor):
         if not self._resp_ok(rr, 2):
             regs = getattr(rr, "registers", None)
             if not regs:
+                detail = getattr(rr, "error", "")
+                detail = f" Transport detail: {detail}." if detail else ""
                 raise RuntimeError(
                     f"Modbus read at 0x{addr:04X}: empty register response."
+                    + detail
                     + self._EMPTY_RESPONSE_HINT
                 )
             raise RuntimeError(
@@ -415,8 +575,11 @@ class ModbusPyrometer(TemperatureSensor):
         if not self._resp_ok(rr, 1):
             regs = getattr(rr, "registers", None)
             if not regs:
+                detail = getattr(rr, "error", "")
+                detail = f" Transport detail: {detail}." if detail else ""
                 raise RuntimeError(
                     f"Modbus read at 0x{addr:04X}: empty register response."
+                    + detail
                     + self._EMPTY_RESPONSE_HINT
                 )
             raise RuntimeError(
@@ -430,8 +593,11 @@ class ModbusPyrometer(TemperatureSensor):
         if not self._resp_ok(rr, n_regs):
             regs = getattr(rr, "registers", None)
             if not regs:
+                detail = getattr(rr, "error", "")
+                detail = f" Transport detail: {detail}." if detail else ""
                 raise RuntimeError(
                     f"Modbus read at 0x{addr:04X}: empty register response."
+                    + detail
                     + self._EMPTY_RESPONSE_HINT
                 )
             raise RuntimeError(

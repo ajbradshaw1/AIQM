@@ -9,7 +9,7 @@ consumers (and any future ones) can rely on the same aspect-ratio-
 preserving resize + clear-on-None-pixmap behavior.
 
 Run:
-    QT_QPA_PLATFORM=offscreen python scripts/test_widgets_scaling_image.py
+    python -m pytest -q tests/test_widgets_scaling_image.py
 """
 from __future__ import annotations
 

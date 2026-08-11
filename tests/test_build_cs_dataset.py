@@ -5,8 +5,7 @@ CLI. All tests use synthetic session dirs — no dependency on
 logs/growths/ or archived Bulbasaur data.
 
 Run:
-    PYTHONPATH=. QT_QPA_PLATFORM=offscreen \\
-        python scripts/test_build_cs_dataset.py
+    python -m pytest -q tests/test_build_cs_dataset.py
 """
 from __future__ import annotations
 
@@ -150,6 +149,7 @@ class CatalogSessionTests(unittest.TestCase):
         self.assertEqual(entry.counts["event_label_rows"], 2)
         self.assertEqual(entry.counts["auto_capture_rows"], 5)
         self.assertEqual(entry.counts["manual_event_rows"], 1)
+        self.assertEqual(entry.counts["rheed_view_event_rows"], 0)
         # Last elapsed_s: 15 * 19 = 285
         self.assertEqual(entry.duration_s, 285.0)
         self.assertTrue(entry.has_classifier_data)
@@ -172,6 +172,13 @@ class CatalogSessionTests(unittest.TestCase):
         # raises FileNotFoundError which catalog_session catches.
         result = catalog_session(self.logs / "does-not-exist")
         self.assertIsNone(result)
+
+    def test_malformed_rheed_view_csv_returns_none(self):
+        session = _make_session(
+            self.logs, "growth_BAD_VIEW_CSV", sensor_rows=2
+        )
+        (session / "rheed_view_events.csv").write_bytes(b"\xff\xfe\xfa")
+        self.assertIsNone(catalog_session(session))
 
 
 class QualityFlagTests(unittest.TestCase):
@@ -292,9 +299,20 @@ class BundleSessionsTests(unittest.TestCase):
         self.logs.mkdir()
         self.out_dir = Path(self.tmp.name) / "out"
         self.out_dir.mkdir()
-        _make_session(
+        session_one = _make_session(
             self.logs, "growth_TEST_1", sensor_rows=10,
             commit_rows=2, label_rows=1, include_classifier=True,
+        )
+        _write_csv(
+            session_one / "rheed_view_events.csv",
+            ["timestamp", "elapsed_s", "event_idx", "event_type", "frame_path"],
+            [{
+                "timestamp": "2026-07-29T12:00:00",
+                "elapsed_s": "0.0",
+                "event_idx": "1",
+                "event_type": "session_start",
+                "frame_path": "",
+            }],
         )
         _make_session(
             self.logs, "growth_TEST_2", sensor_rows=15,
@@ -317,6 +335,9 @@ class BundleSessionsTests(unittest.TestCase):
 
         with tarfile.open(out_tar) as tar:
             names = tar.getnames()
+            readme = tar.extractfile("bundle/README.md").read().decode(
+                "utf-8"
+            )
         # Root files
         self.assertIn("bundle/catalog.json", names)
         self.assertIn("bundle/schema.md", names)
@@ -331,6 +352,10 @@ class BundleSessionsTests(unittest.TestCase):
         self.assertIn(
             "bundle/sessions/growth_TEST_1/events_labels.csv", names,
         )
+        self.assertIn(
+            "bundle/sessions/growth_TEST_1/rheed_view_events.csv", names,
+        )
+        self.assertIn("rheed_view_events", readme)
         # Per-session meta + frame manifest
         self.assertIn(
             "bundle/sessions/growth_TEST_1/session_meta.json", names,
@@ -352,6 +377,11 @@ class BundleSessionsTests(unittest.TestCase):
         self.assertEqual(catalog["session_count"], 2)
         ids = {s["session_id"] for s in catalog["sessions"]}
         self.assertEqual(ids, {"growth_TEST_1", "growth_TEST_2"})
+        first = next(
+            item for item in catalog["sessions"]
+            if item["session_id"] == "growth_TEST_1"
+        )
+        self.assertEqual(first["counts"]["rheed_view_event_rows"], 1)
 
 
 class CliSmokeTests(unittest.TestCase):

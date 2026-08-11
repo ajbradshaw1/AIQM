@@ -9,7 +9,7 @@ No hardware, no serial — ``pyserial`` is stubbed in ``sys.modules`` at
 import time via _fake_pyserial (same idiom as
 test_pyrometer_force_modbus.py).
 
-    PYTHONPATH=. python scripts/test_pyrometer_active_exactus_query.py
+    python -m pytest -q tests/test_pyrometer_active_exactus_query.py
 """
 from __future__ import annotations
 

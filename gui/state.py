@@ -48,7 +48,30 @@ class CameraState:
     intensity: float = 0.0  # ROI mean intensity for oscillation tracking
     connected: bool = False
     error: str = ""
-    mode: str = ""  # "direct", "screengrab", or "dummy"
+    mode: str = ""  # "vimba", "screengrab", "screengrab_mss", or "dummy"
+    capture_backend: str = ""
+    captured_at_utc: str = ""
+    capture_sequence: int = 0
+    frame_age_ms: float = 0.0
+    source_hwnd: int = 0
+    captured_monotonic_ns: int = 0  # internal age calculation, not serialized
+    capture_geometry_id: str = ""  # ROI/chrome-crop identity
+    acquire_started_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    received_at_utc: Optional[str] = None
+    received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    sample_sequence: int = 0
+    read_duration_ms: Optional[float] = None
+    worker_emitted_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    gui_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    valid: bool = False
 
 
 @dataclass
@@ -78,6 +101,29 @@ class PyrometerState:
     error: str = ""
     device_info: str = ""
     mode: str = ""  # "modbus", "screengrab", or "dummy"
+    # Read-only sample provenance. UTC fields are ISO-8601 strings; the
+    # monotonic timestamp is process-local and is used only to calculate age.
+    source_at_utc: Optional[str] = None
+    received_at_utc: Optional[str] = None
+    sample_sequence: int = 0
+    read_duration_ms: Optional[float] = None
+    acquire_started_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    worker_emitted_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    gui_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    valid: bool = False
+    sample_span_ms: Optional[float] = None
+    subread_monotonic_ns: tuple[int, ...] = field(
+        default_factory=tuple, repr=False, compare=False,
+    )
 
     @property
     def has_valid_reading(self) -> bool:
@@ -93,6 +139,7 @@ class PyrometerState:
         """
         return (
             self.connected
+            and self.valid
             and self.temperature is not None
             and math.isfinite(self.temperature)
         )
@@ -118,6 +165,42 @@ class MistralState:
     # ion_gauge_*_P, pirani_*_P, turbo*_rpm, service_mode.
     # None in all other modes (screengrab / jsonrpc / dummy).
     ads_cells: Optional[dict] = None
+    # ``source_at_utc`` is reserved for a future hardware/source timestamp;
+    # current MISTRAL modes expose only the Python receive timestamp.
+    source_at_utc: Optional[str] = None
+    received_at_utc: Optional[str] = None
+    sample_sequence: int = 0
+    read_duration_ms: Optional[float] = None
+    acquire_started_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    worker_emitted_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    gui_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    valid: bool = False
+    capture_completed_at_utc: Optional[str] = None
+    capture_completed_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    processing_duration_ms: Optional[float] = None
+    # Latest poll-attempt timing is separate from the latest successful
+    # sample above. On OCR parse failure the success sequence/timestamps stay
+    # unchanged while these fields still describe the failed screenshot/OCR.
+    attempt_capture_completed_at_utc: Optional[str] = None
+    attempt_capture_completed_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    attempt_completed_at_utc: Optional[str] = None
+    attempt_completed_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    attempt_duration_ms: Optional[float] = None
 
 
 @dataclass
@@ -153,6 +236,41 @@ class EvapControlState:
     connected: bool = False
     error: str = ""
     mode: str = ""  # "screengrab", "elog", or "dummy"
+    # Elog mode populates ``source_at_utc`` from the LabVIEW record. OCR and
+    # dummy modes have no source clock and leave it None.
+    source_at_utc: Optional[str] = None
+    received_at_utc: Optional[str] = None
+    sample_sequence: int = 0
+    read_duration_ms: Optional[float] = None
+    acquire_started_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    worker_emitted_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    gui_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    valid: bool = False
+    capture_completed_at_utc: Optional[str] = None
+    capture_completed_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    processing_duration_ms: Optional[float] = None
+    # Per-attempt OCR/Elog provenance; kept separate from the last successful
+    # sample so a failed poll cannot cross-wire two sample generations.
+    attempt_capture_completed_at_utc: Optional[str] = None
+    attempt_capture_completed_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    attempt_completed_at_utc: Optional[str] = None
+    attempt_completed_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    attempt_duration_ms: Optional[float] = None
 
 
 @dataclass
@@ -210,12 +328,115 @@ class ClassifierState:
 
     # Perf
     inference_ms: float = 0.0
+    source_capture_sequence: int = 0
+    source_received_monotonic_ns: int = field(
+        default=0, repr=False, compare=False,
+    )
+    inference_started_monotonic_ns: int = field(
+        default=0, repr=False, compare=False,
+    )
+    inference_completed_monotonic_ns: int = field(
+        default=0, repr=False, compare=False,
+    )
+    worker_emitted_monotonic_ns: int = field(
+        default=0, repr=False, compare=False,
+    )
+    gui_received_monotonic_ns: int = field(
+        default=0, repr=False, compare=False,
+    )
 
     # Model identity — filename + mtime of best_model.pth, set once at
     # bridge-load time and repeated on every emission. Non-empty means
     # the bridge loaded successfully. Displayed in the UI's tooltip so
     # growers can tell at a glance which model checkpoint is running.
     model_version: str = ""
+
+    # Acquisition-side RHEED view state.  These fields are deliberately
+    # separate from ``is_bad`` / ``is_ood`` above: alignment and history
+    # readiness are operator-/pipeline-known facts, while Bad/OOD are model
+    # predictions. ``None`` means that alignment has not yet been confirmed
+    # for the current session.
+    view_segment_id: Optional[int] = None
+    # Monotonic token for any reset of pixel-coordinate-dependent state.
+    # Unlike ``view_segment_id``, this also changes on a camera-continuity
+    # reset within the same stable gun alignment.
+    visual_history_generation: int = 0
+    gun_aligned: Optional[bool] = None
+    history_frame_count: int = 0
+    # Zero means that the loaded runtime bridge is single-frame-only.  The
+    # offline temporal experiments still use 32-frame causal histories.
+    history_required: int = 0
+    history_ready: bool = False
+    prediction_actionable: bool = False
+    model_input_mode: str = "unknown"
+
+
+@dataclass
+class WeakPrimaryShadowState:
+    """Read-only four-output diagnostic; never a control/advice signal."""
+
+    loading: bool = True
+    ready: bool = False
+    error: str = ""
+    last_frame_number: int = -1
+    source_capture_sequence: int = 0
+    source_received_monotonic_ns: int = field(default=0, repr=False, compare=False)
+    inference_started_monotonic_ns: int = field(default=0, repr=False, compare=False)
+    inference_completed_monotonic_ns: int = field(default=0, repr=False, compare=False)
+    worker_emitted_monotonic_ns: int = field(default=0, repr=False, compare=False)
+    gui_received_monotonic_ns: int = field(default=0, repr=False, compare=False)
+    inference_ms: float = 0.0
+    conditional_probabilities: dict[str, float] = field(default_factory=dict)
+    predicted_class: str = ""
+    predicted_applicability: float = 0.0
+    normalized_entropy: float = 0.0
+    checkpoint_disagreement: float = 0.0
+    checkpoint_count: int = 0
+    ensemble_id: str = ""
+    bundle_family: str = "brightness_robust_weak_primary_v1"
+    brightness_policy: str = "all_extreme"
+    output_classes: tuple[str, ...] = field(default_factory=tuple)
+    lambda_pair: float = 0.1
+    execution_scope: str = "weak_shadow_only"
+    actionable: bool = False
+    abstain_reason: str = (
+        "weak_shadow_only_no_registered_real_frame_actionability_policy"
+    )
+
+
+@dataclass
+class RheedQcState:
+    """Acquisition-side validity of the current RHEED view.
+
+    ``view_segment_id`` changes only after a gun realignment is completed.
+    Images are never deleted: frames captured while ``gun_aligned`` is False
+    remain useful realignment/QC data, but must not be mixed into the visual
+    history of the next stable segment. Temperature and process histories are
+    intentionally outside this state and continue across segment boundaries.
+
+    ``history_ready=False`` is not a Bad label. It only means that a temporal
+    adviser has not yet accumulated enough same-segment visual observations.
+    """
+
+    session_active: bool = False
+    view_segment_id: Optional[int] = None
+    visual_history_generation: int = 0
+    realignment_id: int = 0
+    gun_aligned: Optional[bool] = None
+    realignment_active: bool = False
+    history_frame_count: int = 0
+    history_required: int = 0
+    history_ready: bool = False
+
+    @property
+    def prediction_actionable(self) -> bool:
+        return (
+            self.session_active
+            and self.gun_aligned is True
+            and not self.realignment_active
+            and self.history_required > 0
+            and self.history_ready
+        )
 
 
 @dataclass

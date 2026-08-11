@@ -419,7 +419,9 @@ class AutoCaptureEngine(QObject):
         # in parallel with the detector's internal grayscale buffer so that
         # when frame_captured fires we can dump the visual context that
         # led up to the trigger. Sized in frames; at ~10 Hz, 20 ≈ 2 s.
-        self._context_buffer: collections.deque[np.ndarray] = collections.deque(
+        self._context_buffer: collections.deque[
+            tuple[np.ndarray, dict]
+        ] = collections.deque(
             maxlen=context_buffer_size,
         )
 
@@ -498,7 +500,14 @@ class AutoCaptureEngine(QObject):
         leading up to a flagged event. Returns an empty list before any
         frames have been evaluated.
         """
-        return [f.copy() for f in self._context_buffer]
+        return [frame.copy() for frame, _metadata in self._context_buffer]
+
+    def get_recent_captures(self) -> list[tuple[np.ndarray, dict]]:
+        """Snapshot frames with the provenance captured alongside each one."""
+        return [
+            (frame.copy(), dict(metadata))
+            for frame, metadata in self._context_buffer
+        ]
 
     def reset(self) -> None:
         """Reset internal counters (call on session start)."""
@@ -510,7 +519,9 @@ class AutoCaptureEngine(QObject):
         self._context_buffer.clear()
         self._baseline_scores.clear()
 
-    def evaluate(self, frame: np.ndarray) -> None:
+    def evaluate(
+        self, frame: np.ndarray, capture_metadata: dict | None = None,
+    ) -> None:
         """Called once per camera frame. Emits *frame_captured* if triggered."""
         if not self._enabled:
             return
@@ -518,7 +529,9 @@ class AutoCaptureEngine(QObject):
         # Populate the context buffer regardless of warmup state — when a
         # trigger fires shortly after warmup ends, we want pre-event context
         # from the warmup window itself.
-        self._context_buffer.append(frame.copy())
+        self._context_buffer.append(
+            (frame.copy(), dict(capture_metadata or {})),
+        )
 
         self._frame_count += 1
         if self._frame_count <= self._warmup_frames:

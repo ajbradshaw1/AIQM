@@ -10,7 +10,9 @@ The window must be visible on screen (not occluded) during reads, same
 constraint as the kSA RHEED screengrab.
 """
 
+from datetime import datetime, timezone
 import re
+import time
 from typing import Optional
 
 from drivers.ocr import capture_window, find_window, ocr_crop
@@ -89,6 +91,8 @@ class MistralGui:
         self._bbox = bbox  # explicit override; None → auto-scale per read
         self._hwnd = 0
         self._connected = False
+        self._last_capture_at_utc: Optional[str] = None
+        self._last_capture_monotonic_ns: Optional[int] = None
 
     def connect(self) -> None:
         self._hwnd = find_window(self._substring)
@@ -104,6 +108,8 @@ class MistralGui:
             "v_set": None, "v_actual": None,
             "i_set": None, "i_actual": None,
         }
+        self._last_capture_at_utc = None
+        self._last_capture_monotonic_ns = None
         if not self._connected or not self._hwnd:
             return result
 
@@ -111,6 +117,10 @@ class MistralGui:
             frame = capture_window(self._hwnd)
         except Exception:
             return result
+        self._last_capture_monotonic_ns = time.perf_counter_ns()
+        self._last_capture_at_utc = datetime.now(timezone.utc).isoformat(
+            timespec="milliseconds",
+        )
 
         # frame.shape is (H, W, C); ocr_crop expects (x, y, w, h) bbox.
         if self._bbox is not None:
@@ -142,6 +152,15 @@ class MistralGui:
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def last_capture_at_utc(self) -> Optional[str]:
+        """Python time immediately after the OCR source screenshot."""
+        return self._last_capture_at_utc
+
+    @property
+    def last_capture_monotonic_ns(self) -> Optional[int]:
+        return self._last_capture_monotonic_ns
 
     @property
     def hwnd(self) -> int:

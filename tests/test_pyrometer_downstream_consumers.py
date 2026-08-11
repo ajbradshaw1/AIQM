@@ -173,22 +173,21 @@ class LogAutoCaptureEventTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             logger = _fresh_logger(Path(tmp))
             try:
-                logger.log_auto_capture_event(
+                self.assertTrue(logger.log_auto_capture_event(
                     event_idx=1,
                     score=42.5,
                     elapsed_s=10.0,
                     pyro_temp=None,
-                    buffer_count=20,
-                    buffer_dir="frames/auto_event_001",
                     event_state="pending",
-                )
+                ))
                 rows = _read_auto_event_csv(Path(logger.session_dir))
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["pyrometer_temp_C"], "")
-                # Event still recorded — score, buffer_dir, state all present.
+                # Event still records score/state with blank buffer provenance.
                 # (change_score is formatted to 4 decimals per growth_logger.py.)
                 self.assertEqual(rows[0]["change_score"], "42.5000")
-                self.assertEqual(rows[0]["buffer_count"], "20")
+                self.assertEqual(rows[0]["buffer_count"], "0")
+                self.assertEqual(rows[0]["buffer_dir"], "")
                 self.assertEqual(rows[0]["event_state"], "pending")
             finally:
                 logger.end_session()
@@ -236,12 +235,16 @@ class CommitAndManualEventTempStringTests(unittest.TestCase):
         self.assertEqual(self._render_temp_str(pyro), "")
 
     def test_connected_and_reading_renders_formatted_value(self):
-        pyro = PyrometerState(connected=True, temperature=712.85)
+        pyro = PyrometerState(
+            connected=True, valid=True, temperature=712.85,
+        )
         self.assertEqual(self._render_temp_str(pyro), "712.9")
 
     def test_nan_reading_renders_empty_string(self):
         """NaN is rejected by has_valid_reading → renders blank, not 'nan'."""
-        pyro = PyrometerState(connected=True, temperature=float("nan"))
+        pyro = PyrometerState(
+            connected=True, valid=True, temperature=float("nan"),
+        )
         self.assertEqual(self._render_temp_str(pyro), "")
 
 
@@ -287,6 +290,7 @@ class LogSensorsExtractionPatternTests(unittest.TestCase):
     def test_valid_reading_yields_all_populated(self):
         pyro = PyrometerState(
             connected=True,
+            valid=True,
             temperature=612.0,
             temperature_std=1.5,
             temperature_n=5,

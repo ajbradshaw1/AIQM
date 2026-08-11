@@ -11,7 +11,7 @@ JSON-RPC 2.0 method catalog and the specific error paths we need to
 exercise: parse error, method-not-found, transport error.
 
 Usage:
-    PYTHONPATH=. python scripts/test_mistral_jsonrpc.py
+    python -m pytest -q tests/test_mistral_jsonrpc.py
 
 Exits 0 on success; raises AssertionError with a diagnostic on failure.
 

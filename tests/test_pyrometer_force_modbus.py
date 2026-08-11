@@ -6,7 +6,7 @@ addition, evidence bundles, and CLI plumbing. No hardware, no serial —
 discover-script pattern applies (see test_pyrometer_modbus_discover.py
 for the same ``_fake_pyserial`` idiom).
 
-    PYTHONPATH=. python scripts/test_pyrometer_force_modbus.py
+    python -m pytest -q tests/test_pyrometer_force_modbus.py
 """
 from __future__ import annotations
 

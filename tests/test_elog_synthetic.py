@@ -13,7 +13,7 @@ drivers/elog.py, then exercises every code path in ElogReader:
 - cache invalidation on log-file rotation
 
 Usage:
-    PYTHONPATH=. python scripts/test_elog_synthetic.py
+    python -m pytest -q tests/test_elog_synthetic.py
 
 Exits 0 on success; raises AssertionError with a diagnostic on failure.
 

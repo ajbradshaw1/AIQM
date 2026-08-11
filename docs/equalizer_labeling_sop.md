@@ -1,247 +1,191 @@
-# RHEED Equalizer labeling — grower SOP
+# RHEED Equalizer Labeling - Grower SOP
 
-**Audience:** Growers using the AIQM Growth Monitor to label RHEED
-reconstructions during (or after) an OMBE growth.
+## Scope
 
-**Scope:** The three Equalizer surfaces + how to choose between them.
+Use this procedure to label RHEED reconstruction mixtures during a growth or
+from an auto-capture event. Equalizer alignment maps the simulator basis into
+the camera orientation; it does not align the physical gun, change classifier
+output, or determine film quality.
 
-**Last updated:** Jul 14 2026 (v1 — Live Equalizer tab pause button
-shipped).
+## Labeling Surfaces
 
----
+| Surface | Use | Output |
+|---|---|---|
+| **Live Equalizer** | Label the current or deliberately frozen RHEED frame | `live_labels.csv` and one BMP per save |
+| **Events -> Label with Equalizer...** | Label one selected auto-capture frame | `events_labels.csv`, keyed by `event_idx` |
+| **Monitor sliders + LOG ENTRY** | Record the existing classifier/grower correction with a note | `commit_log.csv` |
 
-## The three labeling surfaces
+Only Live and Events use the camera-aligned Equalizer workflow described
+below. The Monitor sliders remain a separate logging surface.
 
-The Growth Monitor exposes three distinct places to label a RHEED
-reconstruction. They cover different moments in the workflow:
+## Basis and Class Policy
 
-| Surface | When to use | What it writes |
-|---------|-------------|----------------|
-| **Live Equalizer tab** | Live growth, mid-session, seeing an interesting reconstruction unfold | `live_labels.csv` + `live_label_NNN_*.bmp` per Save |
-| **Retrospective Equalizer** (Events tab → "Label with Equalizer…") | Auto-capture buffer review after the moment passed | `events_labels.csv` row keyed by `event_idx` |
-| **Monitor tab sliders** (LOG ENTRY with grower-correction toggle) | Deliberate log-entry moment; typing a note anyway; one row per commit | `commit_log.csv` `recon_*` + `classifier_recon_*` paired columns |
+The canonical coordinate system is the simulator's 128 x 96 orientation. The
+active Equalizer classes are `1x1`, `Tw(2x1)`, `c(6x2)`, and `RT13`. Their
+source transforms are identity; an accepted camera calibration supplies the
+single geometric transform used for comparison and fitting.
 
-Choose the surface by asking **when the labeling happens relative to
-the moment being labeled**:
+`HTR` is disabled and displayed as **N/A - canonical basis pending**. Auto-fit
+excludes it, and `recon_HTR` is saved as an empty CSV value, never a synthetic
+zero.
 
-- **During:** Live Equalizer (real-time slider game against the live
-  frame)
-- **Just after:** Monitor tab LOG ENTRY (slider snapshot + note in one
-  atomic commit)
-- **Post-hoc:** Events tab → "Label with Equalizer…" against the
-  auto-capture buffer frames
+## Live Workflow
 
-All three write different CSV files so you never overwrite one path's
-label with another's. Downstream ML consumers join across files on
-timestamp / `event_idx` as needed.
+1. Start a logging session. Confirm that RHEED is connected, the physical gun
+   is aligned, no realignment is active, and the displayed frame is fresh.
+2. Select **Calibrate**. This copies one immutable calibration snapshot,
+   including image, WGC sequence/time, HWND/backend, dimensions, session,
+   `view_segment_id`, and `visual_history_generation`. Acquisition may
+   continue, but it cannot change this snapshot.
+3. If automatic 1x1 landmark detection succeeds, inspect its candidates. If
+   it fails, click the left, centre, and right 1x1 points on the frozen image.
+   Do not accept low-signal, collinear, or incorrectly ordered points.
+4. Review the normal and mirrored candidates. Green is the camera snapshot;
+   magenta is the warped basis chosen in **Overlay basis**. Switch among
+   `1x1`, `Tw(2x1)`, `c(6x2)`, and `RT13`, then inspect the three points,
+   residual vectors, rotation, scale, parity, and valid coverage.
+5. Select the candidate that matches both the landmarks and the observed
+   handedness. Choose the naturally present asymmetric class (or a clear
+   streak/tail) in **Handedness evidence**, check the explicit confirmation,
+   then choose **Request acceptance**. The request stays disabled until both
+   evidence fields are complete. Acceptance is always a grower decision;
+   candidate ranking never accepts automatically.
+6. Use **Auto-fit** as a four-class starting point, then refine the sliders.
+   **Normalize** rescales the four active weights to sum to one.
+7. Optionally select **Freeze frame** to hold one labeling target. Calibration
+   and label freezes are independent: Calibrate freezes its own source frame;
+   Freeze frame selects which current snapshot Auto-fit and Save use.
+8. Select **Save label**. The application rechecks session, calibration,
+   physical alignment, capture continuity, and frame age before any image or
+   CSV row is written.
 
----
+Every Save creates a new `label_idx`; it does not overwrite an earlier label.
 
-## Live Equalizer tab — walkthrough
+Equalizer values are **visual basis-fit coefficients**, not normalized
+Classifier2 win rates, surface-area fractions, or human primary labels. Save
+records raw least-squares coefficients (when Auto-fit was used), final slider
+values, a separately normalized copy, fit mode, whether Normalize was applied,
+pixel RMS residual, valid-mask coverage, calibration validity, labeler and
+confidence. `equalizer_argmax` is diagnostic only.
 
-Location: `Live Equalizer` tab (between `Scrubber` and `Session`).
+## Calibration Acceptance and Lifecycle
 
-**The layout (2×2):**
+`GrowthApp` is the sole owner of an accepted calibration. The Equalizer tab
+only proposes a candidate. Accepted and invalidated records are appended to
+`equalizer_calibrations.jsonl`; Live and Events resolve calibration IDs from
+that same journal.
 
-- **Top-left — Selected (live RHEED):** the current camera frame,
-  downsampled + rendered in the same phosphor-green palette as the
-  Monitor tab RHEED display.
-- **Top-right — Constructed (grower blend):** what the current slider
-  mix would look like as a reconstruction. Updates live as you drag.
-- **Bottom-left — Classifier %:** what Classifier2 currently thinks
-  (5 reconstruction classes, same values shown on the Monitor tab
-  sliders).
-- **Bottom-right — Grower %:** your 5 sliders + Auto-fit / Normalize /
-  Reset / Freeze frame / Save label buttons.
+Auto-fit and Save fail closed until a compatible calibration is accepted. A
+session reset, gun realignment, camera disconnect/reconnect, backend or HWND
+change, resolution/ROI/DPI change, visual-history generation change, or basis
+hash change invalidates it immediately. The same discontinuities cancel a
+candidate still under review, so moving away and back cannot revive it.
+Reconnect or start a new session, then
+calibrate and accept again; never copy an old matrix into a new context.
 
-**Workflow:**
+Three nearly symmetric 1x1 points cannot establish handedness. During initial
+Bulbasaur commissioning, confirm normal versus mirrored using a naturally
+asymmetric Tw/c(6x2)/RT13 frame or a clear streak/tail. On acceptance the
+application saves the immutable calibration snapshot and records the evidence
+kind, image path, and SHA-256 as one required provenance unit.
 
-1. **Wait for a session to be running.** The Save button stays disabled
-   in idle / armed so nothing writes to disk until the logger's
-   `live_labels.csv` is open.
-2. **Watch the Selected pane.** Frames arrive at the camera worker's
-   rate (typically 1-2 Hz).
-3. **Click Auto-fit** as a starting point. Least-squares fit of the
-   5-class basis onto the current Selected image. Usually gets you
-   within 10-20% of the "right" answer per class.
-4. **Refine by dragging sliders.** Watch the Constructed pane rebuild
-   as you drag. Goal: Constructed matches Selected.
-5. *(Optional)* **Click Normalize** to rescale sliders to sum to 100%.
-   Purely a display convenience — the ratio is what matters for
-   downstream training, not the absolute magnitudes.
-6. **Click Save label.** Snapshots the current live frame + writes a
-   row to `live_labels.csv` with your slider weights + sensor state
-   (pyro / V / I / psu_source).
+## Events Workflow
 
----
+1. Select an event and the exact buffer frame to label.
+2. Choose **Label with Equalizer...**. The frame must have an unambiguous row in
+   that event's `capture_manifest.csv` with capture, session, view-segment,
+   visual-history, and gun-alignment provenance.
+3. Events first checks the calibration ID already saved for that exact frame
+   in `events_labels.csv`, then the manifest ID, and resolves it from the
+   append-only calibration history. Otherwise calibrate and accept against
+   this exact event frame before fitting or saving.
+4. Adjust the four active sliders and save. The Equalizer update references
+   the already captured frame and is written to the existing
+    `events_labels.csv` row for that `event_idx`; the logger never creates an
+    untracked fallback image.
 
-## Freeze frame — the pause pattern (Jul 14 2026)
+Saving Equalizer data never writes or replaces `primary_reconstruction` or
+`human_primary_reconstruction`. For a gold primary judgment, first enter an
+explicit **Blind labeling mode** with a non-empty labeler name. The GUI hides
+and disables classifier and Equalizer results and persists that state in
+`human_labeling_state.json`. If either result was already displayed, the audit
+state is missing/malformed, or the GUI restarted without a current explicit
+blind entry, the submission is saved as `human_assisted_primary` and the
+training importer rejects it.
 
-**Problem it solves:** the live camera stream updates every ~500 ms.
-If you're mid-drag and the frame changes underneath you, the
-Constructed pane's target has moved. You end up chasing.
+Every primary submission is appended to `human_primary_labels.csv` with a
+unique `annotation_id`, monotonic `label_idx`, labeler, source, blindness
+flags, run/capture/view identity, and exact `rgb-array-v1` SHA-256. This retains
+multiple experts and later corrections. Capture identity includes backend,
+UTC capture time, `gun_aligned`, and `realignment_active`; these are stored in
+the dedicated row rather than inferred later. `events_labels.csv` contains only the
+latest per-event display summary and must not be used as the gold-label table.
 
-**How it works:**
+Legacy buffers without a complete manifest, stale/incompatible calibration
+IDs, ambiguous filenames, or invalid QC context are rejected for Equalizer
+labeling. The application must not silently use raw or previously aligned
+basis images. Primary gold labels also require an exact manifest-backed frame;
+ordinary notes and `change_from`/`change_to` transition summaries remain
+available for legacy buffers.
 
-- Click **Freeze frame** — the Selected pane stops updating. The
-  cached frame is preserved.
-- The button turns amber and its label switches to **Resume live** —
-  a reminder that pressing it now will unfreeze.
-- While frozen, Auto-fit / slider drags / Save all operate on the
-  frozen frame. `live_labels.csv` gets a row keyed to the frozen
-  frame's timestamp.
-- Click **Resume live** to unfreeze; the Selected pane starts updating
-  again with the next incoming frame.
+## Saved Provenance
 
-**When to freeze:**
+Live and Events rows retain the reconstruction fields and append:
 
-- You want to label a specific reconstruction and the growth is moving
-  faster than your slider work
-- You want to compare multiple slider mixtures against a single stable
-  target
+- `calibration_id`, `basis_bundle_id`, and `equalizer_active_classes`;
+- `view_segment_id` and `visual_history_generation`;
+- `capture_backend`, `captured_at_utc`, `capture_sequence`, `frame_age_ms`,
+  `source_hwnd`, and `capture_geometry_id`;
+- the saved or selected `frame_path`.
+- `equalizer_raw_*`, `equalizer_final_*`, and `equalizer_normalized_*`, plus
+  `equalizer_source`, fit diagnostics, and exact-frame SHA-256.
 
-**When NOT to freeze:**
+Human primary labels do not share this upsert lifecycle: their source of truth
+is the append-only `human_primary_labels.csv`; Events rows merely link the
+newest `human_primary_annotation_id` and `human_primary_label_idx`.
 
-- You want to catch a transition as it happens — leave live so
-  Selected keeps updating. Save right after the transition and the
-  timestamp will match reality.
+The label snapshot is an immutable image-plus-metadata unit. This prevents the
+image from one callback being combined with the timestamp or sequence of
+another. Capture timestamps are validated as explicit UTC ISO-8601 values.
+The calibration journal additionally stores the full matrix, parity,
+landmarks, residuals, basis hash, the complete basis manifest once per bundle,
+evidence kind/path/SHA-256, acceptance, and
+invalidation reason.
 
----
+Live label image/CSV writes, calibration evidence/journal writes, and
+auto-capture buffer/CSV writes are recoverable transactions. If Windows,
+Python, or workstation power stops between commits, the next logger startup
+uses the pending WAL to complete the exact committed pair or remove the
+uncommitted image or buffer directory. Malformed, conflicting, or
+journal-untrusted state remains fail-closed. Never delete an unresolved WAL by
+hand; preserve it for diagnosis.
 
-## Auto-fit vs manual sliders
+## Disabled Legacy Entry Point
 
-**Auto-fit** does a least-squares fit of the Selected image onto the
-5-class basis, then clips negatives to zero and normalizes. It's a
-reasonable starting point but has known limitations:
+`scripts/equalizer_ui.py` remains importable for canonical basis loading,
+display palettes, and fitting helpers. Its legacy standalone Save path is
+disabled, and direct execution returns a non-zero status with instructions to
+use Growth Monitor. Create labels only through the Live or Events workflow so
+camera alignment, QC, and capture provenance are enforced.
 
-- **Basis limits:** the basis is 5 class-mean images. Real frames
-  contain features (contamination, over-flash, out-of-frame beam) not
-  well-represented in the basis. Auto-fit distributes those artifacts
-  across the 5 classes somewhat arbitrarily.
-- **Non-uniqueness:** several mixtures can produce visually similar
-  Constructed images. Auto-fit picks one; you may prefer another.
+## Common Fail-Closed Messages
 
-Treat Auto-fit as a first-pass suggestion, not ground truth. If the
-Constructed pane doesn't match the Selected pane after Auto-fit,
-adjust manually.
+- **Save disabled:** start a session and accept a calibration on a fresh frame.
+- **Automatic landmarks failed:** use manual left-centre-right selection; do
+  not invent fallback points.
+- **Candidate cannot be accepted:** correct its residual, scale, coverage, or
+  point-order failure, then select and explicitly confirm asymmetric evidence.
+- **Calibration invalidated:** restore camera/QC continuity and recalibrate.
+- **Event unavailable to Equalizer:** inspect `capture_manifest.csv`; do not
+  bypass missing provenance.
+- **HTR cannot be moved:** expected until a canonical, view-provenanced HTR
+  basis is commissioned.
 
----
+## References
 
-## Save timing
-
-**When you click Save, this is what happens:**
-
-1. Current slider weights are read (as fractions in [0, 1])
-2. Current sensor snapshot is captured: pyro temp, V, I, psu_source,
-   elapsed_s
-3. Current live frame (or frozen frame if paused) is snapshotted to
-   `live_label_NNN_HHMMSS.bmp` under the session's `frames/`
-   subdirectory
-4. A row is appended to `live_labels.csv` with the timestamp + all of
-   the above
-
-**Idempotency:** every Save is a new row. Clicking Save five times in
-30 seconds gives you five rows with five distinct `label_idx` values.
-There's no "update the last save" — every click is a new event.
-
-**Verify a save landed:**
-- Status bar shows `Live label #N saved`
-- Session tab → open `logs/growths/<session_id>/live_labels.csv` and
-  the newest row should have your weights
-
----
-
-## CSV schema — `live_labels.csv`
-
-Written by `GrowthLogger.record_live_label`. Full schema in
-`gui/growth_logger.py::LIVE_LABEL_FIELDS`.
-
-Columns:
-
-- `timestamp`, `elapsed_s`, `label_idx` — identity
-- `recon_1x1`, `recon_tw`, `recon_c6x2`, `recon_rt13`, `recon_HTR` —
-  slider weights as floats in [0, 1]
-- `pyrometer_temp_C`, `voltage_V`, `current_A`, `psu_source` — sensor
-  snapshot
-- `frame_path` — path to the BMP snapshot
-
-For downstream training: join on `timestamp` with
-`heartbeat_log.csv` (continuous capture) or `sensor_log.csv` (fuller
-sensor trajectory) for context around the labeled moment.
-
----
-
-## Reconstruction transition labeling (Jul 15 2026)
-
-**Location:** Events tab → labeling form → "Change (from → to):" row
-(two dropdowns with an arrow between them).
-
-**What it captures:** the moment a growth transitions between two
-reconstructions. Single-class labeling (via "Primary reconstruction")
-answers *what is this frame?*; transition labeling answers *what did
-this frame CHANGE from and to?* The two coexist — you can set
-primary_reconstruction *and* change_from/change_to on the same event,
-and downstream analysis reads whichever it needs.
-
-**Workflow:**
-
-1. In the Events tab, select an auto-capture event you believe
-   captured a reconstruction transition
-2. In the labeling form, set "Change (from):" to the reconstruction
-   you saw before the event, and "Change (to):" to the one you saw
-   after
-3. Selection is atomic-per-dropdown: each change writes to
-   `events_labels.csv` immediately (no separate Save button)
-4. Both default to "(unlabeled)" — leave them there if the event
-   isn't a transition (grower didn't see a clear before/after)
-
-**Which fields to use:**
-
-- **Just primary_reconstruction:** steady-state frame ("this event
-  captured a good example of 1x1")
-- **Just change_from / change_to:** transition frame ("this event
-  captured 1x1 → Twinned")
-- **All three:** both signals for the same frame (rare but legit —
-  useful when the frame is at the crest of a transition and the
-  primary label captures the dominant class)
-- **None of them:** event doesn't need a label (mislabeled auto-
-  capture, artifact, out-of-frame beam). Discard it via the banner
-  instead of leaving the labels blank.
-
-**Downstream ML tie-in:** the change_from / change_to columns are the
-primary signal for Yuxin's #1 active-comparisons pipeline, which
-trains a model to discriminate transition frames from steady-state
-frames. High-quality transition labels are more scarce than
-steady-state ones, so growers filling these dropdowns during a
-labeling session directly increases the pool of transition-training
-data.
-
----
-
-## Common pitfalls
-
-1. **Save button greyed out:** the session must be running. Arm →
-   Start on the Session tab first.
-2. **Constructed pane empty:** the basis images failed to load. Check
-   `data/equalizer_class_means.npz` is present and readable. See the
-   Constructed pane's placeholder text for the specific error.
-3. **Sliders won't sum to exactly 100:** they don't have to. Save
-   accepts any weights; downstream normalizes at read time. Click
-   Normalize if you want the sum locked to 100 for a specific row.
-4. **Camera stream too fast to label:** click Freeze frame. Or drop
-   the camera worker's trigger rate on the Config tab (Session tab
-   config) before arming.
-5. **Auto-fit gives weird numbers on a bad frame:** don't Save. Wait
-   for a better frame, or freeze on a good one, then Auto-fit.
-
----
-
-## Cross-references
-
-- `gui/live_equalizer_tab.py` — implementation
-- `gui/growth_logger.py::LIVE_LABEL_FIELDS, record_live_label` —
-  schema + writer
-- `scripts/equalizer_ui.py` — shared basis-loading + reconstruction
-  math (used by both the Live Equalizer tab and the retrospective
-  Events-tab launcher)
-- `scripts/test_live_equalizer_tab.py` — tests
+- `gui/equalizer_alignment.py` - canonical basis, snapshots, candidates, and
+  calibration records
+- `gui/live_equalizer_tab.py` - Live and retrospective Equalizer component
+- `gui/growth_logger.py` - CSV schemas and calibration journal
+- `docs/equalizer_camera_alignment.md` - algorithm and acceptance overview
+- `docs/validation/ombe_equalizer_alignment_template.md` - Bulbasaur report

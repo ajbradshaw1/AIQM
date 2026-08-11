@@ -9,7 +9,7 @@ Day 9's follow-on test classes; this file is the construction +
 lifecycle foundation those will extend.
 
 Run:
-    QT_QPA_PLATFORM=offscreen python scripts/test_events_tab.py
+    python -m pytest -q tests/test_events_tab.py
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -386,7 +387,7 @@ class EventsTabLabelFormTests(unittest.TestCase):
         with open(p) as f:
             return list(csv.DictReader(f))
 
-    def test_primary_recon_activation_writes_csv(self):
+    def test_primary_recon_activation_without_labeler_is_blocked(self):
         # User picks "1x1" from the primary combo → events_labels.csv
         # gets a row keyed to the current event_idx. Locks the
         # single-slot write contract (activated fires only on user
@@ -396,11 +397,11 @@ class EventsTabLabelFormTests(unittest.TestCase):
         self.tab._currently_displayed_event_idx = 7
         one_x_one_idx = self.tab._primary_recon_combo.findData("1x1")
         self.tab._primary_recon_combo.setCurrentIndex(one_x_one_idx)
-        self.tab._on_primary_recon_activated(one_x_one_idx)
+        with patch("gui.events_tab.QMessageBox.warning") as warning:
+            self.tab._on_primary_recon_activated(one_x_one_idx)
         rows = self._read_labels_csv()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["event_idx"], "7")
-        self.assertEqual(rows[0]["primary_reconstruction"], "1x1")
+        self.assertEqual(rows, [])
+        self.assertTrue(warning.called)
 
     def test_notes_debounce_writes_once(self):
         # Multiple textChanged emissions restart the debounce

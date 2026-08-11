@@ -6,7 +6,7 @@ dataset (classes are learnable), but the tests don't lock a
 specific delta — that would be brittle to sklearn version drift.
 
 Run:
-    PYTHONPATH=. python scripts/test_chen_pseudo_label_prototype.py
+    python -m pytest -q tests/test_chen_pseudo_label_prototype.py
 """
 from __future__ import annotations
 

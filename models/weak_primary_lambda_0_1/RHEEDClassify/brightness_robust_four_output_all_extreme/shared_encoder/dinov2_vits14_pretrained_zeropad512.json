@@ -1,0 +1,77 @@
+{
+  "adapter_state_included": false,
+  "backbone": "dinov2_vits14_pretrained_zeropad512",
+  "backbone_state_sha256": "dc9c8015df8e2b23e2857c5439e0524d776b8a6429d703b48a451947c8e9708d",
+  "checkpoint_sha256": "b1b92f45758a622c742b546ad6675a65557acc1a0b9f8bdd7adf6d993dd3b649",
+  "embedding_dim": 512,
+  "encoder_id": "weak-primary-dinov2-vits14-pretrained-zeropad512-v1",
+  "feature_projection": "zero_pad_384_to_512",
+  "local_data_fit": false,
+  "mask_center": false,
+  "parameter_free_projection": true,
+  "pretrained_source_attested": true,
+  "purpose": "leakage_safe_pretrained_dinov2_weak_primary_features",
+  "raw_embedding_dim": 384,
+  "schema_version": 1,
+  "software": {
+    "timm": "1.0.28",
+    "torch": "2.12.1+cu126",
+    "torchvision": "0.27.1+cu126"
+  },
+  "source_backbones_identical": true,
+  "source_checkpoints": [
+    {
+      "backbone_state_sha256": "dc9c8015df8e2b23e2857c5439e0524d776b8a6429d703b48a451947c8e9708d",
+      "checkpoint_bytes": 87373599,
+      "checkpoint_path": "D:\\AI4MBE\\RHEEDClassify\\Classifier2\\artifacts\\geometry_ablation_20260727\\encoder_dinov2_vits14_frozen_geometry_base_seed17\\test_2022-02-04\\classifier1\\encoder.pth",
+      "checkpoint_sha256": "fc2d0b5b108c270051574e04d17fbe5f89451a4e4abf455ddb51b0eb8acac2eb",
+      "embedding_dim": 512,
+      "imagenet_init": true,
+      "metadata_bytes": 6226,
+      "metadata_path": "D:\\AI4MBE\\RHEEDClassify\\Classifier2\\artifacts\\geometry_ablation_20260727\\encoder_dinov2_vits14_frozen_geometry_base_seed17\\test_2022-02-04\\classifier1\\encoder.json",
+      "metadata_sha256": "b3bf0902c6e893ed7dd6778f92e986823fd598752254e67e92303b7c857f8452",
+      "state_prefix": "backbone."
+    },
+    {
+      "backbone_state_sha256": "dc9c8015df8e2b23e2857c5439e0524d776b8a6429d703b48a451947c8e9708d",
+      "checkpoint_bytes": 87373599,
+      "checkpoint_path": "D:\\AI4MBE\\RHEEDClassify\\Classifier2\\artifacts\\geometry_ablation_20260727\\encoder_dinov2_vits14_frozen_geometry_base_seed17\\test_2022-02-06\\classifier1\\encoder.pth",
+      "checkpoint_sha256": "ca60d8c847aa69ebfd33be9c76f0dea7c69157d5b05f1b12bceafa462d7f084c",
+      "embedding_dim": 512,
+      "imagenet_init": true,
+      "metadata_bytes": 6228,
+      "metadata_path": "D:\\AI4MBE\\RHEEDClassify\\Classifier2\\artifacts\\geometry_ablation_20260727\\encoder_dinov2_vits14_frozen_geometry_base_seed17\\test_2022-02-06\\classifier1\\encoder.json",
+      "metadata_sha256": "de01eb58c7b93805831534214703d855ccb95eb97659dbea7c6099dc06623bc0",
+      "state_prefix": "backbone."
+    },
+    {
+      "backbone_state_sha256": "dc9c8015df8e2b23e2857c5439e0524d776b8a6429d703b48a451947c8e9708d",
+      "checkpoint_bytes": 87373599,
+      "checkpoint_path": "D:\\AI4MBE\\RHEEDClassify\\Classifier2\\artifacts\\geometry_ablation_20260727\\encoder_dinov2_vits14_frozen_geometry_base_seed17\\test_2022-04-11\\classifier1\\encoder.pth",
+      "checkpoint_sha256": "a20c7cc8aa327730daa343d9fabf27cf7cda5e50f712b78320d25b1d1305fb15",
+      "embedding_dim": 512,
+      "imagenet_init": true,
+      "metadata_bytes": 6226,
+      "metadata_path": "D:\\AI4MBE\\RHEEDClassify\\Classifier2\\artifacts\\geometry_ablation_20260727\\encoder_dinov2_vits14_frozen_geometry_base_seed17\\test_2022-04-11\\classifier1\\encoder.json",
+      "metadata_sha256": "6ffa4491221b2f0504e361d7d18a7df24602f97209bd16324b26167cdd1e4dfe",
+      "state_prefix": "backbone."
+    }
+  ],
+  "state_contract": {
+    "excluded_prefixes": [
+      "adapter.",
+      "primary_head.",
+      "classifier."
+    ],
+    "included_prefix": "backbone.",
+    "tensor_count": 174
+  },
+  "train_frames": 0,
+  "training": {
+    "equalizer_labels_used": false,
+    "human_primary_labels_used": false,
+    "local_data_fit": false,
+    "pairwise_labels_used": false,
+    "train_frames": 0
+  }
+}

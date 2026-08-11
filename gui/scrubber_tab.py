@@ -72,6 +72,7 @@ from gui.widgets import ScalingImageLabel
 _SOURCE_COLORS = {
     "heartbeat": "#0891b2",  # cyan — continuous capture
     "manual":    "#d97706",  # amber — MARK EVENT
+    "view":      "#a855f7",  # purple — RHEED alignment / global QC
     "auto":      "#888888",  # grey — auto-capture engine
 }
 
@@ -79,10 +80,10 @@ _SOURCE_COLORS = {
 class FrameIndexEntry(NamedTuple):
     """One point on the scrubber timeline.
 
-    ``source`` is one of ``"heartbeat"`` / ``"manual"`` / ``"auto"`` —
-    determines the marker color and metadata format. ``metadata`` is a
-    free-form dict pulled from the row so the display line can show
-    source-specific fields without a big Union type on the tuple itself.
+    ``source`` is one of ``"heartbeat"`` / ``"manual"`` / ``"view"`` /
+    ``"auto"`` and determines the marker color and metadata format.
+    ``metadata`` is a free-form dict pulled from the row so the display line
+    can show source-specific fields without a big Union type on the tuple.
     """
     elapsed_s: float
     source: str
@@ -115,7 +116,8 @@ def build_frame_index(session_dir: Path) -> list[FrameIndexEntry]:
     """Aggregate the three per-session frame-emitting CSVs into a sorted list.
 
     Reads (in order): ``heartbeat_log.csv``, ``manual_events.csv``,
-    ``auto_capture_events.csv``. Missing files are silently skipped —
+    ``rheed_view_events.csv``, ``auto_capture_events.csv``. Missing files
+    are silently skipped —
     sessions that finish before an auto-capture event have no
     auto_capture_events.csv rows, sessions with no manual clicks have
     no manual_events.csv rows, etc. Bad rows (missing elapsed_s or
@@ -175,6 +177,33 @@ def build_frame_index(session_dir: Path) -> list[FrameIndexEntry]:
                             "V": row.get("voltage_V", ""),
                             "I": row.get("current_A", ""),
                             "psu": row.get("psu_source", ""),
+                            "note": row.get("note", ""),
+                        },
+                    ))
+        except OSError:
+            pass
+
+    # --- Structured RHEED alignment / global-QC events ---
+    view_path = session_dir / "rheed_view_events.csv"
+    if view_path.exists():
+        try:
+            with open(view_path, newline="") as f:
+                for row in csv.DictReader(f):
+                    elapsed = _safe_float(row, "elapsed_s")
+                    idx = _safe_int(row, "event_idx")
+                    if elapsed is None or idx is None:
+                        continue
+                    entries.append(FrameIndexEntry(
+                        elapsed_s=elapsed,
+                        source="view",
+                        source_idx=idx,
+                        frame_path=row.get("frame_path", "") or "",
+                        metadata={
+                            "event_type": row.get("event_type", ""),
+                            "segment": row.get("view_segment_id", ""),
+                            "gun_aligned": row.get("gun_aligned", ""),
+                            "history_ready": row.get("history_ready", ""),
+                            "qc_reason": row.get("qc_reason", ""),
                             "note": row.get("note", ""),
                         },
                     ))
@@ -370,6 +399,7 @@ class ScrubberTab(QWidget):
         for src, label in (
             ("heartbeat", "continuous"),
             ("manual", "manual event"),
+            ("view", "RHEED QC/alignment"),
             ("auto", "auto-capture"),
         ):
             swatch = QLabel("█")
@@ -568,6 +598,27 @@ def _format_metadata(entry: FrameIndexEntry) -> str:
         psu = md.get("psu", "")
         if psu and psu != "none":
             parts.append(f"[{psu}]")
+        note = md.get("note", "")
+        if note:
+            parts.append(f'"{note}"')
+
+    # Structured view/QC boundary fields.
+    if entry.source == "view":
+        event_type = md.get("event_type", "")
+        if event_type:
+            parts.append(event_type)
+        segment = md.get("segment", "")
+        if segment != "":
+            parts.append(f"segment {segment}")
+        aligned = md.get("gun_aligned", "")
+        if aligned != "":
+            parts.append(f"aligned={aligned}")
+        ready = md.get("history_ready", "")
+        if ready != "":
+            parts.append(f"history_ready={ready}")
+        reason = md.get("qc_reason", "")
+        if reason:
+            parts.append(f"reason: {reason}")
         note = md.get("note", "")
         if note:
             parts.append(f'"{note}"')

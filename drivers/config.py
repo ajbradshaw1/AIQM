@@ -97,6 +97,10 @@ class MBESystemConfig:
     # logs a hint naming this field when it sees None, so an unconfigured
     # chamber diagnoses itself the first time someone looks at the log.
     pyrometer_rts: Optional[bool] = None
+    # Modbus transport implementation. ``pymodbus`` remains the safe
+    # default; ``raw_serial`` is a read-only CRC-scanning path for adapters
+    # whose replies pymodbus cannot frame reliably.
+    pyrometer_modbus_backend: str = "pymodbus"
 
     # Data storage paths
     single_images_folder: str = ""
@@ -206,6 +210,10 @@ CHALCOGENIDE_MBE = MBESystemConfig(
     # enumerated exactly two ports: COM1 (motherboard) and COM3 (Prolific
     # PL2303GS USB Serial). Nothing answers on COM4.
     pyrometer_port="COM3",
+    pyrometer_baudrate=115200,
+    # pymodbus 3.14 timed out on this verified link, so use the
+    # CRC-scanning raw read backend deployed on Ch-MBE.
+    pyrometer_modbus_backend="raw_serial",
     single_images_folder=r"C:\Dropbox\Data\RHEED\RHEED_YangGroup\FeSeTe_STO",
     stream_images_folder=r"C:\Dropbox\Data\RHEED\RHEED_YangGroup\FeSeTe_STO",
     # ADS: 7 cells on Ch-MBE (Task #191 validated Jul 22 2026).

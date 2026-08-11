@@ -4,7 +4,7 @@ Runs offline via a MockSocket; no kSA server required. Locks the wire
 format that's been shipping since May 20 2026 (u32 TEXT_CMD encoding,
 u32-prefixed text replies, 5-category error taxonomy per Jul 7 2026).
 
-Run: ``python scripts/test_ksa_comm_client.py`` or under pytest.
+Run: ``python -m pytest -q tests/test_ksa_comm_client.py``.
 """
 from __future__ import annotations
 
