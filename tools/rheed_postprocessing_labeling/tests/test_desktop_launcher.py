@@ -63,6 +63,26 @@ def test_default_manual_is_the_english_latex_edition() -> None:
     assert MANUAL_PATH.name == "RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf"
 
 
+def test_english_manual_uses_actual_ui_screenshot_assets() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    manual_root = (
+        repository_root / "tools" / "rheed_postprocessing_labeling" / "manual"
+    )
+    source = (
+        manual_root / "RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.tex"
+    ).read_text(encoding="ascii")
+    assert "tikzpicture" not in source
+    assert "actual software using generated demo inputs" in source
+    for filename in (
+        "chmbe_growth_monitor_dummy.png",
+        "chmbe_growth_monitor_session.png",
+        "rheed_labeler_build.png",
+        "rheed_timeline_editor.png",
+        "rheed_timeline_zoom.png",
+    ):
+        assert (manual_root / "assets" / "screenshots" / filename).is_file()
+
+
 def _launcher(
     tmp_path: Path,
     qt_app: QApplication,

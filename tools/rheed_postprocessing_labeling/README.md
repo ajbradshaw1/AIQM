@@ -64,8 +64,9 @@ Its LaTeX source and reproducible Windows build helper are:
 
 The earlier
 [bilingual PDF](../../docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
-and its ReportLab generator remain available. The English PDF uses only
-LaTeX/TikZ vector illustrations; both editions contain no laboratory data.
+and its ReportLab generator remain available. The English PDF uses current
+application screenshots captured with generated demo inputs; neither edition
+contains laboratory data.
 
 ### Command line
 
