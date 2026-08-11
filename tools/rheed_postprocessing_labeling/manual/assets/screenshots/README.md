@@ -17,13 +17,20 @@ python -m tools.rheed_postprocessing_labeling.manual.capture_manual_screenshots 
   --fixture-root D:\AI4MBE\scratch\manual-ui-fixture
 ```
 
-The five committed outputs are:
+The seven committed outputs are:
 
 - `chmbe_growth_monitor_dummy.png`
 - `chmbe_growth_monitor_session.png`
+- `ombe_growth_monitor_dummy.png`
+- `ombe_growth_monitor_session.png`
 - `rheed_labeler_build.png`
 - `rheed_timeline_editor.png`
 - `rheed_timeline_zoom.png`
+
+The two chamber pairs are rendered from the same generated states through the
+real `GrowthMonitor` widget with the explicit `CHALCOGENIDE_MBE` or
+`OXIDE_MBE` configuration. The standalone widget has no hardware workers or
+logger; all mode selectors remain display-only and no ARM action is invoked.
 
 The temporary ZIP, prediction CSV files, model specifications, generated
 report, and browser state remain under `--fixture-root`, outside Git.

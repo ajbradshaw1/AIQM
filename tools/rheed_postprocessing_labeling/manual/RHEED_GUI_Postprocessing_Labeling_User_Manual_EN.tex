@@ -1,4 +1,4 @@
-% English-only operator manual for the Ch-MBE GUI and offline RHEED labeler.
+% English-only operator manual for the O-MBE and Ch-MBE GUIs and offline RHEED labeler.
 % Build from this directory with build_english_manual.ps1.
 \documentclass[10pt,a4paper]{article}
 
@@ -52,8 +52,8 @@
   linkcolor=ManualBlue,
   urlcolor=ManualBlue,
   pdfauthor={AI4MBE},
-  pdftitle={Ch-MBE GUI and RHEED Post-processing Labeling User Manual - English Edition},
-  pdfsubject={English operator guide for the Ch-MBE GUI and offline RHEED temporal labeler}
+  pdftitle={O-MBE and Ch-MBE GUI and RHEED Post-processing Labeling User Manual - English Edition},
+  pdfsubject={English operator guide for the O-MBE and Ch-MBE GUIs and offline RHEED temporal labeler}
 }
 
 \renewcommand{\familydefault}{\sfdefault}
@@ -77,9 +77,9 @@
 
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small\color{ManualMuted}AI4MBE | Ch-MBE}
+\fancyhead[L]{\small\color{ManualMuted}AI4MBE | O-MBE + Ch-MBE}
 \fancyhead[R]{\small\color{ManualMuted}English operator manual}
-\fancyfoot[L]{\small\color{ManualMuted}Manual v1.4 | 2026-08-11}
+\fancyfoot[L]{\small\color{ManualMuted}Manual v1.5 | 2026-08-11}
 \fancyfoot[R]{\small\color{ManualMuted}Page \thepage\ of \pageref*{LastPage}}
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\footrulewidth}{0pt}
@@ -163,13 +163,29 @@
 \thispagestyle{empty}
 \vspace*{4mm}
 {\color{ManualNavy}\bfseries\fontsize{27}{31}\selectfont
-Ch-MBE GUI and RHEED\\[1mm]
+O-MBE + Ch-MBE GUI and RHEED\\[1mm]
 Post-processing Labeling\par}
 \vspace{3mm}
 {\color{ManualBlue}\fontsize{16}{20}\selectfont English Operator Manual\par}
 \vspace{7mm}
-\manualscreenshot[width=0.96\linewidth,height=72mm,keepaspectratio]{assets/screenshots/chmbe_growth_monitor_dummy.png}
-\screenshotcaption{The current Ch-MBE Growth Monitor is running without hardware; all visible values and the RHEED frame are generated demo inputs.}
+\begin{center}
+\begin{minipage}[t]{0.485\linewidth}
+  \centering
+  \begingroup\setlength{\fboxsep}{1pt}\color{ManualLine}
+  \fbox{\includegraphics[width=0.96\linewidth,height=62mm,keepaspectratio]{assets/screenshots/ombe_growth_monitor_dummy.png}}
+  \endgroup\\[-1mm]
+  {\footnotesize\textbf{O-MBE Growth Monitor}\par}
+  {\scriptsize\color{ManualMuted}Generated demo inputs; no hardware.\par}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\linewidth}
+  \centering
+  \begingroup\setlength{\fboxsep}{1pt}\color{ManualLine}
+  \fbox{\includegraphics[width=0.96\linewidth,height=62mm,keepaspectratio]{assets/screenshots/chmbe_growth_monitor_dummy.png}}
+  \endgroup\\[-1mm]
+  {\footnotesize\textbf{Ch-MBE Growth Monitor}\par}
+  {\scriptsize\color{ManualMuted}Generated demo inputs; no hardware.\par}
+\end{minipage}
+\end{center}
 \vspace{5mm}
 \begin{corebox}{Core boundary}
 The post-processing labeler reads archived data only. It does not connect to or control cameras, pyrometers, power supplies, or any other instrument.
@@ -180,6 +196,7 @@ The post-processing labeler reads archived data only. It does not connect to or 
 \toprule
 \textbf{Quick entry} & \textbf{Double-click} \\
 \midrule
+O-MBE live GUI & \texttt{Start O-MBE Growth Monitor.cmd} \\
 Ch-MBE live GUI & \texttt{Start Ch-MBE Growth Monitor.cmd} \\
 RHEED offline labeler & \texttt{Start RHEED Post-processing Labeler.cmd} \\
 Install or refresh desktop shortcuts & \texttt{Install AI4MBE Desktop Shortcuts.cmd} \\
@@ -187,8 +204,8 @@ Install or refresh desktop shortcuts & \texttt{Install AI4MBE Desktop Shortcuts.
 \end{tabularx}
 \vfill
 {\small\color{ManualMuted}
-Manual v1.4 - English edition\\
-Issued 2026-08-11 for the Windows Ch-MBE workstation.\\[2mm]
+Manual v1.5 - English edition\\
+Issued 2026-08-11 for the Windows O-MBE and Ch-MBE workstations.\\[2mm]
 The screenshots show the actual applications using generated demo inputs. No experimental dataset is included.}
 
 % Page 2 - overview
@@ -202,10 +219,10 @@ The live GUI performs acquisition and display. The offline labeler works only on
 \begin{minipage}[t]{0.485\linewidth}
   \centering
   \begingroup\setlength{\fboxsep}{1pt}\color{ManualLine}
-  \fbox{\includegraphics[width=0.96\linewidth]{assets/screenshots/chmbe_growth_monitor_dummy.png}}
+  \fbox{\includegraphics[width=0.96\linewidth]{assets/screenshots/ombe_growth_monitor_dummy.png}}
   \endgroup\\[-1mm]
   {\footnotesize\textbf{1. Live acquisition}\par}
-  {\scriptsize\color{ManualMuted}Growth Monitor writes the archived session.\par}
+  {\scriptsize\color{ManualMuted}The chamber-selected Growth Monitor writes the archive.\par}
 \end{minipage}\hfill
 \begin{minipage}[t]{0.485\linewidth}
   \centering
@@ -222,17 +239,17 @@ The live GUI creates session records. The labeler reads those records later, pro
 
 \subsection{What this manual covers}
 \rowcolors{2}{ManualPale}{white}
-\begin{tabularx}{\linewidth}{L{16mm}L{72mm}Y}
+\begin{tabularx}{\linewidth}{L{18mm}L{70mm}Y}
 \toprule
-\textbf{Page} & \textbf{Topic} & \textbf{Outcome} \\
+\textbf{Chapter} & \textbf{Topic} & \textbf{Outcome} \\
 \midrule
-3 & Shortcuts and live GUI startup & Confirm the correct chamber and a clean exit \\
-4 & Separate Ch-MBE and O-MBE defaults & Record approved values without cross-copying \\
-5 & Labeler desktop application & Select inputs, build, open, and validate \\
-6-7 & Inputs and safe report build & Produce a complete local report directory \\
-8-9 & Segment labeling and display controls & Create traceable labels on actual saved frames \\
-10 & Export, import, and validation & Produce canonical JSON and validate fail-closed \\
-11-13 & Safety, troubleshooting, and version checks & Handoff and reproduce the work safely \\
+2 & Chamber-specific live startup & Select the correct launcher and verify its exact title \\
+3 & Separate O-MBE and Ch-MBE defaults & Record approved values without cross-copying \\
+4 & Labeler desktop application & Select inputs, build, open, and validate \\
+5-6 & Inputs and safe report build & Produce a complete local report directory \\
+7-8 & Segment labeling and display controls & Create traceable labels on actual saved frames \\
+9 & Export, import, and validation & Produce canonical JSON and validate fail-closed \\
+10-12 & Safety, troubleshooting, and version checks & Handoff and reproduce the work safely \\
 \bottomrule
 \end{tabularx}
 
@@ -242,87 +259,126 @@ Surface-reconstruction labels, acquisition-quality QC, and FeSe film quality are
 
 \subsection{Operating principle}
 \begin{itemize}
-  \item The GUI reads live instrument sources and writes session records under the operator's control.
+  \item The selected O-MBE or Ch-MBE GUI reads live instrument sources and writes chamber-identified session records under the operator's control.
   \item Post-processing combines an archived session with one or more already-generated prediction tables.
   \item Human labels are stored as frame-bound temporal segments with provenance.
   \item Model outputs remain visible, so these annotations are assisted review, not blind-gold labels.
 \end{itemize}
 
-% Page 3 - live GUI
-\manualsection{2}{Install shortcuts and start the Ch-MBE GUI}
+% Chapter 2 - chamber-specific live startup
+\manualsection{2}{Install shortcuts and start the correct chamber GUI}
 
-\inbrief{Use the dedicated Ch-MBE shortcut, verify the window title and live status before ARM, and close the GUI normally so logs finish writing.}
+\inbrief{Choose exactly one chamber launcher, verify its exact window title, and check live status before ARM. The launchers isolate chamber identity, but they do not authorize operation or setpoint changes.}
+\label{sec:live-startup}
 
-\subsection{First setup or after moving the checkout}
-\step{1}{From the GUI repository root, double-click \texttt{Install AI4MBE Desktop Shortcuts.cmd}.}
-\step{2}{Confirm that the desktop contains refreshed shortcuts named \textbf{Ch-MBE Growth Monitor} and \textbf{RHEED Post-processing Labeler}.}
-\step{3}{If Windows displays an unexpected security warning, do not bypass it. Stop and ask the maintainer to verify the file source and commit.}
+\subsection{Shared first setup or after moving the checkout}
+\begin{enumerate}[leftmargin=7mm,itemsep=1.5pt,topsep=1pt]
+  \item From the GUI repository root, double-click \texttt{Install AI4MBE Desktop Shortcuts.cmd}.
+  \item Confirm that the desktop contains \textbf{O-MBE Growth Monitor}, \textbf{Ch-MBE Growth Monitor}, and \textbf{RHEED Post-processing Labeler}.
+  \item If Windows displays an unexpected security warning, stop and ask the maintainer to verify the file source, branch, and commit. Do not bypass it.
+\end{enumerate}
 
-\subsection{Start each experiment}
-\step{1}{Double-click \texttt{Start Ch-MBE Growth Monitor.cmd} or its desktop shortcut. Do not use an O-MBE launcher.}
-\step{2}{Wait for the main window and confirm the title \textbf{Chalcogenide MBE Growth Monitor}. Then inspect each device status.}
-\step{3}{ARM or start a session only when the operator is ready under the experiment SOP. Double-click startup does not authorize setpoint changes.}
-\step{4}{At the end, close through the GUI normally and wait for the window to disappear. Do not force-kill Python while logs are being written.}
+\subsection{Select exactly one chamber branch}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{22mm}L{56mm}Y}
+\toprule
+\textbf{Physical chamber} & \textbf{Required launcher} & \textbf{Exact window title} \\
+\midrule
+O-MBE & \texttt{Start O-MBE Growth Monitor.cmd} & \textbf{Oxide MBE Growth Monitor} \\
+Ch-MBE & \texttt{Start Ch-MBE Growth Monitor.cmd} & \textbf{Chalcogenide MBE Growth Monitor} \\
+\bottomrule
+\end{tabularx}
 
-\manualscreenshot[width=0.78\linewidth,height=50mm,keepaspectratio]{assets/screenshots/chmbe_growth_monitor_session.png}
-\screenshotcaption{The current Session tab in a hardware-free demo. Its dummy selections are demonstration values, not Ch-MBE or O-MBE production defaults. Confirm the chamber and every selected interface before ARM.}
+A different title or a launcher that does not match the physical chamber is a stop condition. Close normally and restart with the correct launcher; changing a GUI field is not a substitute.
 
-The launcher forces the Ch-MBE chamber configuration and refuses a second live-GUI process through a Windows single-instance mutex.
+\begin{center}
+\begin{minipage}[t]{0.485\linewidth}
+  \centering
+  \begingroup\setlength{\fboxsep}{1pt}\color{ManualLine}
+  \fbox{\includegraphics[width=0.96\linewidth,height=38mm,keepaspectratio]{assets/screenshots/ombe_growth_monitor_session.png}}
+  \endgroup\\[-1mm]
+  {\scriptsize\textbf{O-MBE Session tab.} Generated demo inputs; not operating defaults.\par}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\linewidth}
+  \centering
+  \begingroup\setlength{\fboxsep}{1pt}\color{ManualLine}
+  \fbox{\includegraphics[width=0.96\linewidth,height=38mm,keepaspectratio]{assets/screenshots/chmbe_growth_monitor_session.png}}
+  \endgroup\\[-1mm]
+  {\scriptsize\textbf{Ch-MBE Session tab.} Generated demo inputs; not operating defaults.\par}
+\end{minipage}
+\end{center}
 
-Before ARM, confirm the Ch-MBE chamber, an advancing RHEED frame sequence, a valid temperature state, and the intended log directory.
+\subsection{Shared ARM and exit boundary}
+\begin{enumerate}[leftmargin=7mm,itemsep=1.5pt,topsep=1pt]
+  \item Confirm the title-selected chamber, advancing RHEED sequence, valid temperature state, intended log directory, and every selected interface against the matching owner-approved register in Chapter~\ref{sec:chamber-defaults}. A pending field is not a default.
+  \item ARM or start only when the authorized operator and applicable SOP permit it. Double-click startup authorizes no instrument operation or setpoint change.
+  \item Close normally and wait for the window to disappear. Do not force-kill Python while logs are being written.
+\end{enumerate}
 
-The approved values, when supplied, belong in the chamber-specific record on page~\pageref{sec:chamber-defaults}; a pending field is not a default.
-
-\begin{infobox}{Expected environment behavior}
-Launcher logs are stored below \texttt{\%LOCALAPPDATA\%\textbackslash AI4MBE\textbackslash LauncherLogs}. They record the resolved Python interpreter, repository path, branch, commit, chamber, and optional driver status. Missing \texttt{pyads}, \texttt{serial}, or \texttt{windows\_capture} produces a visible warning without hiding the GUI; do not ARM a production mode that needs the missing driver. Do not assume a fixed drive letter or create global environment variables ad hoc.
+\begin{infobox}{Shared launcher evidence}
+Each launcher forces and preflights its chamber profile and owns a chamber-specific single-instance mutex. Logs below \texttt{\%LOCALAPPDATA\%\textbackslash AI4MBE\textbackslash LauncherLogs} record Python, repository, branch, commit, chamber, and optional-driver status. A missing \texttt{pyads}, \texttt{serial}, or \texttt{windows\_capture} produces a visible warning; do not ARM a mode that needs it. Do not create global environment variables ad hoc.
 \end{infobox}
 
-% Page 4 - chamber-specific defaults (reserved)
-\manualsection{3}{Keep Ch-MBE and O-MBE defaults separate}
+% Chapter 3 - chamber-specific defaults (reserved)
+\manualsection{3}{Keep O-MBE and Ch-MBE defaults separate}
+
+\inbrief{Every operating default is pending until its chamber owner approves it. Keep the two registers physically and logically separate; never infer from code, screenshots, current selections, or the other chamber.}
 \label{sec:chamber-defaults}
 
-\inbrief{Every default is pending until its chamber owner approves it. Keep Ch-MBE and O-MBE records independent and never copy a value across chambers.}
-
 \begin{dangerbox}{Reserved placeholders - not operating values}
-Every value on this page is intentionally pending. These entries must not be used to configure, ARM, or troubleshoot either chamber until the chamber owner supplies and approves them. Until then, follow the applicable chamber SOP and verify the active GUI configuration before ARM. Never copy a value from one chamber to the other.
+Every value in both registers is intentionally pending. These entries must not be used to configure, ARM, or troubleshoot either chamber until that chamber's owner supplies and approves them. Until then, follow the applicable chamber SOP and verify the active GUI configuration before ARM. Never copy a value from one chamber to the other.
 \end{dangerbox}
 
-\subsection{Ch-MBE default configuration}
+Chapter~\ref{sec:live-startup} gives fixed launcher names and window titles only so the operator can identify the selected software profile. Those identity checks, source-code values, and visible UI selections do not populate either operating-default register.
+
+\begin{tcolorbox}[
+  enhanced,breakable,title={O-MBE owner-approved defaults - reserved},
+  fonttitle=\bfseries,colback=ManualBluePale,colframe=ManualBlue,
+  boxrule=0.8pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm]
 \rowcolors{2}{ManualPale}{white}
-\begin{tabularx}{\linewidth}{L{66mm}Y}
+\begin{tabularx}{\linewidth}{L{76mm}Y}
 \toprule
 \textbf{Configuration item} & \textbf{Owner-approved default} \\
 \midrule
 GUI launcher and chamber profile & \emph{Pending - to be supplied} \\
-RHEED acquisition source and mode & \emph{Pending - to be supplied} \\
-Temperature interface and communication settings & \emph{Pending - to be supplied} \\
-Other instrument interfaces and connection settings & \emph{Pending - to be supplied} \\
-Classifier or model package & \emph{Pending - to be supplied} \\
-Sampling, capture, and logging settings & \emph{Pending - to be supplied} \\
+RHEED source, mode, source window, ROI, and crop & \emph{Pending - to be supplied} \\
+Pyrometer mode, port, baud, RTS, and backend & \emph{Pending - to be supplied} \\
+MISTRAL mode, endpoint, ports, schema, and cell map & \emph{Pending - to be supplied} \\
+EvapControl mode, window or log source, and schema & \emph{Pending - to be supplied} \\
+Classifier package, enable state, and shadow state & \emph{Pending - to be supplied} \\
+Save root, filename prefix, and session naming & \emph{Pending - to be supplied} \\
+Sampling, continuous capture, and logging intervals & \emph{Pending - to be supplied} \\
 \bottomrule
 \end{tabularx}
 
 \textbf{Approved by / revision / date:} \emph{Pending - to be supplied}
+\end{tcolorbox}
 
-\subsection{O-MBE default configuration}
+\begin{tcolorbox}[
+  enhanced,breakable,title={Ch-MBE owner-approved defaults - reserved},
+  fonttitle=\bfseries,colback=ManualGreenPale,colframe=ManualGreen,
+  boxrule=0.8pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm]
 \rowcolors{2}{ManualPale}{white}
-\begin{tabularx}{\linewidth}{L{66mm}Y}
+\begin{tabularx}{\linewidth}{L{76mm}Y}
 \toprule
 \textbf{Configuration item} & \textbf{Owner-approved default} \\
 \midrule
 GUI launcher and chamber profile & \emph{Pending - to be supplied} \\
-RHEED acquisition source and mode & \emph{Pending - to be supplied} \\
-Temperature interface and communication settings & \emph{Pending - to be supplied} \\
-Other instrument interfaces and connection settings & \emph{Pending - to be supplied} \\
-Classifier or model package & \emph{Pending - to be supplied} \\
-Sampling, capture, and logging settings & \emph{Pending - to be supplied} \\
+RHEED source, mode, source window, ROI, and crop & \emph{Pending - to be supplied} \\
+Pyrometer mode, port, baud, RTS, and backend & \emph{Pending - to be supplied} \\
+MISTRAL mode, endpoint, ports, schema, and cell map & \emph{Pending - to be supplied} \\
+EvapControl mode, window or log source, and schema & \emph{Pending - to be supplied} \\
+Classifier package, enable state, and shadow state & \emph{Pending - to be supplied} \\
+Save root, filename prefix, and session naming & \emph{Pending - to be supplied} \\
+Sampling, continuous capture, and logging intervals & \emph{Pending - to be supplied} \\
 \bottomrule
 \end{tabularx}
 
 \textbf{Approved by / revision / date:} \emph{Pending - to be supplied}
+\end{tcolorbox}
 
 \begin{infobox}{Scope}
-A completed value of \textbf{Not applicable} is valid when approved by the chamber owner; a blank or pending value is not. The O-MBE record on this page does not replace an O-MBE startup SOP.
+A completed value of \textbf{Not applicable} is valid only when approved by the corresponding chamber owner; a blank or pending value is not. Neither register replaces its chamber startup SOP.
 \end{infobox}
 
 % Page 5 - labeler UI
@@ -361,6 +417,8 @@ This application can run on a computer without instrument software when the arch
 
 \subsection{Session archive}
 The ZIP archive must contain exactly one member ending in \texttt{session\_metadata.json}, exactly one member ending in \texttt{heartbeat\_log.csv}, and every sibling \texttt{frames/} image referenced by the heartbeat rows. Saved-frame elapsed time, heartbeat index, capture sequence, and timezone-aware capture UTC must each increase strictly; gaps are allowed. Do not extract and rename frames manually.
+
+Read \texttt{chamber\_id} from the session metadata and confirm that it names the intended O-MBE or Ch-MBE source. When the recorded MISTRAL mode is ADS, also preserve its recorded endpoint, ports, and cell count. Compare provenance only with the corresponding owner-approved register in Chapter~\ref{sec:chamber-defaults}; never edit an archive to make it resemble the other chamber.
 
 \begin{lstlisting}
 growth_session.zip
@@ -558,23 +616,35 @@ Model plots and lossy review images are visible during labeling. These annotatio
 The current classification target is bare STO surface reconstruction before growth. Do not interpret a reconstruction label as FeSe film quality. Do not equate reconstruction \texttt{unknown} with acquisition-quality \texttt{QC\_REJECT}.
 \end{warnbox}
 
-% Page 12 - troubleshooting
+% Chapter 11 - troubleshooting
 \manualsection{11}{Troubleshooting}
 
-\inbrief{Preserve the error, time, branch, commit, paths, and launcher log before changing anything. Do not start by deleting environments, resetting Git, or guessing settings.}
+\inbrief{Preserve evidence, then use the branch for the chamber named in the exact window title and launcher log. Never repair one chamber by copying settings from the other.}
 
 First preserve the exact error text, occurrence time, branch, commit, and selected paths. Do not begin by deleting environments, changing global variables, or force-resetting Git. A live-driver warning is fail-visible behavior, not a prompt for ad hoc dependency installation.
 
+\subsection{O-MBE live-GUI branch}
+\begin{infobox}{Expected software identity}
+Use \texttt{Start O-MBE Growth Monitor.cmd}; the exact title is \textbf{Oxide MBE Growth Monitor}. If the title differs, close normally, preserve the latest launcher log, and restart only with the O-MBE launcher. Compare selected interfaces only with the owner-approved O-MBE register in Chapter~\ref{sec:chamber-defaults}; a pending entry is a stop condition, not a reason to borrow a Ch-MBE value.
+\end{infobox}
+
+\subsection{Ch-MBE live-GUI branch}
+\begin{corebox}{Expected software identity}
+Use \texttt{Start Ch-MBE Growth Monitor.cmd}; the exact title is \textbf{Chalcogenide MBE Growth Monitor}. If the title differs, close normally, preserve the latest launcher log, and restart only with the Ch-MBE launcher. Compare selected interfaces only with the owner-approved Ch-MBE register in Chapter~\ref{sec:chamber-defaults}; a pending entry is a stop condition, not a reason to borrow an O-MBE value.
+\end{corebox}
+
+\subsection{Shared live and offline symptoms}
 \small
 \rowcolors{2}{ManualPale}{white}
-\begin{tabularx}{\linewidth}{L{37mm}L{50mm}Y}
+\begin{tabularx}{\linewidth}{L{39mm}L{48mm}Y}
 \toprule
 \textbf{Symptom} & \textbf{Likely cause} & \textbf{Safe action} \\
 \midrule
 Desktop shortcut is absent or opens an old checkout & Installer was not run after the checkout moved & Run the shortcut installer from the current repository root \\
-Growth Monitor shows the wrong chamber & Wrong launcher was used & Close normally and use only the Ch-MBE launcher \\
-Launcher window closes immediately & Environment or dependency failure & Read the newest launcher log; if needed, run the same CMD from PowerShell \\
-Temperature or RHEED has no valid reading & Interface, vendor window, or selected mode issue & Record connected, error, and mode; do not guess global settings \\
+Growth Monitor title names the wrong chamber & Wrong launcher or stale shortcut & Close normally; follow the matching chamber branch above \\
+Launcher window closes immediately & Environment, dependency, or preflight failure & Read the newest matching-chamber launcher log; run the same CMD from PowerShell only to preserve its error \\
+Optional-driver warning appears & A selected live mode may lack its Python driver & Record the missing module; do not change mode unless the chamber owner has approved the alternative \\
+Temperature, RHEED, MISTRAL, or EvapControl is invalid & Interface, vendor window, selected mode, or stale source issue & Record chamber, mode, connected/valid/error, sequence, and age; do not guess settings \\
 Labeler rejects Build & Missing input, mismatched pair, or non-empty output & Check the session, each positional pair, and a new output directory \\
 Provenance mismatch & Predictions do not belong to the ZIP or rows changed & Find the matching predictions and spec; do not edit the CSV \\
 HTML has no images or curves & Only the HTML was copied or assets are missing & Restore the complete report directory and relative paths \\
@@ -585,17 +655,16 @@ Import or validation fails & Run, context, endpoint, overlap, or label mismatch 
 \normalsize
 
 \subsection{Minimum evidence for the maintainer}
-\begin{itemize}
+\begin{itemize}[itemsep=1pt,topsep=1pt]
   \item Full error text and occurrence time. Do not report only that it does not work.
   \item Output of \texttt{git status -{}-short -{}-branch} and \texttt{git rev-parse HEAD}.
-  \item Launcher name, environment path, input filenames, and output directory. Keep sensitive data out of public channels.
-  \item For labeling issues, report-manifest and annotation-JSON SHA values. Raw images are not initially required.
+  \item Chamber, exact window title, launcher name, launcher-log path, environment path, and selected modes. For labeling issues, add report-manifest and annotation-JSON SHA values; raw images are not initially required. Keep sensitive data out of public channels.
 \end{itemize}
 
-% Page 13 - checklist
+% Chapter 12 - version verification and checklists
 \manualsection{12}{Version verification and quick checklist}
 
-\inbrief{Record versions and hashes, complete the checklist, and stop whenever instrument state, provenance, or validation cannot be explained.}
+\inbrief{Record versions and hashes, complete only the startup checklist for the selected chamber, then use the shared offline checklist. Stop whenever identity, instrument state, provenance, or validation cannot be explained.}
 
 \subsection{Record versions before acquisition or labeling}
 \begin{lstlisting}
@@ -608,7 +677,35 @@ python --version
 python -m tools.rheed_postprocessing_labeling --help
 \end{lstlisting}
 
-Use the resolved Python interpreter and repository path recorded by the launcher. Read \texttt{AI4MBE\_GUI\_PYTHON} only when it is already configured on that workstation; do not create it ad hoc. If the branch or commit differs from the team-specified version, or Git reports unknown modifications, stop and verify.
+Use the resolved Python interpreter and repository path recorded by the matching chamber launcher or labeler launcher. Read \texttt{AI4MBE\_GUI\_PYTHON} only when it is already configured on that workstation; do not create it ad hoc. If the branch or commit differs from the team-specified version, or Git reports unknown modifications, stop and verify.
+
+\subsection{O-MBE startup checklist}
+\begin{tcolorbox}[
+  enhanced,colback=ManualBluePale,colframe=ManualBlue,boxrule=0.7pt,
+  arc=2mm,left=2.5mm,right=2.5mm,top=1mm,bottom=1mm]
+\begin{itemize}[leftmargin=7mm,itemsep=1.3pt,topsep=1pt]
+  \checkitem{Use \texttt{Start O-MBE Growth Monitor.cmd}; never use the Ch-MBE launcher for this chamber.}
+  \checkitem{Confirm the exact title \textbf{Oxide MBE Growth Monitor}.}
+  \checkitem{Confirm the launcher log identifies O-MBE, the intended repository, branch, commit, Python, and required optional drivers.}
+  \checkitem{Compare every selected interface and logging field only with the approved O-MBE register in Chapter~\ref{sec:chamber-defaults}; stop on any pending or unexplained value.}
+  \checkitem{Confirm advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the O-MBE SOP.}
+  \checkitem{ARM only when the authorized operator and O-MBE SOP permit it; this checklist grants no operating or setpoint authority.}
+\end{itemize}
+\end{tcolorbox}
+
+\subsection{Ch-MBE startup checklist}
+\begin{tcolorbox}[
+  enhanced,colback=ManualGreenPale,colframe=ManualGreen,boxrule=0.7pt,
+  arc=2mm,left=2.5mm,right=2.5mm,top=1mm,bottom=1mm]
+\begin{itemize}[leftmargin=7mm,itemsep=1.3pt,topsep=1pt]
+  \checkitem{Use \texttt{Start Ch-MBE Growth Monitor.cmd}; never use the O-MBE launcher for this chamber.}
+  \checkitem{Confirm the exact title \textbf{Chalcogenide MBE Growth Monitor}.}
+  \checkitem{Confirm the launcher log identifies Ch-MBE, the intended repository, branch, commit, Python, and required optional drivers.}
+  \checkitem{Compare every selected interface and logging field only with the approved Ch-MBE register in Chapter~\ref{sec:chamber-defaults}; stop on any pending or unexplained value.}
+  \checkitem{Confirm advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the Ch-MBE SOP.}
+  \checkitem{ARM only when the authorized operator and Ch-MBE SOP permit it; this checklist grants no operating or setpoint authority.}
+\end{itemize}
+\end{tcolorbox}
 
 \subsection{Integrity hashes}
 \begin{lstlisting}
@@ -622,11 +719,10 @@ Searchable manual: \path{docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.m
 AI prompt pack: \path{docs/RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md}\par
 The prompt pack does not authorize an AI to invent pending defaults or make instrument-control decisions.
 
-\subsection{Quick checklist}
+\subsection{Shared offline and handoff checklist}
 \begin{itemize}[leftmargin=7mm,itemsep=1.7pt]
-  \checkitem{Use the Ch-MBE launcher and confirm the chamber identity.}
-  \checkitem{Confirm live status, frame sequence, temperature, and logging behavior under the experiment SOP.}
   \checkitem{Preserve a read-only source ZIP and its SHA-256.}
+  \checkitem{Confirm session metadata names the intended chamber; never repair provenance by editing the archive.}
   \checkitem{Open the offline labeler with the dedicated launcher.}
   \checkitem{Pair every prediction CSV with the correct model-spec JSON.}
   \checkitem{Use a new or empty output directory outside Git.}

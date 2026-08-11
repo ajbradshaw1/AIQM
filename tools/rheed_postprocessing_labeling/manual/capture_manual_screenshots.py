@@ -37,7 +37,7 @@ from PyQt6.QtCore import QSettings
 from PyQt6.QtGui import QFont, QFontDatabase
 from PyQt6.QtWidgets import QApplication, QMainWindow
 
-from drivers.config import CHALCOGENIDE_MBE
+from drivers.config import CHALCOGENIDE_MBE, OXIDE_MBE
 from gui.growth_monitor import GrowthMonitor
 from gui.live_equalizer_tab import LiveEqualizerTab
 from gui.state import (
@@ -276,110 +276,132 @@ def _capture_qt(
         raise RuntimeError("No Windows fonts could be loaded for offscreen capture")
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 9))
-    with patch.object(LiveEqualizerTab, "_load_basis", lambda self: None):
-        monitor = GrowthMonitor(config=CHALCOGENIDE_MBE)
-    shell = QMainWindow()
-    shell.setWindowTitle("Chalcogenide MBE Growth Monitor")
-    shell.setCentralWidget(monitor)
-    shell.resize(1440, 900)
-    monitor.grower_input.setText("Demo Operator")
-    monitor.sample_id_input.setText("SYNTHETIC_DEMO")
-    monitor.config_save_path.setText(r"D:\SYNTHETIC_DEMO")
-    monitor.config_exactus_port.setText("DEMO")
-    for combo in (
-        monitor.config_camera_mode,
-        monitor.config_pyrometer_mode,
-        monitor.config_mistral_mode,
-        monitor.config_evap_mode,
-    ):
-        combo.setCurrentText("dummy")
-    monitor.update_camera_state(
-        CameraState(
-            frame=_rheed_frame(48),
-            frame_number=49,
-            width=656,
-            height=492,
-            intensity=42.0,
-            connected=True,
-            valid=True,
-            mode="dummy",
-            capture_backend="synthetic_manual_fixture",
-            captured_at_utc="2026-01-02T03:04:53.200Z",
-            capture_sequence=1048,
-            sample_sequence=49,
-            capture_geometry_id="synthetic-656x492",
+    def capture_monitor(config, stem: str) -> None:
+        # GrowthMonitor is the exact central widget used by GrowthApp, but it
+        # owns no hardware workers or logger.  The basis patch prevents the
+        # Live Equalizer tab from reading repository image assets while the
+        # documentation window is being constructed.
+        os.environ["AIQM_CHAMBER"] = config.chamber_id
+        with patch.object(LiveEqualizerTab, "_load_basis", lambda self: None):
+            monitor = GrowthMonitor(config=config)
+        shell = QMainWindow()
+        shell.setWindowTitle(f"{config.name} Growth Monitor")
+        shell.setCentralWidget(monitor)
+        shell.resize(1440, 900)
+        chamber_token = stem.upper().replace("-", "_")
+        monitor.grower_input.setText("Demo Operator")
+        monitor.sample_id_input.setText(f"SYNTHETIC_{chamber_token}_DEMO")
+        monitor.config_save_path.setText(
+            rf"D:\SYNTHETIC_{chamber_token}_DEMO"
         )
-    )
-    monitor.update_pyrometer_state(
-        PyrometerState(
-            temperature=506.0,
-            temperature_std=0.2,
-            temperature_n=5,
-            connected=True,
-            valid=True,
-            mode="dummy",
-            sample_sequence=49,
+        monitor.config_exactus_port.setText("DEMO")
+        for combo in (
+            monitor.config_camera_mode,
+            monitor.config_pyrometer_mode,
+            monitor.config_mistral_mode,
+            monitor.config_evap_mode,
+        ):
+            # These are display-only selections on a standalone monitor.
+            # No GrowthApp signal is connected, so DummyCamera is not made.
+            combo.setCurrentText("dummy")
+        monitor.update_camera_state(
+            CameraState(
+                frame=_rheed_frame(48),
+                frame_number=49,
+                width=656,
+                height=492,
+                intensity=42.0,
+                connected=True,
+                valid=True,
+                mode="dummy",
+                capture_backend="synthetic_manual_fixture",
+                captured_at_utc="2026-01-02T03:04:53.200Z",
+                capture_sequence=1048,
+                sample_sequence=49,
+                capture_geometry_id="synthetic-656x492",
+            )
         )
-    )
-    monitor.update_mistral_state(
-        MistralState(
-            v_set=4.0,
-            v_actual=3.98,
-            i_set=0.55,
-            i_actual=0.54,
-            connected=True,
-            valid=True,
-            mode="dummy",
-            sample_sequence=49,
+        monitor.update_pyrometer_state(
+            PyrometerState(
+                temperature=506.0,
+                temperature_std=0.2,
+                temperature_n=5,
+                connected=True,
+                valid=True,
+                mode="dummy",
+                sample_sequence=49,
+            )
         )
-    )
-    monitor.update_evap_state(
-        EvapControlState(
-            chamber_pressure_mbar=2.1e-10,
-            connected=True,
-            valid=True,
-            mode="dummy",
-            sample_sequence=49,
+        monitor.update_mistral_state(
+            MistralState(
+                v_set=4.0,
+                v_actual=3.98,
+                i_set=0.55,
+                i_actual=0.54,
+                connected=True,
+                valid=True,
+                mode="dummy",
+                sample_sequence=49,
+            )
         )
-    )
-    scores = {
-        "1x1": 4,
-        "Twinned (2x1)": 8,
-        "c(6x2)": 13,
-        "rt13xrt13": 69,
-        "HTR": 6,
-    }
-    monitor.update_classifier_state(
-        ClassifierState(
-            loading=False,
-            ready=True,
-            last_frame_number=49,
-            raw_scores={key: value / 100.0 for key, value in scores.items()},
-            normalized_percent=scores,
-            smoothed_percent=scores,
-            raw_sum=1.0,
-            quality=0.91,
-            has_confident_data=True,
-            inference_ms=86.7,
-            model_version="synthetic documentation state",
-            prediction_actionable=False,
-            model_input_mode="single_frame",
+        monitor.update_evap_state(
+            EvapControlState(
+                chamber_pressure_mbar=2.1e-10,
+                connected=True,
+                valid=True,
+                mode="dummy",
+                sample_sequence=49,
+            )
         )
-    )
-    monitor.elapsed_display.value.setText("00:00:49.20")
-    monitor._tabs.setCurrentIndex(0)
-    shell.show()
-    app.processEvents()
-    _save_widget(shell, output_dir / "chmbe_growth_monitor_dummy.png")
+        scores = {
+            "1x1": 4,
+            "Twinned (2x1)": 8,
+            "c(6x2)": 13,
+            "rt13xrt13": 69,
+            "HTR": 6,
+        }
+        monitor.update_classifier_state(
+            ClassifierState(
+                loading=False,
+                ready=True,
+                last_frame_number=49,
+                raw_scores={
+                    key: value / 100.0 for key, value in scores.items()
+                },
+                normalized_percent=scores,
+                smoothed_percent=scores,
+                raw_sum=1.0,
+                quality=0.91,
+                has_confident_data=True,
+                inference_ms=86.7,
+                model_version="synthetic documentation state",
+                prediction_actionable=False,
+                model_input_mode="single_frame",
+            )
+        )
+        monitor.elapsed_display.value.setText("00:00:49.20")
+        monitor._tabs.setCurrentIndex(0)
+        shell.show()
+        app.processEvents()
+        _save_widget(shell, output_dir / f"{stem}_growth_monitor_dummy.png")
 
-    session_index = next(
-        index
-        for index in range(monitor._tabs.count())
-        if monitor._tabs.tabText(index) == "Session"
-    )
-    monitor._tabs.setCurrentIndex(session_index)
-    app.processEvents()
-    _save_widget(shell, output_dir / "chmbe_growth_monitor_session.png")
+        session_index = next(
+            index
+            for index in range(monitor._tabs.count())
+            if monitor._tabs.tabText(index) == "Session"
+        )
+        monitor._tabs.setCurrentIndex(session_index)
+        app.processEvents()
+        _save_widget(shell, output_dir / f"{stem}_growth_monitor_session.png")
+
+        monitor.live_equalizer_tab._gate_timer.stop()
+        monitor._elapsed_timer.stop()
+        shell.close()
+        shell.deleteLater()
+        app.processEvents()
+
+    capture_monitor(CHALCOGENIDE_MBE, "chmbe")
+    capture_monitor(OXIDE_MBE, "ombe")
 
     settings = QSettings(
         str(fixture_root / "labeler-screenshot.ini"),
@@ -403,12 +425,8 @@ def _capture_qt(
     app.processEvents()
     _save_widget(labeler, output_dir / "rheed_labeler_build.png")
 
-    monitor.live_equalizer_tab._gate_timer.stop()
-    monitor._elapsed_timer.stop()
     labeler.close()
-    shell.close()
     labeler.deleteLater()
-    shell.deleteLater()
     app.processEvents()
 
 
@@ -437,13 +455,18 @@ def main() -> int:
     parser.add_argument(
         "--fixture-root",
         type=Path,
-        default=REPOSITORY_ROOT / "build" / "manual-screenshot-fixtures",
+        required=True,
+        help="Scratch directory outside the repository for generated inputs",
     )
     parser.add_argument("--skip-browser", action="store_true")
     args = parser.parse_args()
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     fixture_parent = args.fixture_root.resolve()
+    if fixture_parent == REPOSITORY_ROOT or fixture_parent.is_relative_to(
+        REPOSITORY_ROOT
+    ):
+        parser.error("--fixture-root must be outside the repository")
     fixture_parent.mkdir(parents=True, exist_ok=True)
     fixture_root = Path(tempfile.mkdtemp(prefix="capture-", dir=fixture_parent))
     archive, predictions, specs = _create_fixture(fixture_root / "inputs")
@@ -460,6 +483,8 @@ def main() -> int:
     expected = [
         "chmbe_growth_monitor_dummy.png",
         "chmbe_growth_monitor_session.png",
+        "ombe_growth_monitor_dummy.png",
+        "ombe_growth_monitor_session.png",
         "rheed_labeler_build.png",
     ]
     if not args.skip_browser:

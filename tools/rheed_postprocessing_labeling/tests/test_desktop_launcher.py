@@ -75,6 +75,8 @@ def test_english_manual_uses_actual_ui_screenshot_assets() -> None:
     assert "tikzpicture" not in source
     assert "actual software using generated demo inputs" in source
     for filename in (
+        "ombe_growth_monitor_dummy.png",
+        "ombe_growth_monitor_session.png",
         "chmbe_growth_monitor_dummy.png",
         "chmbe_growth_monitor_session.png",
         "rheed_labeler_build.png",
@@ -93,22 +95,19 @@ def test_english_manual_keeps_chamber_defaults_separate_and_pending() -> None:
         / "manual"
         / "RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.tex"
     ).read_text(encoding="ascii")
-    ch_heading = r"\subsection{Ch-MBE default configuration}"
-    o_heading = r"\subsection{O-MBE default configuration}"
-    assert source.count(ch_heading) == 1
+    o_heading = "title={O-MBE owner-approved defaults - reserved}"
+    ch_heading = "title={Ch-MBE owner-approved defaults - reserved}"
+    scope_heading = r"\begin{infobox}{Scope}"
     assert source.count(o_heading) == 1
-    assert source.index(ch_heading) < source.index(o_heading)
-    ch_block = source[source.index(ch_heading):source.index(o_heading)]
-    o_block = source[
-        source.index(o_heading):source.index(
-            r"\begin{infobox}{Scope}", source.index(o_heading)
-        )
-    ]
-    for block in (ch_block, o_block):
+    assert source.count(ch_heading) == 1
+    assert source.index(o_heading) < source.index(ch_heading)
+    o_block = source[source.index(o_heading):source.index(ch_heading)]
+    ch_block = source[source.index(ch_heading):source.index(scope_heading)]
+    for block in (o_block, ch_block):
         assert r"\textbf{Owner-approved default}" in block
-        assert block.count(r"\emph{Pending - to be supplied}") == 7
+        assert block.count(r"\emph{Pending - to be supplied}") == 9
     assert "Never copy a value from one chamber to the other." in source
-    assert "not Ch-MBE or O-MBE production defaults" in source
+    assert source.count("Generated demo inputs; not operating defaults.") == 2
 
 
 def test_english_manual_starts_every_chapter_with_in_brief() -> None:
@@ -149,23 +148,43 @@ def test_markdown_manual_and_ai_prompt_pack_are_complete() -> None:
         end = chapters[index + 1].start() if index + 1 < len(chapters) else len(manual)
         assert manual[chapter.end():end].lstrip().startswith("### In brief")
 
+    ch_marker = '<a id="chmbe-approved-defaults"></a>'
+    o_marker = '<a id="ombe-approved-defaults"></a>'
+    revision_marker = "### Revision and evidence rule"
+    ch_defaults = manual[manual.index(ch_marker):manual.index(o_marker)]
+    o_defaults = manual[manual.index(o_marker):manual.index(revision_marker)]
+    for block in (ch_defaults, o_defaults):
+        assert block.count("*Pending - to be supplied*") == 9
+    assert "Read `chamber_id` from the session metadata" in manual
+    assert "recorded endpoint, ports, and cell count" in manual
+    assert "never edit an archive to make it resemble the other chamber" in manual
+    assert manual.count("the intended repository, branch, commit, Python interpreter") == 2
+    assert manual.count("instrument states, data age, and intended log directory") == 2
+    assert "Confirm session metadata names the intended chamber" in manual
+
     prompt_blocks = re.findall(r"```text\n(.*?)\n```", prompts, re.DOTALL)
     assert len(prompt_blocks) == 9
+    base_prompt = prompt_blocks[0]
     required_boundaries = (
         "sole procedural and scientific authority",
-        "chapter number and exact heading",
+        "chapter number and exact heading or subheading",
         "Manual facts",
         "Reasoned inference",
         "Missing information",
-        "Never invent a pending Ch-MBE or O-MBE default",
+        "Never invent a pending default",
+        "Never transfer a value, assumption, or approval between chambers",
         "Do not authorize ARM",
         "surface reconstruction, acquisition-quality QC, and FeSe film quality",
         "model-assisted",
         "not blind-gold",
     )
-    for prompt in prompt_blocks:
-        for boundary in required_boundaries:
-            assert boundary in prompt
+    for boundary in required_boundaries:
+        assert boundary in base_prompt
+    assert prompts.count("Append this after the required base prompt") == 8
+    assert [
+        int(item)
+        for item in re.findall(r"^## (\d+)\. ", prompts, re.MULTILINE)
+    ] == list(range(1, 9))
 
 
 def _launcher(

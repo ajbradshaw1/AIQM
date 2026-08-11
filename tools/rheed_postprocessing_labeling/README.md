@@ -54,14 +54,16 @@ The same launcher is available from PowerShell:
 python -m tools.rheed_postprocessing_labeling desktop
 ```
 
-The default English-only PDF operator guide is
+The default English-only PDF operator guide for both O-MBE and Ch-MBE is
 [`docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf`](../../docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf).
 It is also available as searchable
 [Markdown](../../docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md),
 with a separate copy-paste
 [AI prompt pack](../../docs/RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md).
 Every numbered chapter begins with an `In brief` summary before the detailed
-instructions.
+instructions. Shared procedures appear once; chamber-specific launch,
+configuration, troubleshooting, and checklist sections cross-reference the
+matching chamber record.
 Its LaTeX source and reproducible Windows build helper are:
 
 ```powershell

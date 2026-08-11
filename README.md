@@ -19,10 +19,12 @@ Classifier2 has its own PyTorch/checkpoint installation requirements.
 ## Double-click launch on Windows
 
 After cloning or updating the repository, double-click
-`Install AI4MBE Desktop Shortcuts.cmd` once. It creates two desktop shortcuts:
+`Install AI4MBE Desktop Shortcuts.cmd` once. It creates three desktop shortcuts:
 
+- **O-MBE Growth Monitor** starts the live acquisition GUI with the chamber
+  fixed to O-MBE and prevents a second competing O-MBE instance.
 - **Ch-MBE Growth Monitor** starts the live acquisition GUI with the chamber
-  fixed to Ch-MBE and prevents a second competing instance.
+  fixed to Ch-MBE and prevents a second competing Ch-MBE instance.
 - **RHEED Post-processing Labeler** opens a file-selection window for building,
   reviewing, and validating offline temporal labels.
 
@@ -36,8 +38,9 @@ for the English operator workflow and troubleshooting guide. A searchable
 [Markdown edition](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md)
 and a constrained
 [AI prompt pack](docs/RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md)
-are provided alongside it. Every numbered chapter begins with an `In brief`
-summary. The earlier
+are provided alongside it. The guide covers the shared workflow once and
+branches explicitly where O-MBE and Ch-MBE differ; every numbered chapter
+begins with an `In brief` summary. The earlier
 [bilingual edition](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
 remains available.
 
@@ -45,7 +48,7 @@ remains available.
 
 | Product | Launch | Window title | Tabs |
 |---|---|---|---|
-| **OMBE Growth Monitor** (primary product) | `python growth_monitor_app.py` | "OMBE Growth Monitor" | Monitor / Events / Session |
+| **O-MBE Growth Monitor** (primary product) | double-click `Start O-MBE Growth Monitor.cmd` | "Oxide MBE Growth Monitor" | Monitor / Events / Session |
 | **Ch-MBE Growth Monitor** | double-click `Start Ch-MBE Growth Monitor.cmd` | "Chalcogenide MBE Growth Monitor" | Monitor / Events / Session |
 | **Hardware Control Dashboard** (dummy-loop heater control) | `python gui.py` | "Hardware Control Dashboard" | RHEED / Pyrometer / PSU / Thermocouple / Dashboard / Visuals / Config / PID / Action Log |
 

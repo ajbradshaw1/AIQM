@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("chmbe", "labeler")]
+    [ValidateSet("ombe", "chmbe", "labeler")]
     [string]$Application,
 
     [string]$PythonPath,
@@ -189,7 +189,7 @@ function Find-CompatiblePythonCandidate {
             return [pscustomobject]@{ Path = $resolved; Source = $candidate.Source }
         }
 
-        $imports = if ($ApplicationName -eq "chmbe") {
+        $imports = if ($ApplicationName -in @("ombe", "chmbe")) {
             # Match growth_monitor_app.py's Windows DLL rule: torch must load
             # its Intel OpenMP runtime before PyQt6 attempts plugin loading.
             "import torch; import PyQt6, numpy, PIL"
@@ -320,6 +320,13 @@ try {
         $arguments = @("growth_monitor_chmbe.py")
         $entry = Join-Path $repositoryRoot "growth_monitor_chmbe.py"
     }
+    elseif ($Application -eq "ombe") {
+        # The O-MBE shortcut must be equally immune to a stale Ch-MBE
+        # workstation environment variable.
+        $env:AIQM_CHAMBER = "ombe"
+        $arguments = @("growth_monitor_ombe.py")
+        $entry = Join-Path $repositoryRoot "growth_monitor_ombe.py"
+    }
     else {
         $arguments = @("-m", "tools.rheed_postprocessing_labeling", "desktop")
         $entry = Join-Path $repositoryRoot "tools\rheed_postprocessing_labeling\__main__.py"
@@ -352,12 +359,20 @@ try {
         )
         git_commit = Get-GitValue $repositoryRoot @("rev-parse", "HEAD")
         arguments = $arguments
-        chamber = if ($Application -eq "chmbe") { $env:AIQM_CHAMBER } else { $null }
+        chamber = if ($Application -in @("ombe", "chmbe")) {
+            $env:AIQM_CHAMBER
+        }
+        else {
+            $null
+        }
         python_no_user_site = $env:PYTHONNOUSERSITE
         sanitized_variables = $sanitizedVariables
         log_directory = $logDirectory
         mutex_name = if ($Application -eq "chmbe") {
             "Local\AI4MBE.ChMBE.GrowthMonitor"
+        }
+        elseif ($Application -eq "ombe") {
+            "Local\AI4MBE.OMBE.GrowthMonitor"
         }
         else {
             $null
@@ -373,7 +388,7 @@ try {
     $stdoutLog = "$logStem-stdout.log"
     $stderrLog = "$logStem-stderr.log"
     $optionalDrivers = [ordered]@{}
-    if ($Application -eq "chmbe") {
+    if ($Application -in @("ombe", "chmbe")) {
         foreach ($module in @("pyads", "serial", "windows_capture")) {
             $driverProbe = Invoke-NativeCapture $python.Path @(
                 "-I", "-c", "import $module"
@@ -396,22 +411,25 @@ try {
     if ($missingDrivers.Count -gt 0) {
         $driverList = ($missingDrivers | ForEach-Object { "  - $_" }) -join "`n"
         Show-LaunchMessage (
-            "Some optional Ch-MBE live drivers are unavailable:`n`n" +
+            "Some optional $Application live drivers are unavailable:`n`n" +
             "$driverList`n`nThe GUI will still open. Dummy and unaffected " +
             "direct modes remain usable; selecting a mode backed by a missing " +
             "module will report an instrument error.`n`nDetails: $metadataLog"
         ) "AI4MBE live-driver warning" $false
     }
 
-    if ($Application -eq "chmbe") {
+    if ($Application -in @("ombe", "chmbe")) {
+        $expectedChamber = $Application
+        $displayChamber = if ($Application -eq "chmbe") { "Ch-MBE" } else { "O-MBE" }
         $chamberProbe = @(
             "-I", "-c",
-            "import sys; sys.path.insert(0, sys.argv[1]); from drivers.config import get_active_config; assert get_active_config().chamber_id == 'chmbe'",
-            $repositoryRoot
+            "import sys; sys.path.insert(0, sys.argv[1]); from drivers.config import get_active_config; assert get_active_config().chamber_id == sys.argv[2]",
+            $repositoryRoot,
+            $expectedChamber
         )
         $probe = Invoke-NativeCapture $python.Path $chamberProbe
         if ($probe.ExitCode -ne 0) {
-            throw "Ch-MBE chamber preflight failed: $($probe.Output)"
+            throw "$displayChamber chamber preflight failed: $($probe.Output)"
         }
     }
 

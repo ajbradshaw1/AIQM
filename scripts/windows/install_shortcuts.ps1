@@ -54,6 +54,20 @@ try {
     }
     $definitions = @(
         [ordered]@{
+            Name = "O-MBE Growth Monitor"
+            Target = $powershell.Source
+            Arguments = (
+                '-NoLogo -NoProfile -WindowStyle Hidden ' +
+                '-ExecutionPolicy Bypass -File "' + $launcher +
+                '" -Application ombe'
+            )
+            TroubleshootingWrapper = Join-Path $repositoryRoot (
+                "Start O-MBE Growth Monitor.cmd"
+            )
+            Description = "Start the AI4MBE O-MBE Growth Monitor"
+            Icon = "$shellIcons,13"
+        },
+        [ordered]@{
             Name = "Ch-MBE Growth Monitor"
             Target = $powershell.Source
             Arguments = (

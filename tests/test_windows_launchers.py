@@ -56,19 +56,40 @@ def test_chmbe_entrypoint_forces_chamber_without_launching(monkeypatch):
     assert module._MUTEX_NAME == r"Local\AI4MBE.ChMBE.GrowthMonitor"
 
 
+def test_ombe_entrypoint_forces_chamber_without_launching(monkeypatch):
+    monkeypatch.setenv("AIQM_CHAMBER", "chmbe")
+    sys.modules.pop("growth_monitor_ombe", None)
+    module = importlib.import_module("growth_monitor_ombe")
+
+    # Import is side-effect free; only the explicit launch function changes it.
+    assert os.environ["AIQM_CHAMBER"] == "chmbe"
+    module._configure_chamber()
+    assert os.environ["AIQM_CHAMBER"] == "ombe"
+    assert module._MUTEX_NAME == r"Local\AI4MBE.OMBE.GrowthMonitor"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows named mutex")
-def test_chmbe_entrypoint_rejects_a_second_process_before_gui_import():
+@pytest.mark.parametrize(
+    ("module_name", "opposite_chamber", "display_name"),
+    [
+        ("growth_monitor_ombe", "chmbe", "O-MBE"),
+        ("growth_monitor_chmbe", "ombe", "Ch-MBE"),
+    ],
+)
+def test_live_entrypoint_rejects_a_second_process_before_gui_import(
+    module_name, opposite_chamber, display_name
+):
     """Exercise the real cross-process mutex without opening Qt or hardware."""
-    module = importlib.import_module("growth_monitor_chmbe")
+    module = importlib.import_module(module_name)
     try:
         handle = module._acquire_windows_mutex()
     except RuntimeError:
-        pytest.skip("A Ch-MBE Growth Monitor is already running")
+        pytest.skip(f"An {display_name} Growth Monitor is already running")
     try:
         environment = os.environ.copy()
-        environment["AIQM_CHAMBER"] = "ombe"
+        environment["AIQM_CHAMBER"] = opposite_chamber
         completed = subprocess.run(
-            [sys.executable, str(ROOT / "growth_monitor_chmbe.py")],
+            [sys.executable, str(ROOT / f"{module_name}.py")],
             cwd=ROOT,
             env=environment,
             text=True,
@@ -87,6 +108,7 @@ def test_chmbe_entrypoint_rejects_a_second_process_before_gui_import():
 @pytest.mark.parametrize(
     ("application", "expected_arguments", "expected_chamber"),
     [
+        ("ombe", ["growth_monitor_ombe.py"], "ombe"),
         ("chmbe", ["growth_monitor_chmbe.py"], "chmbe"),
         (
             "labeler",
@@ -140,6 +162,7 @@ def test_shortcut_installer_dry_run_never_writes_lnk(tmp_path):
     assert Path(payload["repository_root"]).resolve() == ROOT.resolve()
     assert Path(payload["desktop"]).resolve() == tmp_path.resolve()
     assert {item["Name"] for item in payload["shortcuts"]} == {
+        "O-MBE Growth Monitor",
         "Ch-MBE Growth Monitor",
         "RHEED Post-processing Labeler",
     }
@@ -154,6 +177,7 @@ def test_shortcut_installer_dry_run_never_writes_lnk(tmp_path):
         assert str(WINDOWS_SCRIPTS / "launch_ai4mbe.ps1") in item["Arguments"]
         assert Path(item["TroubleshootingWrapper"]).is_file()
     assert "-Application chmbe" in applications["Ch-MBE Growth Monitor"]
+    assert "-Application ombe" in applications["O-MBE Growth Monitor"]
     assert (
         "-Application labeler"
         in applications["RHEED Post-processing Labeler"]
@@ -203,6 +227,7 @@ def test_rejected_fast_candidate_falls_through_to_conda_list(tmp_path):
 
 def test_cmd_wrappers_quote_their_relocatable_script_path():
     expected = {
+        "Start O-MBE Growth Monitor.cmd": "-Application ombe",
         "Start Ch-MBE Growth Monitor.cmd": "-Application chmbe",
         "Start RHEED Post-processing Labeler.cmd": "-Application labeler",
     }
@@ -217,10 +242,11 @@ def test_cmd_wrappers_quote_their_relocatable_script_path():
     assert '"%~dp0scripts\\windows\\install_shortcuts.ps1"' in installer
 
 
-def test_chmbe_dependency_probe_imports_torch_before_pyqt6():
+def test_live_gui_dependency_probe_imports_torch_before_pyqt6():
     launcher = (WINDOWS_SCRIPTS / "launch_ai4mbe.ps1").read_text(
         encoding="utf-8"
     )
     probe = '"import torch; import PyQt6, numpy, PIL"'
     assert probe in launcher
     assert "import PyQt6, numpy, PIL, torch" not in launcher
+    assert '$ApplicationName -in @("ombe", "chmbe")' in launcher
