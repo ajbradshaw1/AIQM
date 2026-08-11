@@ -846,6 +846,29 @@ class GrowthApp(QMainWindow):
         self.monitor.update_camera_state(state)
         self.rheed_intensity_window.on_camera_state(state)
 
+        # A camera that never connected is a refused ARM, not a live one.
+        # RheedCameraWorker.run() emits exactly one state and returns when
+        # connect() raises, so without this the GUI keeps a locked config
+        # panel and a DISARM button while owning no camera at all — and
+        # every other worker keeps running. Manual exposure makes that
+        # reachable by design: requesting a write while kSA or the Vimba X
+        # Viewer holds Full access is refused on purpose.
+        #
+        # Gated on "armed" so this only covers the pre-session case. Losing
+        # the camera mid-growth must not tear down a running session; that
+        # path still surfaces the error through update_camera_state alone.
+        if (
+            not state.connected
+            and state.error
+            and self.monitor.state == "armed"
+        ):
+            log.warning("ARM refused by camera; disarming: %s", state.error)
+            self._on_disarm()
+            self.statusBar().showMessage(
+                f"ARM refused — {state.error}", 15000,
+            )
+            return
+
         if (
             state.connected
             and state.exposure_us is not None

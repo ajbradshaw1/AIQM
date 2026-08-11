@@ -1263,6 +1263,18 @@ class GrowthMonitor(QWidget):
             # Config panel: stays locked — session in progress.
             self._set_config_widgets_enabled(False)
 
+    @property
+    def state(self) -> str:
+        """Current top-bar state: "idle", "armed", or "running".
+
+        Read-only accessor so GrowthApp can tell a pre-session ARM from a
+        live session without reaching into ``_state``. The distinction
+        matters for camera failures: refusing to arm should return the GUI
+        to idle, while losing the camera mid-growth must leave the session
+        and its sensor logging alone.
+        """
+        return self._state
+
     def set_state(self, new_state: str):
         self._state = new_state
         self._apply_state()
