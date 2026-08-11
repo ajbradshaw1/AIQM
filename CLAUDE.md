@@ -21,7 +21,32 @@
 | `scripts/owon_self_test.py` | OWON self-test |
 
 ## Testing
-Unit tests live in `tests/` (run `pytest` from the repo root — `pytest.ini` limits collection to `tests/`, 696 tests, all mock-based and Mac-safe). `scripts/` keeps the **hardware probe scripts** whose names also start with `test_` (`test_ads_read.py`, `test_elog.py`, `test_ksa_comm.py`, `test_ksa_single.py`, `test_mistral_jsonrpc_discovery.py`, `test_pyrometer.py`, plus `heater_step_test.py`, `owon_self_test.py`) — these talk to real instruments and exit at import on machines without them; never collect them with pytest.
+Unit tests live in `tests/` (run `pytest` from the repo root — `pytest.ini` limits collection to `tests/`). They are mock-based and Mac-safe with one exception: `tests/test_ocr.py` is a live Windows OCR smoke test that is currently mislocated — see the known-failure note below. `scripts/` keeps the **hardware probe scripts** whose names also start with `test_` (`test_ads_read.py`, `test_elog.py`, `test_ksa_comm.py`, `test_ksa_single.py`, `test_mistral_jsonrpc_discovery.py`, `test_pyrometer.py`, plus `heater_step_test.py`, `owon_self_test.py`) — these talk to real instruments and exit at import on machines without them; never collect them with pytest.
+
+### Mac: export the Qt plugin path before pytest
+Without it the suite dies at the first `QApplication(...)` with a bare
+`Fatal Python error: Aborted` and a C-level traceback — no Python exception,
+no failing assertion. It looks exactly like a code regression and is not one.
+Either form works:
+
+```bash
+export QT_QPA_PLATFORM_PLUGIN_PATH=/opt/anaconda3/lib/python3.13/site-packages/PyQt6/Qt6/plugins/platforms
+```
+
+```bash
+export QT_PLUGIN_PATH=/opt/anaconda3/lib/python3.13/site-packages/PyQt6/Qt6/plugins
+```
+
+`QT_QPA_PLATFORM_PLUGIN_PATH` points at `platforms` itself; the broader
+`QT_PLUGIN_PATH` points at its **parent**. Pairing the narrow variable with
+the parent directory fails — verified on Qt 6.10.0 / PyQt 6.10.2. Same fix
+as the documented `gui.py` launch export; it is needed for pytest too.
+
+**Known pre-existing failure:** `tests/test_ocr.py::test_tesseract` fails on
+Mac with `ModuleNotFoundError: No module named 'pytesseract'`. It is a live
+Windows OCR smoke test (expects MISTRAL and EvapControl windows) and belongs
+under `scripts/` by the convention above. Not a regression — it fails on
+`main` too.
 
 ## Two GUI Applications
 
