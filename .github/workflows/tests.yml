@@ -55,7 +55,7 @@ jobs:
           # here in 5s parsing this), so we ditched case entirely.
           SKIP_TESTS: >-
             test_modbus_pyrometer.py test_exactus_pyrometer.py
-            test_pyrometer.py test_vimba_camera.py
+            test_pyrometer.py
             test_screengrab_camera.py test_ksa_single.py
             test_ksa_comm.py test_mistral_jsonrpc.py
             test_mistral_jsonrpc_discovery.py test_ocr.py
