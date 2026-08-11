@@ -83,6 +83,33 @@ def test_english_manual_uses_actual_ui_screenshot_assets() -> None:
         assert (manual_root / "assets" / "screenshots" / filename).is_file()
 
 
+def test_english_manual_keeps_chamber_defaults_separate_and_pending() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    source = (
+        repository_root
+        / "tools"
+        / "rheed_postprocessing_labeling"
+        / "manual"
+        / "RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.tex"
+    ).read_text(encoding="ascii")
+    ch_heading = r"\subsection{Ch-MBE default configuration}"
+    o_heading = r"\subsection{O-MBE default configuration}"
+    assert source.count(ch_heading) == 1
+    assert source.count(o_heading) == 1
+    assert source.index(ch_heading) < source.index(o_heading)
+    ch_block = source[source.index(ch_heading):source.index(o_heading)]
+    o_block = source[
+        source.index(o_heading):source.index(
+            r"\begin{infobox}{Scope}", source.index(o_heading)
+        )
+    ]
+    for block in (ch_block, o_block):
+        assert r"\textbf{Owner-approved default}" in block
+        assert block.count(r"\emph{Pending - to be supplied}") == 7
+    assert "Never copy a value from one chamber to the other." in source
+    assert "not Ch-MBE or O-MBE production defaults" in source
+
+
 def _launcher(
     tmp_path: Path,
     qt_app: QApplication,

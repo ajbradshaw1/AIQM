@@ -66,7 +66,10 @@ The earlier
 [bilingual PDF](../../docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
 and its ReportLab generator remain available. The English PDF uses current
 application screenshots captured with generated demo inputs; neither edition
-contains laboratory data.
+contains laboratory data. The English manual keeps independent Ch-MBE and
+O-MBE default-configuration registers. Their values are intentionally marked
+pending until the respective chamber owner supplies and approves them; demo
+screenshots are not production defaults.
 
 ### Command line
 

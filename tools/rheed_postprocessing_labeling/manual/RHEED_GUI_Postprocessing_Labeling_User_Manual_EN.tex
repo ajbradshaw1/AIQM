@@ -79,7 +79,7 @@
 \fancyhf{}
 \fancyhead[L]{\small\color{ManualMuted}AI4MBE | Ch-MBE}
 \fancyhead[R]{\small\color{ManualMuted}English operator manual}
-\fancyfoot[L]{\small\color{ManualMuted}Manual v1.2 | 2026-08-11}
+\fancyfoot[L]{\small\color{ManualMuted}Manual v1.3 | 2026-08-11}
 \fancyfoot[R]{\small\color{ManualMuted}Page \thepage\ of \pageref*{LastPage}}
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\footrulewidth}{0pt}
@@ -178,7 +178,7 @@ Install or refresh desktop shortcuts & \texttt{Install AI4MBE Desktop Shortcuts.
 \end{tabularx}
 \vfill
 {\small\color{ManualMuted}
-Manual v1.2 - English edition\\
+Manual v1.3 - English edition\\
 Issued 2026-08-11 for the Windows Ch-MBE workstation.\\[2mm]
 The screenshots show the actual applications using generated demo inputs. No experimental dataset is included.}
 
@@ -216,11 +216,12 @@ The live GUI creates session records. The labeler reads those records later, pro
 \textbf{Page} & \textbf{Topic} & \textbf{Outcome} \\
 \midrule
 3 & Shortcuts and live GUI startup & Confirm the correct chamber and a clean exit \\
-4 & Labeler desktop application & Select inputs, build, open, and validate \\
-5-6 & Inputs and safe report build & Produce a complete local report directory \\
-7-8 & Segment labeling and display controls & Create traceable labels on actual saved frames \\
-9 & Export, import, and validation & Produce canonical JSON and validate fail-closed \\
-10-12 & Safety, troubleshooting, and version checks & Handoff and reproduce the work safely \\
+4 & Separate Ch-MBE and O-MBE defaults & Record approved values without cross-copying \\
+5 & Labeler desktop application & Select inputs, build, open, and validate \\
+6-7 & Inputs and safe report build & Produce a complete local report directory \\
+8-9 & Segment labeling and display controls & Create traceable labels on actual saved frames \\
+10 & Export, import, and validation & Produce canonical JSON and validate fail-closed \\
+11-13 & Safety, troubleshooting, and version checks & Handoff and reproduce the work safely \\
 \bottomrule
 \end{tabularx}
 
@@ -251,18 +252,66 @@ Surface-reconstruction labels, acquisition-quality QC, and FeSe film quality are
 \step{4}{At the end, close through the GUI normally and wait for the window to disappear. Do not force-kill Python while logs are being written.}
 
 \manualscreenshot[width=0.78\linewidth,height=58mm,keepaspectratio]{assets/screenshots/chmbe_growth_monitor_session.png}
-\screenshotcaption{The current Session tab in a hardware-free demo. Confirm the chamber and every selected interface before ARM.}
+\screenshotcaption{The current Session tab in a hardware-free demo. Its dummy selections are demonstration values, not Ch-MBE or O-MBE production defaults. Confirm the chamber and every selected interface before ARM.}
 
 The launcher forces the Ch-MBE chamber configuration and refuses a second live-GUI process through a Windows single-instance mutex.
 
 Before ARM, confirm the Ch-MBE chamber, an advancing RHEED frame sequence, a valid temperature state, and the intended log directory.
 
+The approved values, when supplied, belong in the chamber-specific record on page~\pageref{sec:chamber-defaults}; a pending field is not a default.
+
 \begin{infobox}{Expected environment behavior}
 Launcher logs are stored below \texttt{\%LOCALAPPDATA\%\textbackslash AI4MBE\textbackslash LauncherLogs}. They record the resolved Python interpreter, repository path, branch, commit, chamber, and optional driver status. Missing \texttt{pyads}, \texttt{serial}, or \texttt{windows\_capture} produces a visible warning without hiding the GUI; do not ARM a production mode that needs the missing driver. Do not assume a fixed drive letter or create global environment variables ad hoc.
 \end{infobox}
 
-% Page 4 - labeler UI
-\manualsection{3}{Open the RHEED post-processing labeler}
+% Page 4 - chamber-specific defaults (reserved)
+\manualsection{3}{Keep Ch-MBE and O-MBE defaults separate}
+\label{sec:chamber-defaults}
+
+\begin{dangerbox}{Reserved placeholders - not operating values}
+Every value on this page is intentionally pending. These entries must not be used to configure, ARM, or troubleshoot either chamber until the chamber owner supplies and approves them. Until then, follow the applicable chamber SOP and verify the active GUI configuration before ARM. Never copy a value from one chamber to the other.
+\end{dangerbox}
+
+\subsection{Ch-MBE default configuration}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{66mm}Y}
+\toprule
+\textbf{Configuration item} & \textbf{Owner-approved default} \\
+\midrule
+GUI launcher and chamber profile & \emph{Pending - to be supplied} \\
+RHEED acquisition source and mode & \emph{Pending - to be supplied} \\
+Temperature interface and communication settings & \emph{Pending - to be supplied} \\
+Other instrument interfaces and connection settings & \emph{Pending - to be supplied} \\
+Classifier or model package & \emph{Pending - to be supplied} \\
+Sampling, capture, and logging settings & \emph{Pending - to be supplied} \\
+\bottomrule
+\end{tabularx}
+
+\textbf{Approved by / revision / date:} \emph{Pending - to be supplied}
+
+\subsection{O-MBE default configuration}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{66mm}Y}
+\toprule
+\textbf{Configuration item} & \textbf{Owner-approved default} \\
+\midrule
+GUI launcher and chamber profile & \emph{Pending - to be supplied} \\
+RHEED acquisition source and mode & \emph{Pending - to be supplied} \\
+Temperature interface and communication settings & \emph{Pending - to be supplied} \\
+Other instrument interfaces and connection settings & \emph{Pending - to be supplied} \\
+Classifier or model package & \emph{Pending - to be supplied} \\
+Sampling, capture, and logging settings & \emph{Pending - to be supplied} \\
+\bottomrule
+\end{tabularx}
+
+\textbf{Approved by / revision / date:} \emph{Pending - to be supplied}
+
+\begin{infobox}{Scope}
+A completed value of \textbf{Not applicable} is valid when approved by the chamber owner; a blank or pending value is not. The O-MBE record on this page does not replace an O-MBE startup SOP.
+\end{infobox}
+
+% Page 5 - labeler UI
+\manualsection{4}{Open the RHEED post-processing labeler}
 
 \step{1}{Double-click \texttt{Start RHEED Post-processing Labeler.cmd} or its desktop shortcut.}
 \step{2}{Confirm that the application has the \textbf{Build} and \textbf{Open / Validate} tabs, plus \textbf{Build report and open}, \textbf{Open report}, \textbf{Validate annotations}, and \textbf{Open English PDF manual}. It must not start Growth Monitor or contact instruments.}
@@ -288,8 +337,8 @@ Validate annotations & Check exported JSON against the exact report provenance \
 This application can run on a computer without instrument software when the archived inputs are complete and the Python environment is valid. Report construction and validation run in an isolated child process so the desktop application remains responsive.
 \end{corebox}
 
-% Page 5 - inputs
-\manualsection{4}{Prepare inputs and verify provenance}
+% Page 6 - inputs
+\manualsection{5}{Prepare inputs and verify provenance}
 
 \subsection{Session archive}
 The ZIP archive must contain exactly one member ending in \texttt{session\_metadata.json}, exactly one member ending in \texttt{heartbeat\_log.csv}, and every sibling \texttt{frames/} image referenced by the heartbeat rows. Saved-frame elapsed time, heartbeat index, capture sequence, and timezone-aware capture UTC must each increase strictly; gaps are allowed. Do not extract and rename frames manually.
@@ -331,8 +380,8 @@ Any mismatch in row count, order, time, sequence, filename, or SHA-256 stops the
   exports\
 \end{lstlisting}
 
-% Page 6 - build
-\manualsection{5}{Build and open a report safely}
+% Page 7 - build
+\manualsection{6}{Build and open a report safely}
 
 \step{1}{Choose the preserved archive copy in Session ZIP.}
 \step{2}{Add one Prediction CSV and Model-spec JSON row for every model to display. Pairing is positional, so preserve row order.}
@@ -358,8 +407,8 @@ The report consists of \texttt{interactive\_report.html}, \texttt{images/}, \tex
 The desktop application always refuses a non-empty output directory. CLI \texttt{-{}-overwrite} may replace only a recognized, unmodified tool output. It validates the new inputs and stages a complete replacement first. If the old report changes during the build, replacement stops and the original content is restored. Filesystem roots, repository paths, the current directory, and directories containing inputs are always rejected.
 \end{warnbox}
 
-% Page 7 - annotation
-\manualsection{6}{Label temporal segments like an editing timeline}
+% Page 8 - annotation
+\manualsection{7}{Label temporal segments like an editing timeline}
 
 \manualscreenshot[width=0.94\linewidth,height=104mm,keepaspectratio]{assets/screenshots/rheed_timeline_editor.png}
 \screenshotcaption{The current English browser editor with generated RHEED frames, synthetic model curves, saved human segments, and a synchronized playhead.}
@@ -375,8 +424,8 @@ The displayed and exported saved-frame ordinal is 1-based. Every endpoint also r
 Labels cover the saved frames from In through Out, inclusive. They do not claim that unsaved camera frames or every capture-sequence number in between was reviewed.
 \end{infobox}
 
-% Page 8 - review controls
-\manualsection{7}{Review, display controls, and drafts}
+% Page 9 - review controls
+\manualsection{8}{Review, display controls, and drafts}
 
 \subsection{All time indicators remain synchronized}
 \rowcolors{2}{ManualPale}{white}
@@ -413,8 +462,8 @@ Use a four-pass review rhythm: survey the full run, confirm every In and Out
 frame, inspect gaps and uncertain labels, then export and validate the canonical
 JSON.
 
-% Page 9 - export
-\manualsection{8}{Export, import, and fail-closed validation}
+% Page 10 - export
+\manualsection{9}{Export, import, and fail-closed validation}
 
 \subsection{JSON is the canonical artifact}
 Use Export JSON to resume work, validate provenance, and support downstream processing. Export CSV is useful for meetings and tabular analysis, but it does not replace the complete nested provenance in JSON.
@@ -451,8 +500,8 @@ A wrong run, changed model context, altered endpoint, overlapping segment, inval
 
 Browser Import performs immediate client-side provenance checks before replacing the current draft. Desktop \textbf{Validate annotations} is the authoritative full fail-closed validation.
 
-% Page 10 - safety
-\manualsection{9}{Data safety and scientific boundaries}
+% Page 11 - safety
+\manualsection{10}{Data safety and scientific boundaries}
 
 \subsection{What belongs in Git}
 \rowcolors{2}{ManualPale}{white}
@@ -480,8 +529,8 @@ Model plots and lossy review images are visible during labeling. These annotatio
 The current classification target is bare STO surface reconstruction before growth. Do not interpret a reconstruction label as FeSe film quality. Do not equate reconstruction \texttt{unknown} with acquisition-quality \texttt{QC\_REJECT}.
 \end{warnbox}
 
-% Page 11 - troubleshooting
-\manualsection{10}{Troubleshooting}
+% Page 12 - troubleshooting
+\manualsection{11}{Troubleshooting}
 
 First preserve the exact error text, occurrence time, branch, commit, and selected paths. Do not begin by deleting environments, changing global variables, or force-resetting Git. A live-driver warning is fail-visible behavior, not a prompt for ad hoc dependency installation.
 
@@ -512,8 +561,8 @@ Import or validation fails & Run, context, endpoint, overlap, or label mismatch 
   \item For labeling issues, report-manifest and annotation-JSON SHA values. Raw images are not initially required.
 \end{itemize}
 
-% Page 12 - checklist
-\manualsection{11}{Version verification and quick checklist}
+% Page 13 - checklist
+\manualsection{12}{Version verification and quick checklist}
 
 \subsection{Record versions before acquisition or labeling}
 \begin{lstlisting}
