@@ -334,7 +334,8 @@ def test_inno_setup_is_x64_per_user_and_uses_existing_runtime_installer():
     assert "install_ai4mbe.ps1" in text
     assert "-ManagedUninstallerPath" in text
     assert "{userdocs}\\AI4MBE\\GrowthSessions" in text
-    assert "[UninstallRun]" in text
+    assert "[UninstallDelete]" in text
+    assert 'Type: filesandordirs; Name: "{app}"' in text
 
 
 def test_windows_release_workflow_builds_exe_and_keeps_zip_fallback():

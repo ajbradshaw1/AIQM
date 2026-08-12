@@ -52,8 +52,8 @@ Name: "{autodesktop}\Ch-MBE Growth Monitor"; Filename: "{app}\Start Ch-MBE Growt
 Name: "{autodesktop}\RHEED Post-processing Labeler"; Filename: "{app}\Start RHEED Post-processing Labeler.cmd"; WorkingDir: "{app}"; Tasks: desktopicon
 Name: "{autodesktop}\AI4MBE Operator Manual"; Filename: "{app}\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf"; Tasks: desktopicon
 
-[UninstallRun]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\windows\uninstall_ai4mbe.ps1"" -InstallRoot ""{app}"" -RemoveApplicationFiles -FromManagedUninstaller -Quiet"; WorkingDir: "{tmp}"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAI4MBEApplication"
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}"
 
 [Code]
 procedure CurStepChanged(CurStep: TSetupStep);
