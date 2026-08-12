@@ -24,7 +24,10 @@ $commit = (& git -c $gitSafety -C $repositoryRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or -not $commit) {
     throw "Could not resolve the source commit."
 }
-$dirty = (& git -c $gitSafety -C $repositoryRoot status --porcelain) -join "`n"
+$dirty = (
+    & git -c $gitSafety -C $repositoryRoot status --porcelain `
+        --untracked-files=no 2>$null
+) -join "`n"
 if ($LASTEXITCODE -ne 0 -or $dirty.Trim()) {
     throw "Tracked files are dirty. Commit the intended release contents first."
 }
