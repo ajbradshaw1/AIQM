@@ -4,15 +4,42 @@ PyQt6 software stack for the Yang Group's AI-driven MBE growth experiments.
 Two distinct applications live in this repository — see
 [Two GUI Applications](#two-gui-applications) below.
 
-## Installation
+## Install the Windows x64 Release
 
-For a fresh Windows workstation, use the packaged GitHub Release and
-double-click `Install AI4MBE Growth Monitor.cmd`. It installs the application,
-reuses a compatible `ai4mbe-gui` environment (or creates an isolated fallback),
-and creates launch, manual, and uninstall shortcuts. Experiment data is kept
-outside the program directory and is preserved on uninstall. See
-[`docs/WINDOWS_ONE_CLICK_INSTALL.md`](docs/WINDOWS_ONE_CLICK_INSTALL.md).
-The packaged installer supports 64-bit Windows and 64-bit Python only.
+1. Open this repository's
+   [GitHub Releases page](https://github.com/AaravSonthalia/AIQM-Software-Hardware-Integration/releases).
+2. Under the required release, download the asset named
+   `AI4MBE-Growth-Monitor-<version>-Windows-x64.zip`.
+   **Do not download** GitHub's automatically generated `Source code (zip)` or
+   `Source code (tar.gz)` files; those are not the workstation installer.
+3. Extract the downloaded ZIP completely to a normal folder.
+4. Open the extracted `AI4MBE-Growth-Monitor-<version>` folder and double-click
+   **`Install AI4MBE Growth Monitor.cmd`**.
+5. After installation, use the **O-MBE Growth Monitor** or
+   **Ch-MBE Growth Monitor** Desktop shortcut for the correct instrument.
+
+The installer supports **64-bit Windows and 64-bit Python only**. It installs
+per user without administrator privileges, reuses a compatible `ai4mbe-gui`
+environment when available, or creates an isolated fallback environment.
+Experiment sessions are stored separately under
+`Documents\AI4MBE\GrowthSessions` and are preserved by the uninstaller.
+
+Full installation, update, and uninstall details are in the
+[Windows one-click installation guide](docs/WINDOWS_ONE_CLICK_INSTALL.md).
+
+### Operator manual
+
+- On GitHub: [English PDF operator manual](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf)
+- Searchable on GitHub: [English Markdown manual](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md)
+- Earlier edition: [bilingual PDF manual](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
+- After installation: use the **AI4MBE Operator Manual** Desktop shortcut, or
+  open
+  `%LOCALAPPDATA%\Programs\AI4MBE-Growth-Monitor\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf`
+
+The Release ZIP includes these manuals; they do not require a separate
+download.
+
+### Developer/live-driver installation
 
 For Bulbasaur's live Windows acquisition environment:
 
