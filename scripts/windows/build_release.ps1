@@ -57,6 +57,7 @@ try {
         "CLAUDE.md",
         "pytest.ini",
         "tests",
+        "tools\rheed_postprocessing_labeling\tests",
         "logs",
         "models\weak_primary_lambda_0_1\RHEEDClassify\Classifier2"
     )
