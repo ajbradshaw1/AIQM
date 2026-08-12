@@ -5,6 +5,7 @@ param(
     [string]$InstallParent,
     [string]$DataRoot,
     [string]$PythonPath,
+    [string]$ManagedUninstallerPath,
     [switch]$SkipDependencyInstall,
     [switch]$NoShortcuts,
     [switch]$Quiet,
@@ -338,6 +339,7 @@ try {
             data_root = $DataRoot
             python = $installedPython
             source_root = $SourceRoot
+            managed_uninstaller = $ManagedUninstallerPath
         }
         $marker | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (
             Join-Path $staging $markerName

@@ -324,6 +324,29 @@ def test_installer_uses_windows_folder_picker_for_double_click():
     assert 'Join-Path $selectedInstallParent "AI4MBE-Growth-Monitor"' in text
 
 
+def test_inno_setup_is_x64_per_user_and_uses_existing_runtime_installer():
+    text = (WINDOWS_SCRIPTS / "ai4mbe_growth_monitor.iss").read_text(
+        encoding="utf-8"
+    )
+    assert "ArchitecturesAllowed=x64compatible" in text
+    assert "PrivilegesRequired=lowest" in text
+    assert "DefaultDirName={localappdata}\\Programs\\AI4MBE-Growth-Monitor" in text
+    assert "install_ai4mbe.ps1" in text
+    assert "-ManagedUninstallerPath" in text
+    assert "{userdocs}\\AI4MBE\\GrowthSessions" in text
+    assert "[UninstallRun]" in text
+
+
+def test_windows_release_workflow_builds_exe_and_keeps_zip_fallback():
+    text = (ROOT / ".github" / "workflows" / "windows-release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "choco install innosetup" in text
+    assert "ISCC.exe" in text
+    assert "Windows-x64-Setup.exe" in text
+    assert "gh release create" in text
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows uninstaller")
 def test_uninstaller_requires_marker_and_preserves_data(tmp_path):
     install_root = tmp_path / "program"
@@ -377,6 +400,38 @@ def test_uninstaller_requires_marker_and_preserves_data(tmp_path):
     assert not install_root.exists()
     assert (data_root / "do-not-delete.txt").read_text(encoding="utf-8") == "experiment"
     assert not list(desktop.glob("*.lnk"))
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows uninstaller")
+def test_script_uninstaller_delegates_to_registered_exe(tmp_path):
+    install_root = tmp_path / "program"
+    data_root = tmp_path / "sessions"
+    managed_uninstaller = tmp_path / "unins000.exe"
+    install_root.mkdir()
+    data_root.mkdir()
+    managed_uninstaller.write_bytes(b"placeholder")
+    marker = {
+        "schema_version": 1,
+        "product_id": "AI4MBE.GrowthMonitor.Windows",
+        "architecture": "x64",
+        "install_root": str(install_root),
+        "data_root": str(data_root),
+        "managed_uninstaller": str(managed_uninstaller),
+    }
+    (install_root / ".ai4mbe-install.json").write_text(
+        json.dumps(marker), encoding="utf-8"
+    )
+
+    payload = _powershell_json(
+        WINDOWS_SCRIPTS / "uninstall_ai4mbe.ps1",
+        "-InstallRoot",
+        str(install_root),
+        "-DryRun",
+    )
+
+    assert Path(payload["delegated_to"]) == managed_uninstaller
+    assert Path(payload["install_root"]) == install_root
+    assert install_root.is_dir()
 
 
 def test_live_gui_dependency_probe_imports_torch_before_pyqt6():

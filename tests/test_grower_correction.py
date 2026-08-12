@@ -767,6 +767,15 @@ class DefaultSavePathTests(unittest.TestCase):
     Windows fallback / non-Windows fallback. Path.exists() is patched
     per test to simulate the environments."""
 
+    def test_installed_session_root_has_priority(self):
+        import gui.growth_monitor as gm
+        with unittest.mock.patch.dict(
+            gm.os.environ,
+            {"AIQM_SESSION_ROOT": r"D:\Selected\GrowthSessions"},
+        ):
+            result = gm._default_save_path()
+        self.assertEqual(result, r"D:\Selected\GrowthSessions")
+
     def test_windows_with_t9_returns_ssd_path(self):
         # Simulate Bulbasaur with T9 mounted.
         import gui.growth_monitor as gm

@@ -10,6 +10,7 @@ Tab layout:
              growth notes (bottom half, full width), export
 """
 
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +49,9 @@ def _default_save_path() -> str:
       - Non-Windows (Mac dev) → ``logs/growths`` relative to the repo.
         Backwards-compatible for local dev / CI test paths.
     """
+    installed_session_root = os.environ.get("AIQM_SESSION_ROOT", "").strip()
+    if installed_session_root:
+        return installed_session_root
     if sys.platform == "win32":
         # Check the drive itself, not the OMBE folder — folder gets
         # created on first save if missing.

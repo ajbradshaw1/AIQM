@@ -2,14 +2,12 @@
 
 ## Install
 
-1. Download the `AI4MBE-Growth-Monitor-*-Windows-x64.zip` asset from the GitHub
-   Release. Do not download GitHub's automatically generated source archive.
-2. Extract the ZIP completely.
-3. Double-click **Install AI4MBE Growth Monitor.cmd**.
-4. Choose an installation parent folder. The installer creates an
-   `AI4MBE-Growth-Monitor` folder inside it. Cancel leaves the computer
-   unchanged.
-5. Start the correct chamber from the new Desktop shortcut:
+1. Download the `AI4MBE-Growth-Monitor-*-Windows-x64-Setup.exe` asset from the
+   GitHub Release. Do not download GitHub's automatically generated source
+   archive.
+2. Double-click the `Setup.exe` and choose the program installation directory
+   in the Windows setup wizard.
+3. Start the correct chamber from the new Desktop shortcut:
    **O-MBE Growth Monitor** or **Ch-MBE Growth Monitor**.
 
 This release supports **64-bit Windows and 64-bit Python only**. The installer
@@ -34,6 +32,14 @@ Windows installation is rejected before files are copied because supported
 Experiment sessions are stored separately under
 `Documents\AI4MBE\GrowthSessions`. Launcher diagnostics remain under
 `%LOCALAPPDATA%\AI4MBE\LauncherLogs`.
+
+The experiment-data location is independent of the program installation
+directory. Before START, choose it inside the GUI at
+**Session → Config → Save folder → Browse**. The field is locked during a
+running session to prevent one session from being split across directories.
+
+The Release ZIP is retained as a fallback package. Its `.cmd` entrypoint uses
+the same runtime setup logic but is not a standard Windows EXE installer.
 
 ## Uninstall
 

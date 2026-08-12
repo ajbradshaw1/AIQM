@@ -9,15 +9,12 @@ Two distinct applications live in this repository — see
 1. Open this repository's
    [GitHub Releases page](https://github.com/AaravSonthalia/AIQM-Software-Hardware-Integration/releases).
 2. Under the required release, download the asset named
-   `AI4MBE-Growth-Monitor-<version>-Windows-x64.zip`.
+   `AI4MBE-Growth-Monitor-<version>-Windows-x64-Setup.exe`.
    **Do not download** GitHub's automatically generated `Source code (zip)` or
    `Source code (tar.gz)` files; those are not the workstation installer.
-3. Extract the downloaded ZIP completely to a normal folder.
-4. Open the extracted `AI4MBE-Growth-Monitor-<version>` folder and double-click
-   **`Install AI4MBE Growth Monitor.cmd`**.
-5. Choose an installation parent folder. The installer creates an
-   `AI4MBE-Growth-Monitor` folder inside it.
-6. After installation, use the **O-MBE Growth Monitor** or
+3. Double-click the downloaded `Setup.exe` and choose the program installation
+   folder in the Windows setup wizard.
+4. After installation, use the **O-MBE Growth Monitor** or
    **Ch-MBE Growth Monitor** Desktop shortcut for the correct instrument.
 
 The installer supports **64-bit Windows and 64-bit Python only**. It installs
@@ -27,6 +24,11 @@ isolated fallback environment. The folder picker initially suggests
 `%LOCALAPPDATA%\Programs` but another writable drive or folder can be selected.
 Experiment sessions are stored separately under
 `Documents\AI4MBE\GrowthSessions` and are preserved by the uninstaller.
+Before START, their location can be changed independently inside the GUI at
+**Session → Config → Save folder → Browse**.
+
+The Release ZIP remains available only as a fallback portable package. Its
+`.cmd` installer is not the standard Windows setup experience.
 
 Full installation, update, and uninstall details are in the
 [Windows one-click installation guide](docs/WINDOWS_ONE_CLICK_INSTALL.md).

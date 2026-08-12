@@ -3,6 +3,7 @@ param(
     [string]$InstallRoot,
     [string]$DesktopPath,
     [switch]$RemoveApplicationFiles,
+    [switch]$FromManagedUninstaller,
     [switch]$Quiet,
     [switch]$DryRun
 )
@@ -61,6 +62,25 @@ try {
     }
     if ([IO.Path]::GetFullPath([string]$marker.install_root).TrimEnd("\") -ine $InstallRoot.TrimEnd("\")) {
         throw "Install marker path does not match the requested uninstall directory."
+    }
+    $managedUninstallerProperty = $marker.PSObject.Properties[
+        "managed_uninstaller"
+    ]
+    if (-not $FromManagedUninstaller -and $managedUninstallerProperty) {
+        $managedUninstaller = [string]$managedUninstallerProperty.Value
+        if (Test-Path -LiteralPath $managedUninstaller -PathType Leaf) {
+            if ($DryRun) {
+                [ordered]@{
+                    dry_run = $true
+                    delegated_to = $managedUninstaller
+                    install_root = $InstallRoot
+                    preserved_data_root = [string]$marker.data_root
+                } | ConvertTo-Json -Depth 4
+                exit 0
+            }
+            Start-Process -FilePath $managedUninstaller
+            exit 0
+        }
     }
 
     $shortcuts = @($shortcutNames | ForEach-Object { Join-Path $DesktopPath $_ })
