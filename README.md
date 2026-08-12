@@ -15,12 +15,16 @@ Two distinct applications live in this repository — see
 3. Extract the downloaded ZIP completely to a normal folder.
 4. Open the extracted `AI4MBE-Growth-Monitor-<version>` folder and double-click
    **`Install AI4MBE Growth Monitor.cmd`**.
-5. After installation, use the **O-MBE Growth Monitor** or
+5. Choose an installation parent folder. The installer creates an
+   `AI4MBE-Growth-Monitor` folder inside it.
+6. After installation, use the **O-MBE Growth Monitor** or
    **Ch-MBE Growth Monitor** Desktop shortcut for the correct instrument.
 
 The installer supports **64-bit Windows and 64-bit Python only**. It installs
-per user without administrator privileges, reuses a compatible `ai4mbe-gui`
-environment when available, or creates an isolated fallback environment.
+without administrator privileges when the selected location is user-writable,
+reuses a compatible `ai4mbe-gui` environment when available, or creates an
+isolated fallback environment. The folder picker initially suggests
+`%LOCALAPPDATA%\Programs` but another writable drive or folder can be selected.
 Experiment sessions are stored separately under
 `Documents\AI4MBE\GrowthSessions` and are preserved by the uninstaller.
 
@@ -33,8 +37,8 @@ Full installation, update, and uninstall details are in the
 - Searchable on GitHub: [English Markdown manual](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md)
 - Earlier edition: [bilingual PDF manual](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
 - After installation: use the **AI4MBE Operator Manual** Desktop shortcut, or
-  open
-  `%LOCALAPPDATA%\Programs\AI4MBE-Growth-Monitor\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf`
+  open `docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf` below the
+  installation folder you selected.
 
 The Release ZIP includes these manuals; they do not require a separate
 download.

@@ -296,6 +296,34 @@ def test_full_installer_dry_run_separates_program_and_data(tmp_path):
     assert str(tmp_path / "sessions") in payload["preserve_on_uninstall"]
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows installer")
+def test_full_installer_accepts_selected_parent_without_dialog(tmp_path):
+    parent = tmp_path / "custom install parent"
+    payload = _powershell_json(
+        WINDOWS_SCRIPTS / "install_ai4mbe.ps1",
+        "-SourceRoot",
+        str(ROOT),
+        "-InstallParent",
+        str(parent),
+        "-DataRoot",
+        str(tmp_path / "sessions"),
+        "-PythonPath",
+        sys.executable,
+        "-DryRun",
+    )
+
+    expected = parent / "AI4MBE-Growth-Monitor"
+    assert Path(payload["install_root"]) == expected
+    assert Path(payload["selected_install_parent"]) == parent
+
+
+def test_installer_uses_windows_folder_picker_for_double_click():
+    text = (WINDOWS_SCRIPTS / "install_ai4mbe.ps1").read_text(encoding="utf-8")
+    assert "System.Windows.Forms.FolderBrowserDialog" in text
+    assert "Select-InstallParent" in text
+    assert 'Join-Path $selectedInstallParent "AI4MBE-Growth-Monitor"' in text
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows uninstaller")
 def test_uninstaller_requires_marker_and_preserves_data(tmp_path):
     install_root = tmp_path / "program"

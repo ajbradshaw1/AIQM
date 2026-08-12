@@ -2,6 +2,7 @@
 param(
     [string]$SourceRoot,
     [string]$InstallRoot,
+    [string]$InstallParent,
     [string]$DataRoot,
     [string]$PythonPath,
     [switch]$SkipDependencyInstall,
@@ -45,6 +46,30 @@ function Show-InstallerMessage {
     }
     catch {
         Write-Host $Text
+    }
+}
+
+function Select-InstallParent {
+    param([string]$InitialDirectory)
+    Add-Type -AssemblyName System.Windows.Forms
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    try {
+        $dialog.Description = (
+            "Choose where to install AI4MBE Growth Monitor. The installer " +
+            "will create an AI4MBE-Growth-Monitor folder there."
+        )
+        $dialog.ShowNewFolderButton = $true
+        if ($InitialDirectory -and (Test-Path -LiteralPath $InitialDirectory -PathType Container)) {
+            $dialog.SelectedPath = $InitialDirectory
+        }
+        $result = $dialog.ShowDialog()
+        if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+            return $null
+        }
+        return $dialog.SelectedPath
+    }
+    finally {
+        $dialog.Dispose()
     }
 }
 
@@ -190,8 +215,31 @@ try {
     if (-not $localAppData) {
         throw "Windows did not provide a LocalApplicationData folder."
     }
+    if ($InstallRoot -and $InstallParent) {
+        throw "Specify either InstallRoot or InstallParent, not both."
+    }
+    $defaultInstallParent = Join-Path $localAppData "Programs"
     if (-not $InstallRoot) {
-        $InstallRoot = Join-Path $localAppData "Programs\AI4MBE-Growth-Monitor"
+        $selectedInstallParent = $InstallParent
+        if (-not $selectedInstallParent) {
+            if ($DryRun) {
+                $selectedInstallParent = $defaultInstallParent
+            }
+            else {
+                $initialDirectory = if (Test-Path -LiteralPath $defaultInstallParent -PathType Container) {
+                    $defaultInstallParent
+                }
+                else {
+                    $localAppData
+                }
+                $selectedInstallParent = Select-InstallParent $initialDirectory
+                if (-not $selectedInstallParent) {
+                    Write-Host "Installation cancelled. No files were installed."
+                    exit 2
+                }
+            }
+        }
+        $InstallRoot = Join-Path $selectedInstallParent "AI4MBE-Growth-Monitor"
     }
     $documents = [Environment]::GetFolderPath("MyDocuments")
     if (-not $DataRoot) {
@@ -232,6 +280,7 @@ try {
         architecture = "x64"
         source_root = $SourceRoot
         install_root = $InstallRoot
+        selected_install_parent = Split-Path -Parent $InstallRoot
         data_root = $DataRoot
         python = $compatiblePython
         create_environment = $willCreateEnvironment
