@@ -48,6 +48,22 @@ try {
     }
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     Expand-Archive -LiteralPath $sourceZip -DestinationPath $packageRoot -Force
+    # Ship only runtime/operator content. These paths remain in Git history,
+    # but a workstation installer must not contain old experiment logs,
+    # development metadata, tests, or the duplicated pre-release model bundle.
+    $releaseExclusions = @(
+        ".github",
+        ".DS_Store",
+        "CLAUDE.md",
+        "pytest.ini",
+        "tests",
+        "logs",
+        "models\weak_primary_lambda_0_1\RHEEDClassify\Classifier2"
+    )
+    foreach ($relative in $releaseExclusions) {
+        Remove-Item -LiteralPath (Join-Path $packageRoot $relative) `
+            -Recurse -Force -ErrorAction SilentlyContinue
+    }
     [ordered]@{
         schema_version = 1
         product_id = "AI4MBE.GrowthMonitor.Windows"

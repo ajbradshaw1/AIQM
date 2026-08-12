@@ -50,8 +50,10 @@ environment variables.
 
 ## Offline and instrument-driver limits
 
-The package contains the GUI source, manuals, dummy images, and the bundled
-four-output shadow model. Vendor components are not redistributed. Vimba
+The package contains the GUI runtime, manuals, dummy images, and the current
+brightness-robust four-output shadow model. Historical experiment logs,
+development tests, and duplicated pre-release model bundles are excluded.
+Vendor components are not redistributed. Vimba
 direct-camera mode still requires the vendor Vimba X SDK and matching `vmbpy`;
 ADS operation requires TwinCAT System Service; OCR requires a compatible local
 Tesseract installation. The launcher reports missing optional Python drivers
