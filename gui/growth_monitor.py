@@ -1183,6 +1183,10 @@ class GrowthMonitor(QWidget):
         self.config_pyrometer_mode.setCurrentText(self._cfg.pyrometer_mode_default)
         config_form.addRow("Pyrometer mode:", self.config_pyrometer_mode)
 
+        # Seeded from the active chamber config so each chamber opens on its
+        # own port instead of a hardcoded COM4. Ch-MBE's probe is on COM3
+        # (verified 2026-08-05); typing it by hand every session was the
+        # failure mode this replaces. The grower can still override here.
         self.config_exactus_port = QLineEdit(self._cfg.pyrometer_port)
         config_form.addRow("Exactus port:", self.config_exactus_port)
 

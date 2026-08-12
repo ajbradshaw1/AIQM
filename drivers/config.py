@@ -194,12 +194,27 @@ CHALCOGENIDE_MBE = MBESystemConfig(
     ],
     temperasure_title="BASF TemperaSure 5.7.0.4",
     temperasure_exe=r"C:\Users\Omicron\Desktop\TemperaSure.exe",
+    # VERIFIED on hardware 2026-08-05 via pyrometer_raw_modbus_probe.py.
+    # COM3 is a Prolific PL2303GS — the same adapter family as Bulbasaur,
+    # so the same RTS-loopback hazard applies and the same setting fixes it.
+    #
+    # With RTS de-asserted the probe answers Modbus correctly:
+    #
+    #   REG_VER  0x1300  TX 01 03 13 00 00 01 80 8E
+    #                    RX 01 03 02 09 03 FE 15   -> version 9.3
+    #   REG_CH1  0x0000  TX 01 03 00 00 00 02 C4 0B
+    #                    RX 01 03 04 43 55 D7 2F E1 8B -> 213.84 C
+    #
+    # The REG_VER reply is byte-identical to Bulbasaur's validated response.
+    # Verdict: device_replied, classification non_echo_response.
+    pyrometer_rts=False,
+    # VERIFIED 2026-08-05 — the probe is on COM3 here, not COM4. pyserial
+    # enumerated exactly two ports: COM1 (motherboard) and COM3 (Prolific
+    # PL2303GS USB Serial). Nothing answers on COM4.
     pyrometer_port="COM3",
     pyrometer_baudrate=115200,
-    # VERIFIED on Ch-MBE COM3, Aug 5 2026: the read-only raw probe returned
-    # firmware 9.3 and 213.84056 C with RTS=False. pymodbus 3.14 timed out on
-    # the same link, so this chamber uses the CRC-scanning raw read backend.
-    pyrometer_rts=False,
+    # pymodbus 3.14 timed out on this verified link, so use the
+    # CRC-scanning raw read backend deployed on Ch-MBE.
     pyrometer_modbus_backend="raw_serial",
     single_images_folder=r"C:\Dropbox\Data\RHEED\RHEED_YangGroup\FeSeTe_STO",
     stream_images_folder=r"C:\Dropbox\Data\RHEED\RHEED_YangGroup\FeSeTe_STO",

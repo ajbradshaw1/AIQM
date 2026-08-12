@@ -28,3 +28,6 @@ tmp/
 *.egg-info/
 dist/
 build/
+
+# Local hardware-probe output
+probe_output/

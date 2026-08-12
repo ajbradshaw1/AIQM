@@ -40,6 +40,37 @@ class ConfigSurfaceTests(unittest.TestCase):
         self.assertFalse(OXIDE_MBE.pyrometer_rts)
         self.assertIsNotNone(OXIDE_MBE.pyrometer_rts)
 
+    def test_chmbe_verified_false(self):
+        """Ch-MBE measured 2026-08-05 — no longer an unset chamber.
+
+        This test previously asserted None, guarding against a well-meaning
+        edit copying O-MBE's False across "for consistency". Its docstring
+        required measuring the probe before changing it. That measurement
+        happened: pyrometer_raw_modbus_probe.py on COM3 (Prolific PL2303GS,
+        115200, id 1) with RTS de-asserted returned
+
+            REG_VER  RX 01 03 02 09 03 FE 15         -> version 9.3
+            REG_CH1  RX 01 03 04 43 55 D7 2F E1 8B   -> 213.84 C
+
+        byte-identical to Bulbasaur's validated REG_VER reply, verdict
+        device_replied / non_echo_response. The value is now a measurement,
+        not an inherited assumption.
+
+        The "don't copy across unmeasured" invariant still holds for any
+        future chamber — see test_unset_chamber_propagates_as_none.
+        """
+        self.assertIs(CHALCOGENIDE_MBE.pyrometer_rts, False)
+        self.assertIsNotNone(CHALCOGENIDE_MBE.pyrometer_rts)
+
+    def test_chmbe_port_is_com3(self):
+        """Ch-MBE's probe is on COM3, not the COM4 dataclass default.
+
+        Verified 2026-08-05: pyserial enumerated only COM1 (motherboard)
+        and COM3 (Prolific PL2303GS USB Serial). The GUI polled COM4 and
+        logged "No response received after 3 retries" until this was set.
+        """
+        self.assertEqual(CHALCOGENIDE_MBE.pyrometer_port, "COM3")
+
     def test_chmbe_uses_verified_raw_false_configuration(self):
         """Ch-MBE COM3 answered raw Modbus with RTS de-asserted."""
         self.assertEqual(CHALCOGENIDE_MBE.pyrometer_port, "COM3")
@@ -119,8 +150,27 @@ class WorkerWiringTests(unittest.TestCase):
         )._create_sensor()
         self.assertIs(sensor._rts, False)
 
-    def test_chmbe_config_reaches_the_raw_driver_as_false(self):
-        """The Ch-MBE chamber default must reach the Modbus driver."""
+    def test_unset_chamber_propagates_as_none(self):
+        """An uncharacterised chamber must reach the driver as None.
+
+        Ch-MBE was the original example here; it is now measured (False as
+        of 2026-08-05), so this uses a bare MBESystemConfig instead. The
+        invariant is what matters and it is not chamber-specific: any
+        chamber whose cabling nobody has measured must make no claim, so
+        the GUI does not de-assert RTS on untested hardware.
+        """
+        from gui.workers import PyrometerWorker
+
+        unmeasured = MBESystemConfig(name="Unmeasured chamber")
+        self.assertIsNone(unmeasured.pyrometer_rts)
+
+        sensor = PyrometerWorker(
+            mode="modbus", rts=unmeasured.pyrometer_rts,
+        )._create_sensor()
+        self.assertIsNone(sensor._rts)
+
+    def test_chmbe_config_reaches_the_driver_as_false(self):
+        """Ch-MBE's measured value must survive the trip to the driver."""
         from gui.workers import PyrometerWorker
 
         sensor = PyrometerWorker(

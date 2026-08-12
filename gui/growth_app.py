@@ -644,7 +644,10 @@ class GrowthApp(QMainWindow):
             )
 
         if not self.pyrometer_worker or not self.pyrometer_worker.isRunning():
-            exactus_port = self.monitor.config_exactus_port.text().strip() or "COM4"
+            exactus_port = (
+                self.monitor.config_exactus_port.text().strip()
+                or self._chamber_config.pyrometer_port
+            )
             exactus_baud = int(self.monitor.config_exactus_baud.currentText())
             self.pyrometer_worker = PyrometerWorker(
                 mode=pyrometer_mode,
