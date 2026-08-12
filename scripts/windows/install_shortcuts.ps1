@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$DesktopPath,
+    [string]$RepositoryRoot,
+    [string]$PythonPath,
     [switch]$DryRun
 )
 
@@ -32,9 +34,14 @@ function Show-InstallerMessage {
 }
 
 try {
-    $repositoryRoot = (Resolve-Path -LiteralPath (
-        Join-Path $PSScriptRoot "..\.."
-    )).Path
+    if (-not $RepositoryRoot) {
+        $RepositoryRoot = (Resolve-Path -LiteralPath (
+            Join-Path $PSScriptRoot "..\.."
+        )).Path
+    }
+    else {
+        $RepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+    }
     if (-not $DesktopPath) {
         $DesktopPath = [Environment]::GetFolderPath("Desktop")
     }
@@ -52,6 +59,12 @@ try {
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
         throw "Shared launcher is missing: $launcher"
     }
+    $pythonArgument = if ($PythonPath) {
+        ' -PythonPath "' + $PythonPath + '"'
+    }
+    else {
+        ""
+    }
     $definitions = @(
         [ordered]@{
             Name = "O-MBE Growth Monitor"
@@ -59,7 +72,7 @@ try {
             Arguments = (
                 '-NoLogo -NoProfile -WindowStyle Hidden ' +
                 '-ExecutionPolicy Bypass -File "' + $launcher +
-                '" -Application ombe'
+                '" -Application ombe' + $pythonArgument
             )
             TroubleshootingWrapper = Join-Path $repositoryRoot (
                 "Start O-MBE Growth Monitor.cmd"
@@ -73,7 +86,7 @@ try {
             Arguments = (
                 '-NoLogo -NoProfile -WindowStyle Hidden ' +
                 '-ExecutionPolicy Bypass -File "' + $launcher +
-                '" -Application chmbe'
+                '" -Application chmbe' + $pythonArgument
             )
             TroubleshootingWrapper = Join-Path $repositoryRoot (
                 "Start Ch-MBE Growth Monitor.cmd"
@@ -87,13 +100,37 @@ try {
             Arguments = (
                 '-NoLogo -NoProfile -WindowStyle Hidden ' +
                 '-ExecutionPolicy Bypass -File "' + $launcher +
-                '" -Application labeler'
+                '" -Application labeler' + $pythonArgument
             )
             TroubleshootingWrapper = Join-Path $repositoryRoot (
                 "Start RHEED Post-processing Labeler.cmd"
             )
             Description = "Build, open, and validate offline RHEED labeling reports"
             Icon = "$shellIcons,70"
+        },
+        [ordered]@{
+            Name = "AI4MBE Operator Manual"
+            Target = Join-Path $repositoryRoot (
+                "docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf"
+            )
+            Arguments = ""
+            TroubleshootingWrapper = Join-Path $repositoryRoot "README.md"
+            Description = "Open the AI4MBE Growth Monitor operator manual"
+            Icon = "$shellIcons,70"
+        },
+        [ordered]@{
+            Name = "Uninstall AI4MBE Growth Monitor"
+            Target = $powershell.Source
+            Arguments = (
+                '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' +
+                (Join-Path $repositoryRoot "scripts\windows\uninstall_ai4mbe.ps1") +
+                '" -InstallRoot "' + $repositoryRoot + '" -RemoveApplicationFiles'
+            )
+            TroubleshootingWrapper = Join-Path $repositoryRoot (
+                "Uninstall AI4MBE Growth Monitor.cmd"
+            )
+            Description = "Remove AI4MBE Growth Monitor while preserving experiment data"
+            Icon = "$shellIcons,31"
         }
     )
     foreach ($definition in $definitions) {
@@ -122,7 +159,12 @@ try {
             $shortcut = $shell.CreateShortcut($definition.Shortcut)
             $shortcut.TargetPath = $definition.Target
             $shortcut.Arguments = $definition.Arguments
-            $shortcut.WorkingDirectory = $repositoryRoot
+            $shortcut.WorkingDirectory = if ($definition.Name -like "Uninstall*") {
+                $env:TEMP
+            }
+            else {
+                $repositoryRoot
+            }
             $shortcut.Description = $definition.Description
             $shortcut.IconLocation = $definition.Icon
             $shortcut.Save()

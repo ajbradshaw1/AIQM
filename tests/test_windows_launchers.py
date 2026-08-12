@@ -165,11 +165,19 @@ def test_shortcut_installer_dry_run_never_writes_lnk(tmp_path):
         "O-MBE Growth Monitor",
         "Ch-MBE Growth Monitor",
         "RHEED Post-processing Labeler",
+        "AI4MBE Operator Manual",
+        "Uninstall AI4MBE Growth Monitor",
     }
     applications = {
         item["Name"]: item["Arguments"] for item in payload["shortcuts"]
     }
-    for item in payload["shortcuts"]:
+    application_items = [
+        item for item in payload["shortcuts"]
+        if item["Name"] in applications and item["Name"] not in {
+            "AI4MBE Operator Manual", "Uninstall AI4MBE Growth Monitor"
+        }
+    ]
+    for item in application_items:
         assert Path(item["Target"]).name.lower() == "powershell.exe"
         assert "-NoProfile" in item["Arguments"]
         assert "-WindowStyle Hidden" in item["Arguments"]
@@ -182,6 +190,18 @@ def test_shortcut_installer_dry_run_never_writes_lnk(tmp_path):
         "-Application labeler"
         in applications["RHEED Post-processing Labeler"]
     )
+    manual = next(
+        item for item in payload["shortcuts"]
+        if item["Name"] == "AI4MBE Operator Manual"
+    )
+    assert Path(manual["Target"]).suffix.lower() == ".pdf"
+    uninstall = next(
+        item for item in payload["shortcuts"]
+        if item["Name"] == "Uninstall AI4MBE Growth Monitor"
+    )
+    assert Path(uninstall["Target"]).name.lower() == "powershell.exe"
+    assert "uninstall_ai4mbe.ps1" in uninstall["Arguments"]
+    assert "-RemoveApplicationFiles" in uninstall["Arguments"]
     assert not list(tmp_path.glob("*.lnk"))
 
 
@@ -241,12 +261,101 @@ def test_cmd_wrappers_quote_their_relocatable_script_path():
     )
     assert '"%~dp0scripts\\windows\\install_shortcuts.ps1"' in installer
 
+    full_installer = (ROOT / "Install AI4MBE Growth Monitor.cmd").read_text(
+        encoding="utf-8"
+    )
+    assert '"%~dp0scripts\\windows\\install_ai4mbe.ps1"' in full_installer
+    uninstaller = (ROOT / "Uninstall AI4MBE Growth Monitor.cmd").read_text(
+        encoding="utf-8"
+    )
+    assert 'set "uninstaller=%~dp0scripts\\windows\\uninstall_ai4mbe.ps1"' in uninstaller
+    assert '-File "%uninstaller%"' in uninstaller
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows installer")
+def test_full_installer_dry_run_separates_program_and_data(tmp_path):
+    payload = _powershell_json(
+        WINDOWS_SCRIPTS / "install_ai4mbe.ps1",
+        "-SourceRoot",
+        str(ROOT),
+        "-InstallRoot",
+        str(tmp_path / "program"),
+        "-DataRoot",
+        str(tmp_path / "sessions"),
+        "-PythonPath",
+        sys.executable,
+        "-DryRun",
+    )
+
+    assert payload["product_id"] == "AI4MBE.GrowthMonitor.Windows"
+    assert payload["architecture"] == "x64"
+    assert Path(payload["install_root"]) == tmp_path / "program"
+    assert Path(payload["data_root"]) == tmp_path / "sessions"
+    assert Path(payload["python"]).resolve() == Path(sys.executable).resolve()
+    assert payload["create_environment"] is False
+    assert str(tmp_path / "sessions") in payload["preserve_on_uninstall"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows uninstaller")
+def test_uninstaller_requires_marker_and_preserves_data(tmp_path):
+    install_root = tmp_path / "program"
+    data_root = tmp_path / "sessions"
+    desktop = tmp_path / "desktop"
+    install_root.mkdir()
+    data_root.mkdir()
+    desktop.mkdir()
+    (data_root / "do-not-delete.txt").write_text("experiment", encoding="utf-8")
+    marker = {
+        "schema_version": 1,
+        "product_id": "AI4MBE.GrowthMonitor.Windows",
+        "architecture": "x64",
+        "install_root": str(install_root),
+        "data_root": str(data_root),
+    }
+    (install_root / ".ai4mbe-install.json").write_text(
+        json.dumps(marker), encoding="utf-8"
+    )
+    (install_root / "application.txt").write_text("remove", encoding="utf-8")
+    for name in (
+        "O-MBE Growth Monitor.lnk",
+        "Uninstall AI4MBE Growth Monitor.lnk",
+    ):
+        (desktop / name).write_text("shortcut", encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            POWERSHELL_EXE,
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(WINDOWS_SCRIPTS / "uninstall_ai4mbe.ps1"),
+            "-InstallRoot",
+            str(install_root),
+            "-DesktopPath",
+            str(desktop),
+            "-RemoveApplicationFiles",
+            "-Quiet",
+        ],
+        cwd=tmp_path,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert not install_root.exists()
+    assert (data_root / "do-not-delete.txt").read_text(encoding="utf-8") == "experiment"
+    assert not list(desktop.glob("*.lnk"))
+
 
 def test_live_gui_dependency_probe_imports_torch_before_pyqt6():
     launcher = (WINDOWS_SCRIPTS / "launch_ai4mbe.ps1").read_text(
         encoding="utf-8"
     )
-    probe = '"import torch; import PyQt6, numpy, PIL"'
+    probe = '"import struct; assert struct.calcsize(\'P\') == 8; import torch; import PyQt6, numpy, PIL"'
     assert probe in launcher
     assert "import PyQt6, numpy, PIL, torch" not in launcher
     assert '$ApplicationName -in @("ombe", "chmbe")' in launcher

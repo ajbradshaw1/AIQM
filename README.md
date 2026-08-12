@@ -6,6 +6,14 @@ Two distinct applications live in this repository — see
 
 ## Installation
 
+For a fresh Windows workstation, use the packaged GitHub Release and
+double-click `Install AI4MBE Growth Monitor.cmd`. It installs the application,
+reuses a compatible `ai4mbe-gui` environment (or creates an isolated fallback),
+and creates launch, manual, and uninstall shortcuts. Experiment data is kept
+outside the program directory and is preserved on uninstall. See
+[`docs/WINDOWS_ONE_CLICK_INSTALL.md`](docs/WINDOWS_ONE_CLICK_INSTALL.md).
+The packaged installer supports 64-bit Windows and 64-bit Python only.
+
 For Bulbasaur's live Windows acquisition environment:
 
 ```powershell
@@ -18,8 +26,8 @@ Classifier2 has its own PyTorch/checkpoint installation requirements.
 
 ## Double-click launch on Windows
 
-After cloning or updating the repository, double-click
-`Install AI4MBE Desktop Shortcuts.cmd` once. It creates three desktop shortcuts:
+For a developer clone, double-click
+`Install AI4MBE Desktop Shortcuts.cmd` once. It creates five desktop shortcuts:
 
 - **O-MBE Growth Monitor** starts the live acquisition GUI with the chamber
   fixed to O-MBE and prevents a second competing O-MBE instance.
@@ -27,6 +35,9 @@ After cloning or updating the repository, double-click
   fixed to Ch-MBE and prevents a second competing Ch-MBE instance.
 - **RHEED Post-processing Labeler** opens a file-selection window for building,
   reviewing, and validating offline temporal labels.
+- **AI4MBE Operator Manual** opens the English PDF guide.
+- **Uninstall AI4MBE Growth Monitor** removes program files and shortcuts while
+  preserving experiment sessions and launcher logs.
 
 The launcher discovers the existing `ai4mbe-gui` interpreter, starts from the
 repository root, and writes diagnostics under

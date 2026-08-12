@@ -249,7 +249,8 @@ class GrowthApp(QMainWindow):
         # native worker is still exiting, so queued worker signals must remain
         # fail-closed even though the main window is still alive.
         self._shutdown_pending = False
-        self.growth_log = GrowthLogger()
+        session_root = os.environ.get("AIQM_SESSION_ROOT", "logs/growths")
+        self.growth_log = GrowthLogger(base_dir=session_root)
 
         # Periodic sensor logging timer (1 second interval while running)
         self._sensor_log_timer = QTimer(self)

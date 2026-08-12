@@ -192,10 +192,10 @@ function Find-CompatiblePythonCandidate {
         $imports = if ($ApplicationName -in @("ombe", "chmbe")) {
             # Match growth_monitor_app.py's Windows DLL rule: torch must load
             # its Intel OpenMP runtime before PyQt6 attempts plugin loading.
-            "import torch; import PyQt6, numpy, PIL"
+            "import struct; assert struct.calcsize('P') == 8; import torch; import PyQt6, numpy, PIL"
         }
         else {
-            "import PyQt6, numpy, PIL"
+            "import struct; assert struct.calcsize('P') == 8; import PyQt6, numpy, PIL"
         }
         $probe = Invoke-NativeCapture $resolved @("-I", "-c", $imports)
         if ($probe.ExitCode -eq 0) {
@@ -308,6 +308,24 @@ $sanitizedVariables = @(
 
 try {
     $repositoryRoot = Get-RepositoryRoot
+    $installMarkerPath = Join-Path $repositoryRoot ".ai4mbe-install.json"
+    $installedDataRoot = $null
+    if (Test-Path -LiteralPath $installMarkerPath -PathType Leaf) {
+        try {
+            $installMarker = Get-Content -Raw -LiteralPath $installMarkerPath |
+                ConvertFrom-Json
+            if (
+                $installMarker.product_id -eq "AI4MBE.GrowthMonitor.Windows" -and
+                $installMarker.data_root
+            ) {
+                $installedDataRoot = [string]$installMarker.data_root
+                $env:AIQM_SESSION_ROOT = $installedDataRoot
+            }
+        }
+        catch {
+            throw "Installed application metadata is invalid: $installMarkerPath"
+        }
+    }
     foreach ($variable in $sanitizedVariables) {
         Remove-Item -LiteralPath "Env:$variable" -ErrorAction SilentlyContinue
     }
@@ -368,6 +386,7 @@ try {
         python_no_user_site = $env:PYTHONNOUSERSITE
         sanitized_variables = $sanitizedVariables
         log_directory = $logDirectory
+        session_root = $installedDataRoot
         mutex_name = if ($Application -eq "chmbe") {
             "Local\AI4MBE.ChMBE.GrowthMonitor"
         }
