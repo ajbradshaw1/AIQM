@@ -16,11 +16,26 @@ The overlay pins the WGC package used by `screengrab`. Vimba direct-camera
 mode still requires the vendor Vimba X SDK and its matching `vmbpy` package.
 Classifier2 has its own PyTorch/checkpoint installation requirements.
 
+### Ch-MBE repository double-click launch
+
+On the Ch-MBE workstation, update the repository to the current `main`, then
+double-click `Start Ch-MBE Growth Monitor.cmd` in the repository root. The
+launcher discovers the existing repository `.venv` or `ai4mbe-gui` Python,
+forces the Ch-MBE chamber configuration, starts from the repository root, and
+writes diagnostics under `%LOCALAPPDATA%\AI4MBE\LauncherLogs`.
+
+This launcher does not install packages, change persistent environment
+variables, alter instrument settings, or choose acquisition modes. Before
+ARM/START, the operator must still verify every live mode and the save folder.
+If the required environment cannot be found, set `AI4MBE_GUI_PYTHON` to the
+full path of its `python.exe` and double-click the launcher again.
+
 ## Two GUI Applications
 
 | Product | Launch | Window title | Tabs |
 |---|---|---|---|
 | **OMBE Growth Monitor** (primary product) | `python growth_monitor_app.py` | "OMBE Growth Monitor" | Monitor / Events / Session |
+| **Ch-MBE Growth Monitor** | double-click `Start Ch-MBE Growth Monitor.cmd` | "Chalcogenide MBE Growth Monitor" | Monitor / Events / Session |
 | **Hardware Control Dashboard** (dummy-loop heater control) | `python gui.py` | "Hardware Control Dashboard" | RHEED / Pyrometer / PSU / Thermocouple / Dashboard / Visuals / Config / PID / Action Log |
 
 The two apps share only `gui/state.py`, `gui/widgets.py`, and
