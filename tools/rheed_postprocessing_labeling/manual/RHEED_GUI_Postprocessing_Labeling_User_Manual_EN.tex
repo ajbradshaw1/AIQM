@@ -79,7 +79,7 @@
 \fancyhf{}
 \fancyhead[L]{\small\color{ManualMuted}AI4MBE | O-MBE + Ch-MBE}
 \fancyhead[R]{\small\color{ManualMuted}English operator manual}
-\fancyfoot[L]{\small\color{ManualMuted}Manual v1.5 | 2026-08-11}
+\fancyfoot[L]{\small\color{ManualMuted}Manual v1.6 | 2026-08-12}
 \fancyfoot[R]{\small\color{ManualMuted}Page \thepage\ of \pageref*{LastPage}}
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\footrulewidth}{0pt}
@@ -204,8 +204,8 @@ Install or refresh desktop shortcuts & \texttt{Install AI4MBE Desktop Shortcuts.
 \end{tabularx}
 \vfill
 {\small\color{ManualMuted}
-Manual v1.5 - English edition\\
-Issued 2026-08-11 for the Windows O-MBE and Ch-MBE workstations.\\[2mm]
+Manual v1.6 - English edition\\
+Issued 2026-08-12 for the Windows O-MBE and Ch-MBE workstations.\\[2mm]
 The screenshots show the actual applications using generated demo inputs. No experimental dataset is included.}
 
 % Page 2 - overview
@@ -244,7 +244,7 @@ The live GUI creates session records. The labeler reads those records later, pro
 \textbf{Chapter} & \textbf{Topic} & \textbf{Outcome} \\
 \midrule
 2 & Chamber-specific live startup & Select the correct launcher and verify its exact title \\
-3 & Separate O-MBE and Ch-MBE defaults & Record approved values without cross-copying \\
+3 & Configuration modes and chamber defaults & Select the validated reader without cross-copying \\
 4 & Labeler desktop application & Select inputs, build, open, and validate \\
 5-6 & Inputs and safe report build & Produce a complete local report directory \\
 7-8 & Segment labeling and display controls & Create traceable labels on actual saved frames \\
@@ -310,7 +310,7 @@ A different title or a launcher that does not match the physical chamber is a st
 
 \subsection{Shared ARM and exit boundary}
 \begin{enumerate}[leftmargin=7mm,itemsep=1.5pt,topsep=1pt]
-  \item Confirm the title-selected chamber, advancing RHEED sequence, valid temperature state, intended log directory, and every selected interface against the matching owner-approved register in Chapter~\ref{sec:chamber-defaults}. A pending field is not a default.
+  \item Confirm the title-selected chamber, advancing RHEED sequence, valid temperature state, and intended log directory. Check the four reader modes against the matching startup-default record in Chapter~\ref{sec:chamber-defaults}; verify all remaining operating settings against the applicable SOP.
   \item ARM or start only when the authorized operator and applicable SOP permit it. Double-click startup authorizes no instrument operation or setpoint change.
   \item Close normally and wait for the window to disappear. Do not force-kill Python while logs are being written.
 \end{enumerate}
@@ -319,66 +319,110 @@ A different title or a launcher that does not match the physical chamber is a st
 Each launcher forces and preflights its chamber profile and owns a chamber-specific single-instance mutex. Logs below \texttt{\%LOCALAPPDATA\%\textbackslash AI4MBE\textbackslash LauncherLogs} record Python, repository, branch, commit, chamber, and optional-driver status. A missing \texttt{pyads}, \texttt{serial}, or \texttt{windows\_capture} produces a visible warning; do not ARM a mode that needs it. Do not create global environment variables ad hoc.
 \end{infobox}
 
-% Chapter 3 - chamber-specific defaults (reserved)
-\manualsection{3}{Keep O-MBE and Ch-MBE defaults separate}
+% Chapter 3 - configuration modes and chamber-specific defaults
+\manualsection{3}{Understand Configuration modes and chamber defaults}
 
-\inbrief{Every operating default is pending until its chamber owner approves it. Keep the two registers physically and logically separate; never infer from code, screenshots, current selections, or the other chamber.}
+\inbrief{Both chambers start with \texttt{vimba}, \texttt{modbus}, \texttt{ads}, and \texttt{elog}: direct reads for RHEED, temperature, MISTRAL, and EvapControl. \texttt{dummy} modes generate test data and must not be mistaken for instruments.}
 \label{sec:chamber-defaults}
 
-\begin{dangerbox}{Reserved placeholders - not operating values}
-Every value in both registers is intentionally pending. These entries must not be used to configure, ARM, or troubleshoot either chamber until that chamber's owner supplies and approves them. Until then, follow the applicable chamber SOP and verify the active GUI configuration before ARM. Never copy a value from one chamber to the other.
-\end{dangerbox}
+The Configuration panel chooses one reader for each data source. A mode selects \emph{how the GUI reads}; it does not change an instrument setpoint. The four selectors are independent, and their selected values are frozen when the session is armed.
 
-Chapter~\ref{sec:live-startup} gives fixed launcher names and window titles only so the operator can identify the selected software profile. Those identity checks, source-code values, and visible UI selections do not populate either operating-default register.
+\subsection{Camera mode - RHEED image source}
+\footnotesize
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{34mm}Y}
+\toprule
+\textbf{Option} & \textbf{Meaning} \\
+\midrule
+\texttt{dummy} & Fixed generated/demo STO 1x1 image; no camera connection. \\
+\texttt{dummy\_c6x2} & Fixed c(6x2) demonstration image; no camera connection. \\
+\texttt{dummy\_tw} & Fixed Twinned (2x1) demonstration image; no camera connection. \\
+\texttt{dummy\_rt13\_tilted} & Rotated RT13 demonstration image for alignment testing; no camera connection. \\
+\texttt{screengrab} & Windows Graphics Capture of a detached kSA \textit{Live Video} window. It captures the window even when another window covers it, but it is still display pixels rather than raw camera data. \\
+\texttt{screengrab\_mss} & Legacy monitor-pixel capture. Window position, overlap, DPI, and foreground order can contaminate the frame; diagnostic fallback only. \\
+\texttt{vimba} & Direct AVT camera acquisition through the Vimba SDK. This is the default live RHEED source. kSA camera ownership/access mode must permit the connection. \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Pyrometer mode - substrate temperature source}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{34mm}Y}
+\toprule
+\textbf{Option} & \textbf{Meaning} \\
+\midrule
+\texttt{dummy} & Generated temperature values for offline GUI checks; not an instrument reading. \\
+\texttt{exactus} & Direct serial read using the Exactus protocol and the displayed COM/baud fields. \\
+\texttt{modbus} & Direct read from the pyrometer using the chamber profile's COM, baud, RTS, device ID, and Modbus backend. This is the default. \\
+\texttt{screengrab} & Reads the existing TemperaSure application through Windows UI automation. It depends on the correct window being open and updating. \\
+\bottomrule
+\end{tabularx}
+
+\subsection{MISTRAL mode - power and cell data source}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{34mm}Y}
+\toprule
+\textbf{Option} & \textbf{Meaning} \\
+\midrule
+\texttt{dummy} & Generated voltage/current values; no PLC or MISTRAL connection. \\
+\texttt{screengrab} & Captures the MistralGui window and OCRs setpoint and actual voltage/current. The window must be visible and the calibrated layout must match. \\
+\texttt{jsonrpc} & Experimental HTTP direct connection. Its read-method map is not configured, so it can connect while returning no V/I values; do not use for production logging. \\
+\texttt{ads} & Read-only direct Beckhoff TwinCAT ADS access using the chamber-specific endpoint, ports, schema, and cell count. This is the default. \\
+\bottomrule
+\end{tabularx}
+
+\subsection{EvapControl mode - pressure and evaporation data source}
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{34mm}Y}
+\toprule
+\textbf{Option} & \textbf{Meaning} \\
+\midrule
+\texttt{dummy} & Generated pressure values; no EvapControl connection. \\
+\texttt{elog} & Directly reads EvapControl's current \texttt{.elo} binary log. It needs no OCR or visible window and can expose pressure, substrate, cell, and plasma fields present in the validated schema. \\
+\texttt{screengrab} & Captures the Evaporation Control window and OCRs chamber pressure. The window must be visible; fields not shown in that crop remain unavailable. \\
+\bottomrule
+\end{tabularx}
+\normalsize
+
+\begin{warnbox}{Direct read does not mean hardware synchronization}
+\texttt{vimba}, \texttt{modbus}, \texttt{ads}, and \texttt{elog} avoid screen OCR, but each worker still receives data independently. A sensor-log row is a latest-value software snapshot, not proof that exposure, temperature, PLC, and EvapControl were physically sampled at one instant.
+\end{warnbox}
 
 \begin{tcolorbox}[
-  enhanced,breakable,title={O-MBE owner-approved defaults - reserved},
+  enhanced,breakable,title={O-MBE GUI startup defaults},
   fonttitle=\bfseries,colback=ManualBluePale,colframe=ManualBlue,
   boxrule=0.8pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm]
 \rowcolors{2}{ManualPale}{white}
 \begin{tabularx}{\linewidth}{L{76mm}Y}
 \toprule
-\textbf{Configuration item} & \textbf{Owner-approved default} \\
+\textbf{Selector} & \textbf{Startup selection and source} \\
 \midrule
-GUI launcher and chamber profile & \emph{Pending - to be supplied} \\
-RHEED source, mode, source window, ROI, and crop & \emph{Pending - to be supplied} \\
-Pyrometer mode, port, baud, RTS, and backend & \emph{Pending - to be supplied} \\
-MISTRAL mode, endpoint, ports, schema, and cell map & \emph{Pending - to be supplied} \\
-EvapControl mode, window or log source, and schema & \emph{Pending - to be supplied} \\
-Classifier package, enable state, and shadow state & \emph{Pending - to be supplied} \\
-Save root, filename prefix, and session naming & \emph{Pending - to be supplied} \\
-Sampling, continuous capture, and logging intervals & \emph{Pending - to be supplied} \\
+Camera & \texttt{vimba} - direct AVT camera read \\
+Pyrometer & \texttt{modbus} - COM4, 115200 baud, device 1, RTS off, \texttt{pymodbus} backend \\
+MISTRAL & \texttt{ads} - chamber-specific read-only ADS profile (6 cells) \\
+EvapControl & \texttt{elog} - direct current \texttt{.elo} log read \\
 \bottomrule
 \end{tabularx}
-
-\textbf{Approved by / revision / date:} \emph{Pending - to be supplied}
 \end{tcolorbox}
 
 \begin{tcolorbox}[
-  enhanced,breakable,title={Ch-MBE owner-approved defaults - reserved},
+  enhanced,breakable,title={Ch-MBE GUI startup defaults},
   fonttitle=\bfseries,colback=ManualGreenPale,colframe=ManualGreen,
   boxrule=0.8pt,arc=2mm,left=3mm,right=3mm,top=2mm,bottom=2mm]
 \rowcolors{2}{ManualPale}{white}
 \begin{tabularx}{\linewidth}{L{76mm}Y}
 \toprule
-\textbf{Configuration item} & \textbf{Owner-approved default} \\
+\textbf{Selector} & \textbf{Startup selection and source} \\
 \midrule
-GUI launcher and chamber profile & \emph{Pending - to be supplied} \\
-RHEED source, mode, source window, ROI, and crop & \emph{Pending - to be supplied} \\
-Pyrometer mode, port, baud, RTS, and backend & \emph{Pending - to be supplied} \\
-MISTRAL mode, endpoint, ports, schema, and cell map & \emph{Pending - to be supplied} \\
-EvapControl mode, window or log source, and schema & \emph{Pending - to be supplied} \\
-Classifier package, enable state, and shadow state & \emph{Pending - to be supplied} \\
-Save root, filename prefix, and session naming & \emph{Pending - to be supplied} \\
-Sampling, continuous capture, and logging intervals & \emph{Pending - to be supplied} \\
+Camera & \texttt{vimba} - direct AVT camera read \\
+Pyrometer & \texttt{modbus} - COM3, 115200 baud, device 1, RTS off, \texttt{raw\_serial} backend \\
+MISTRAL & \texttt{ads} - chamber-specific read-only ADS profile (7 cells) \\
+EvapControl & \texttt{elog} - direct read from the Ch-MBE \texttt{.elo} log directory \\
 \bottomrule
 \end{tabularx}
-
-\textbf{Approved by / revision / date:} \emph{Pending - to be supplied}
 \end{tcolorbox}
 
-\begin{infobox}{Scope}
-A completed value of \textbf{Not applicable} is valid only when approved by the corresponding chamber owner; a blank or pending value is not. Neither register replaces its chamber startup SOP.
+\begin{infobox}{What remains chamber-owner controlled}
+These are software startup selections, not permission to ARM. ROI/crop, classifier package and enable state, save root and naming, sampling intervals, and any instrument setpoint remain governed by the matching chamber SOP and owner approval. Each chamber passes its own log directory to \texttt{ElogReader}; variables absent from that chamber's schema remain blank rather than being invented.
 \end{infobox}
 
 % Page 5 - labeler UI
@@ -418,7 +462,7 @@ This application can run on a computer without instrument software when the arch
 \subsection{Session archive}
 The ZIP archive must contain exactly one member ending in \texttt{session\_metadata.json}, exactly one member ending in \texttt{heartbeat\_log.csv}, and every sibling \texttt{frames/} image referenced by the heartbeat rows. Saved-frame elapsed time, heartbeat index, capture sequence, and timezone-aware capture UTC must each increase strictly; gaps are allowed. Do not extract and rename frames manually.
 
-Read \texttt{chamber\_id} from the session metadata and confirm that it names the intended O-MBE or Ch-MBE source. When the recorded MISTRAL mode is ADS, also preserve its recorded endpoint, ports, and cell count. Compare provenance only with the corresponding owner-approved register in Chapter~\ref{sec:chamber-defaults}; never edit an archive to make it resemble the other chamber.
+Read \texttt{chamber\_id} from the session metadata and confirm that it names the intended O-MBE or Ch-MBE source. When the recorded MISTRAL mode is ADS, also preserve its recorded endpoint, ports, and cell count. Compare provenance only with the corresponding startup-default record in Chapter~\ref{sec:chamber-defaults}; never edit an archive to make it resemble the other chamber.
 
 \begin{lstlisting}
 growth_session.zip
@@ -625,12 +669,12 @@ First preserve the exact error text, occurrence time, branch, commit, and select
 
 \subsection{O-MBE live-GUI branch}
 \begin{infobox}{Expected software identity}
-Use \texttt{Start O-MBE Growth Monitor.cmd}; the exact title is \textbf{Oxide MBE Growth Monitor}. If the title differs, close normally, preserve the latest launcher log, and restart only with the O-MBE launcher. Compare selected interfaces only with the owner-approved O-MBE register in Chapter~\ref{sec:chamber-defaults}; a pending entry is a stop condition, not a reason to borrow a Ch-MBE value.
+Use \texttt{Start O-MBE Growth Monitor.cmd}; the exact title is \textbf{Oxide MBE Growth Monitor}. If the title differs, close normally, preserve the latest launcher log, and restart only with the O-MBE launcher. Compare the four reader selectors with the O-MBE startup-default record in Chapter~\ref{sec:chamber-defaults}; escalate any other unexplained operating value rather than borrowing a Ch-MBE value.
 \end{infobox}
 
 \subsection{Ch-MBE live-GUI branch}
 \begin{corebox}{Expected software identity}
-Use \texttt{Start Ch-MBE Growth Monitor.cmd}; the exact title is \textbf{Chalcogenide MBE Growth Monitor}. If the title differs, close normally, preserve the latest launcher log, and restart only with the Ch-MBE launcher. Compare selected interfaces only with the owner-approved Ch-MBE register in Chapter~\ref{sec:chamber-defaults}; a pending entry is a stop condition, not a reason to borrow an O-MBE value.
+Use \texttt{Start Ch-MBE Growth Monitor.cmd}; the exact title is \textbf{Chalcogenide MBE Growth Monitor}. If the title differs, close normally, preserve the latest launcher log, and restart only with the Ch-MBE launcher. Compare the four reader selectors with the Ch-MBE startup-default record in Chapter~\ref{sec:chamber-defaults}; escalate any other unexplained operating value rather than borrowing an O-MBE value.
 \end{corebox}
 
 \subsection{Shared live and offline symptoms}
@@ -658,7 +702,7 @@ Import or validation fails & Run, context, endpoint, overlap, or label mismatch 
 \begin{itemize}[itemsep=1pt,topsep=1pt]
   \item Full error text and occurrence time. Do not report only that it does not work.
   \item Output of \texttt{git status -{}-short -{}-branch} and \texttt{git rev-parse HEAD}.
-  \item Chamber, exact window title, launcher name, launcher-log path, environment path, and selected modes. For labeling issues, add report-manifest and annotation-JSON SHA values; raw images are not initially required. Keep sensitive data out of public channels.
+  \item Chamber, exact title, launcher, launcher-log path, environment, and selected modes. For labeling, add manifest and annotation-JSON hashes. Redact sensitive data.
 \end{itemize}
 
 % Chapter 12 - version verification and checklists
@@ -687,7 +731,7 @@ Use the resolved Python interpreter and repository path recorded by the matching
   \checkitem{Use \texttt{Start O-MBE Growth Monitor.cmd}; never use the Ch-MBE launcher for this chamber.}
   \checkitem{Confirm the exact title \textbf{Oxide MBE Growth Monitor}.}
   \checkitem{Confirm the launcher log identifies O-MBE, the intended repository, branch, commit, Python, and required optional drivers.}
-  \checkitem{Compare every selected interface and logging field only with the approved O-MBE register in Chapter~\ref{sec:chamber-defaults}; stop on any pending or unexplained value.}
+  \checkitem{Confirm \texttt{vimba / modbus / ads / elog} against the O-MBE startup-default record in Chapter~\ref{sec:chamber-defaults}; stop on any unexplained value.}
   \checkitem{Confirm advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the O-MBE SOP.}
   \checkitem{ARM only when the authorized operator and O-MBE SOP permit it; this checklist grants no operating or setpoint authority.}
 \end{itemize}
@@ -701,7 +745,7 @@ Use the resolved Python interpreter and repository path recorded by the matching
   \checkitem{Use \texttt{Start Ch-MBE Growth Monitor.cmd}; never use the O-MBE launcher for this chamber.}
   \checkitem{Confirm the exact title \textbf{Chalcogenide MBE Growth Monitor}.}
   \checkitem{Confirm the launcher log identifies Ch-MBE, the intended repository, branch, commit, Python, and required optional drivers.}
-  \checkitem{Compare every selected interface and logging field only with the approved Ch-MBE register in Chapter~\ref{sec:chamber-defaults}; stop on any pending or unexplained value.}
+  \checkitem{Confirm \texttt{vimba / modbus / ads / elog} against the Ch-MBE startup-default record in Chapter~\ref{sec:chamber-defaults}; stop on any unexplained value.}
   \checkitem{Confirm advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the Ch-MBE SOP.}
   \checkitem{ARM only when the authorized operator and Ch-MBE SOP permit it; this checklist grants no operating or setpoint authority.}
 \end{itemize}
@@ -717,7 +761,7 @@ Get-FileHash '.\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf' -Algo
 \subsection{Companion text and AI prompts}
 Searchable manual: \path{docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md}\par
 AI prompt pack: \path{docs/RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md}\par
-The prompt pack does not authorize an AI to invent pending defaults or make instrument-control decisions.
+The prompt pack does not authorize an AI to invent undocumented operating values or make instrument-control decisions.
 
 \subsection{Shared offline and handoff checklist}
 \begin{itemize}[leftmargin=7mm,itemsep=1.7pt]

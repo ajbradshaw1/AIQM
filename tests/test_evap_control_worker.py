@@ -19,6 +19,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 # Must set BEFORE any Qt import — headless CI/local runs on Mac + Linux.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -117,6 +118,15 @@ class WorkerModeRoutingTests(unittest.TestCase):
         driver = worker._create_driver()
         self.assertIsInstance(driver, ElogReader)
 
+    def test_elog_mode_uses_chamber_log_directory(self):
+        expected = r"C:\evap_control_1.2.0.48\log"
+        worker = EvapControlWorker(
+            mode="elog",
+            chamber_config=SimpleNamespace(evap_log_dir=expected),
+        )
+        driver = worker._create_driver()
+        self.assertEqual(driver._log_dir, expected)
+
     def test_dummy_mode_returns_dummy_evap_control(self):
         worker = EvapControlWorker(mode="dummy")
         driver = worker._create_driver()
@@ -158,7 +168,7 @@ class ConfigModeOptionsTests(unittest.TestCase):
         }
         self.assertEqual(options, {"dummy", "elog", "screengrab"})
 
-    def test_config_evap_mode_default_is_elog(self):
+    def test_ombe_config_defaults_use_direct_read_modes(self):
         # Default flipped from "screengrab" to "elog" 2026-07-09 per
         # the P3 decision — direct-read is strictly better when
         # EvapControl is running. Bulbasaur end-to-end validation is
@@ -166,10 +176,28 @@ class ConfigModeOptionsTests(unittest.TestCase):
         # the failure mode turns out too noisy for growers and we add
         # auto-fallback or revert the default, update this test and
         # the corresponding setCurrentText call in growth_monitor.py.
-        self.assertEqual(
-            self.monitor.config_evap_mode.currentText(),
-            "elog",
-        )
+        self.assertEqual(self.monitor.config_camera_mode.currentText(), "vimba")
+        self.assertEqual(self.monitor.config_pyrometer_mode.currentText(), "modbus")
+        self.assertEqual(self.monitor.config_mistral_mode.currentText(), "ads")
+        self.assertEqual(self.monitor.config_evap_mode.currentText(), "elog")
+
+    def test_chmbe_config_defaults_use_direct_read_modes(self):
+        previous = os.environ.get("AIQM_CHAMBER")
+        os.environ["AIQM_CHAMBER"] = "chmbe"
+        try:
+            monitor = GrowthMonitor()
+        finally:
+            if previous is None:
+                os.environ.pop("AIQM_CHAMBER", None)
+            else:
+                os.environ["AIQM_CHAMBER"] = previous
+        try:
+            self.assertEqual(monitor.config_camera_mode.currentText(), "vimba")
+            self.assertEqual(monitor.config_pyrometer_mode.currentText(), "modbus")
+            self.assertEqual(monitor.config_mistral_mode.currentText(), "ads")
+            self.assertEqual(monitor.config_evap_mode.currentText(), "elog")
+        finally:
+            monitor.deleteLater()
 
 
 # ---------------------------------------------------------------------------

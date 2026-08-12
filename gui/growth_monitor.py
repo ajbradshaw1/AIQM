@@ -1167,10 +1167,16 @@ class GrowthMonitor(QWidget):
             5,
             "Legacy monitor-pixel capture; overlays can contaminate frames.",
         )
+        self.config_camera_mode.setItemData(
+            6,
+            "Direct read from the AVT camera through the Vimba SDK.",
+        )
+        self.config_camera_mode.setCurrentText(self._cfg.camera_mode_default)
         config_form.addRow("Camera mode:", self.config_camera_mode)
 
         self.config_pyrometer_mode = QComboBox()
         self.config_pyrometer_mode.addItems(["dummy", "exactus", "modbus", "screengrab"])
+        self.config_pyrometer_mode.setCurrentText(self._cfg.pyrometer_mode_default)
         config_form.addRow("Pyrometer mode:", self.config_pyrometer_mode)
 
         self.config_exactus_port = QLineEdit(self._cfg.pyrometer_port)

@@ -887,10 +887,16 @@ class EvapControlWorker(QThread):
 
     state_updated = pyqtSignal(EvapControlState)
 
-    def __init__(self, mode: str = "screengrab", poll_interval: float = 1.0):
+    def __init__(
+        self,
+        mode: str = "screengrab",
+        poll_interval: float = 1.0,
+        chamber_config=None,
+    ):
         super().__init__()
         self.mode = mode
         self.poll_interval = poll_interval
+        self._chamber_config = chamber_config
         # True from __init__ to close the stop()-before-run race
         # (see PowerSupplyWorker for the full comment).
         self.running = True
@@ -996,7 +1002,12 @@ class EvapControlWorker(QThread):
             return EvapControl()
         elif self.mode == "elog":
             from drivers.evap_control import ElogReader
-            return ElogReader()
+            log_dir = (
+                self._chamber_config.evap_log_dir
+                if self._chamber_config is not None
+                else None
+            )
+            return ElogReader(log_dir=log_dir or None)
         else:
             from drivers.evap_control import DummyEvapControl
             return DummyEvapControl()

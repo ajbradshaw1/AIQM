@@ -86,7 +86,7 @@ def test_english_manual_uses_actual_ui_screenshot_assets() -> None:
         assert (manual_root / "assets" / "screenshots" / filename).is_file()
 
 
-def test_english_manual_keeps_chamber_defaults_separate_and_pending() -> None:
+def test_english_manual_explains_modes_and_keeps_defaults_separate() -> None:
     repository_root = Path(__file__).resolve().parents[3]
     source = (
         repository_root
@@ -95,18 +95,27 @@ def test_english_manual_keeps_chamber_defaults_separate_and_pending() -> None:
         / "manual"
         / "RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.tex"
     ).read_text(encoding="ascii")
-    o_heading = "title={O-MBE owner-approved defaults - reserved}"
-    ch_heading = "title={Ch-MBE owner-approved defaults - reserved}"
-    scope_heading = r"\begin{infobox}{Scope}"
+    o_heading = "title={O-MBE GUI startup defaults}"
+    ch_heading = "title={Ch-MBE GUI startup defaults}"
+    scope_heading = r"\begin{infobox}{What remains chamber-owner controlled}"
     assert source.count(o_heading) == 1
     assert source.count(ch_heading) == 1
     assert source.index(o_heading) < source.index(ch_heading)
     o_block = source[source.index(o_heading):source.index(ch_heading)]
     ch_block = source[source.index(ch_heading):source.index(scope_heading)]
     for block in (o_block, ch_block):
-        assert r"\textbf{Owner-approved default}" in block
-        assert block.count(r"\emph{Pending - to be supplied}") == 9
-    assert "Never copy a value from one chamber to the other." in source
+        for mode in ("vimba", "modbus", "ads"):
+            assert rf"\texttt{{{mode}}}" in block
+    assert r"\texttt{elog}" in o_block
+    assert r"\texttt{elog}" in ch_block
+    assert "variables absent from that chamber's schema remain blank" in source
+    for mode in (
+        "dummy", "dummy\\_c6x2", "dummy\\_tw", "dummy\\_rt13\\_tilted",
+        "screengrab", "screengrab\\_mss", "vimba", "exactus", "modbus",
+        "jsonrpc", "ads", "elog",
+    ):
+        assert rf"\texttt{{{mode}}}" in source
+    assert "Direct read does not mean hardware synchronization" in source
     assert source.count("Generated demo inputs; not operating defaults.") == 2
 
 
@@ -150,11 +159,21 @@ def test_markdown_manual_and_ai_prompt_pack_are_complete() -> None:
 
     ch_marker = '<a id="chmbe-approved-defaults"></a>'
     o_marker = '<a id="ombe-approved-defaults"></a>'
-    revision_marker = "### Revision and evidence rule"
+    revision_marker = "### What remains chamber-owner controlled"
     ch_defaults = manual[manual.index(ch_marker):manual.index(o_marker)]
     o_defaults = manual[manual.index(o_marker):manual.index(revision_marker)]
     for block in (ch_defaults, o_defaults):
-        assert block.count("*Pending - to be supplied*") == 9
+        for mode in ("`vimba`", "`modbus`", "`ads`"):
+            assert mode in block
+    assert "`elog`" in ch_defaults
+    assert "`elog`" in o_defaults
+    assert "variables absent from that chamber's schema remain blank" in manual
+    for option in (
+        "`dummy`", "`dummy_c6x2`", "`dummy_tw`", "`dummy_rt13_tilted`",
+        "`screengrab`", "`screengrab_mss`", "`vimba`", "`exactus`",
+        "`modbus`", "`jsonrpc`", "`ads`", "`elog`",
+    ):
+        assert option in manual
     assert "Read `chamber_id` from the session metadata" in manual
     assert "recorded endpoint, ports, and cell count" in manual
     assert "never edit an archive to make it resemble the other chamber" in manual
@@ -171,8 +190,8 @@ def test_markdown_manual_and_ai_prompt_pack_are_complete() -> None:
         "Manual facts",
         "Reasoned inference",
         "Missing information",
-        "Never invent a pending default",
-        "Never transfer a value, assumption, or approval between chambers",
+        "Never invent any other operating default",
+        "Never transfer a value, assumption, schema, or approval between chambers",
         "Do not authorize ARM",
         "surface reconstruction, acquisition-quality QC, and FeSe film quality",
         "model-assisted",

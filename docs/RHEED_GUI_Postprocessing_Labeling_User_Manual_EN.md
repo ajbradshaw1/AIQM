@@ -2,8 +2,8 @@
 
 ## English Operator Manual
 
-- Manual version: **v1.5**
-- Issued: **2026-08-11**
+- Manual version: **v1.6**
+- Issued: **2026-08-12**
 - Scope: Windows O-MBE and Ch-MBE workstations and the shared offline RHEED post-processing labeler
 
 This Markdown document is the accessible companion to the [English PDF manual](RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf). The screenshots show the actual applications with generated demo inputs. They do not contain experimental data and do **not** define production defaults for Ch-MBE or O-MBE.
@@ -29,7 +29,7 @@ This Markdown document is the accessible companion to the [English PDF manual](R
 
 1. [Understand the two independent paths](#1-understand-the-two-independent-paths)
 2. [Install shortcuts and start the correct chamber GUI](#2-install-shortcuts-and-start-the-correct-chamber-gui)
-3. [Keep Ch-MBE and O-MBE defaults separate](#3-keep-ch-mbe-and-o-mbe-defaults-separate)
+3. [Understand Configuration modes and chamber defaults](#3-understand-configuration-modes-and-chamber-defaults)
 4. [Open the RHEED post-processing labeler](#4-open-the-rheed-post-processing-labeler)
 5. [Prepare inputs and verify provenance](#5-prepare-inputs-and-verify-provenance)
 6. [Build and open a report safely](#6-build-and-open-a-report-safely)
@@ -96,18 +96,18 @@ The live GUI performs acquisition and display. The offline labeler works only on
 <a id="chmbe-launch-route"></a>
 ### Ch-MBE launch route
 
-Double-click `Start Ch-MBE Growth Monitor.cmd` or **Ch-MBE Growth Monitor**. The launcher calls the shared startup path for the Ch-MBE application, forces `AIQM_CHAMBER=chmbe`, uses the Ch-MBE single-instance mutex, performs preflight, and records launcher diagnostics. Continue only when the title is **Chalcogenide MBE Growth Monitor**. Use only the [Ch-MBE approved-default register](#chmbe-approved-defaults).
+Double-click `Start Ch-MBE Growth Monitor.cmd` or **Ch-MBE Growth Monitor**. The launcher calls the shared startup path for the Ch-MBE application, forces `AIQM_CHAMBER=chmbe`, uses the Ch-MBE single-instance mutex, performs preflight, and records launcher diagnostics. Continue only when the title is **Chalcogenide MBE Growth Monitor**. Use only the [Ch-MBE startup-default record](#chmbe-approved-defaults).
 
 <a id="ombe-launch-route"></a>
 ### O-MBE launch route
 
-Double-click `Start O-MBE Growth Monitor.cmd` or **O-MBE Growth Monitor**. The launcher calls the shared PowerShell startup with `-Application ombe`, forces `AIQM_CHAMBER=ombe`, uses the O-MBE single-instance mutex, performs preflight, and records launcher diagnostics. Continue only when the title is **Oxide MBE Growth Monitor**. Use only the [O-MBE approved-default register](#ombe-approved-defaults).
+Double-click `Start O-MBE Growth Monitor.cmd` or **O-MBE Growth Monitor**. The launcher calls the shared PowerShell startup with `-Application ombe`, forces `AIQM_CHAMBER=ombe`, uses the O-MBE single-instance mutex, performs preflight, and records launcher diagnostics. Continue only when the title is **Oxide MBE Growth Monitor**. Use only the [O-MBE startup-default record](#ombe-approved-defaults).
 
 ### Shared pre-ARM and shutdown checks
 
 1. Confirm the physical chamber, launcher route, exact title, and displayed chamber identity.
 2. Inspect every device status. Confirm an advancing RHEED frame sequence, a valid temperature state, and the intended log directory under the applicable chamber SOP.
-3. Verify every chamber-specific setting against the matching approved register in [Chapter 3](#3-keep-ch-mbe-and-o-mbe-defaults-separate). A pending field is not a default.
+3. Verify the four reader modes against the matching startup-default record in [Chapter 3](#3-understand-configuration-modes-and-chamber-defaults), then verify all remaining operating settings against the applicable SOP.
 4. ARM or start a session only when the authorized operator is ready under the applicable experiment SOP. Launching the GUI does not authorize setpoint changes.
 5. At the end, close through the GUI normally and wait for the window to disappear. Do not force-kill Python while logs are being written.
 
@@ -121,73 +121,84 @@ Each live launcher refuses a second process for the same application through its
 
 > **Expected environment behavior:** Launcher logs are stored below `%LOCALAPPDATA%\AI4MBE\LauncherLogs`. They record the resolved Python interpreter, repository path, branch, commit, chamber, and optional-driver status. A missing optional driver produces a visible warning without hiding the GUI; do not ARM a production mode that needs the missing driver. Do not assume a fixed drive letter or create global environment variables ad hoc.
 
-## 3. Keep Ch-MBE and O-MBE defaults separate
+## 3. Understand Configuration modes and chamber defaults
 
 ### In brief
 
-- Ch-MBE and O-MBE have independent, owner-approved configuration registers.
-- Every field below is intentionally pending until the corresponding chamber owner supplies it.
-- Never infer a default from source code, a selected GUI value, a demo screenshot, or the other chamber.
-- Use the matching [Ch-MBE launch route](#chmbe-launch-route) or [O-MBE launch route](#ombe-launch-route). A pending value is not an operating instruction.
+- `vimba`, `modbus`, and `ads` are the validated direct-read startup paths for both chambers.
+- Both O-MBE and Ch-MBE default EvapControl to `elog`, so all four startup readers use direct data paths.
+- Every `dummy` option supplies generated test data and is not an instrument reading.
+- Selecting a mode changes only how the GUI reads data. It does not change an instrument setpoint or prove hardware synchronization.
 
-> **Reserved placeholders - not operating values:** Every value in this chapter is intentionally pending. Do not use these entries to configure, ARM, or troubleshoot either chamber until the chamber owner supplies and approves them. Until then, follow the applicable chamber SOP and verify the active GUI configuration before ARM. Never copy a value from one chamber to the other.
+The four selectors are independent. Their selected values are frozen when the session is armed.
 
-### Common field definitions and approval rules
+### Camera mode - RHEED image source
 
-The two registers use the same field schema so they can be audited consistently, but their values and approvals remain independent.
-
-| Configuration item | What the chamber owner must identify |
+| Option | Meaning |
 | --- | --- |
-| GUI launcher and chamber profile | Approved launcher, chamber identity, and profile revision |
-| RHEED source, mode, source window, ROI, and crop | Approved source, capture mode, vendor-window state, ROI, and crop |
-| Pyrometer mode, port, baud, RTS, and backend | Approved temperature interface and all communication parameters |
-| MISTRAL mode, endpoint, ports, schema, and cell map | Approved mode, ADS or other endpoint, schema, and display mapping |
-| EvapControl mode, window or log source, and schema | Approved mode, source location, and parsed field schema |
-| Classifier package, enable state, and shadow state | Approved deployment status and exact model-package identity |
-| Save root, filename prefix, and session naming | Approved storage root and naming policy |
-| Sampling, continuous capture, and logging intervals | Approved intervals and capture behavior |
+| `dummy` | Fixed generated/demo STO 1x1 image; no camera connection. |
+| `dummy_c6x2` | Fixed c(6x2) demonstration image; no camera connection. |
+| `dummy_tw` | Fixed Twinned (2x1) demonstration image; no camera connection. |
+| `dummy_rt13_tilted` | Rotated RT13 demonstration image for alignment testing; no camera connection. |
+| `screengrab` | Windows Graphics Capture of a detached kSA **Live Video** window. It captures composed window pixels, not raw camera data. |
+| `screengrab_mss` | Legacy monitor-pixel capture. Window position, overlap, DPI, and foreground order can contaminate frames; diagnostic fallback only. |
+| `vimba` | Direct AVT camera acquisition through the Vimba SDK. This is the default live RHEED source. kSA camera ownership/access mode must permit the connection. |
 
-An entry becomes an approved default only when its value, approver, revision, and date are recorded. **Not applicable** is valid only with chamber-owner approval. Blank and pending entries remain unavailable.
+### Pyrometer mode - substrate temperature source
+
+| Option | Meaning |
+| --- | --- |
+| `dummy` | Generated temperature values for offline GUI checks; not an instrument reading. |
+| `exactus` | Direct serial read using the Exactus protocol and the displayed COM/baud fields. |
+| `modbus` | Direct read using the chamber profile's COM, baud, RTS, device ID, and Modbus backend. This is the default. |
+| `screengrab` | Reads the existing TemperaSure application through Windows UI automation. It depends on the correct window being open and updating. |
+
+### MISTRAL mode - power and cell data source
+
+| Option | Meaning |
+| --- | --- |
+| `dummy` | Generated voltage/current values; no PLC or MISTRAL connection. |
+| `screengrab` | Captures MistralGui and OCRs setpoint and actual voltage/current. The window must be visible and its layout must match the calibrated crop. |
+| `jsonrpc` | Experimental HTTP direct connection. Its read-method map is not configured, so it can connect while returning no V/I values; do not use for production logging. |
+| `ads` | Read-only direct Beckhoff TwinCAT ADS access using the chamber-specific endpoint, ports, schema, and cell count. This is the default. |
+
+### EvapControl mode - pressure and evaporation data source
+
+| Option | Meaning |
+| --- | --- |
+| `dummy` | Generated pressure values; no EvapControl connection. |
+| `elog` | Directly reads EvapControl's current `.elo` binary log. It needs no OCR or visible window and can expose pressure, substrate, cell, and plasma fields present in the validated schema. |
+| `screengrab` | Captures the Evaporation Control window and OCRs chamber pressure. The window must be visible; fields absent from the crop remain unavailable. |
+
+> **Direct read is not hardware synchronization:** `vimba`, `modbus`, `ads`, and `elog` avoid screen OCR, but their workers receive data independently. A sensor-log row is a latest-value software snapshot, not proof that exposure, temperature, PLC, and EvapControl were physically sampled at one instant.
 
 <a id="chmbe-approved-defaults"></a>
-### Ch-MBE approved defaults
+### Ch-MBE GUI startup defaults
 
 This record applies only to the [Ch-MBE launch route](#chmbe-launch-route).
 
-| Configuration item | Owner-approved default |
+| Selector | Startup selection and source |
 | --- | --- |
-| GUI launcher and chamber profile | *Pending - to be supplied* |
-| RHEED source, mode, source window, ROI, and crop | *Pending - to be supplied* |
-| Pyrometer mode, port, baud, RTS, and backend | *Pending - to be supplied* |
-| MISTRAL mode, endpoint, ports, schema, and cell map | *Pending - to be supplied* |
-| EvapControl mode, window or log source, and schema | *Pending - to be supplied* |
-| Classifier package, enable state, and shadow state | *Pending - to be supplied* |
-| Save root, filename prefix, and session naming | *Pending - to be supplied* |
-| Sampling, continuous capture, and logging intervals | *Pending - to be supplied* |
-
-**Approved by / revision / date:** *Pending - to be supplied*
+| Camera | `vimba` - direct AVT camera read |
+| Pyrometer | `modbus` - COM3, 115200 baud, device 1, RTS off, `raw_serial` backend |
+| MISTRAL | `ads` - chamber-specific read-only ADS profile, 7 cells |
+| EvapControl | `elog` - direct read from the Ch-MBE `.elo` log directory |
 
 <a id="ombe-approved-defaults"></a>
-### O-MBE approved defaults
+### O-MBE GUI startup defaults
 
 This record applies only to the [O-MBE launch route](#ombe-launch-route).
 
-| Configuration item | Owner-approved default |
+| Selector | Startup selection and source |
 | --- | --- |
-| GUI launcher and chamber profile | *Pending - to be supplied* |
-| RHEED source, mode, source window, ROI, and crop | *Pending - to be supplied* |
-| Pyrometer mode, port, baud, RTS, and backend | *Pending - to be supplied* |
-| MISTRAL mode, endpoint, ports, schema, and cell map | *Pending - to be supplied* |
-| EvapControl mode, window or log source, and schema | *Pending - to be supplied* |
-| Classifier package, enable state, and shadow state | *Pending - to be supplied* |
-| Save root, filename prefix, and session naming | *Pending - to be supplied* |
-| Sampling, continuous capture, and logging intervals | *Pending - to be supplied* |
+| Camera | `vimba` - direct AVT camera read |
+| Pyrometer | `modbus` - COM4, 115200 baud, device 1, RTS off, `pymodbus` backend |
+| MISTRAL | `ads` - chamber-specific read-only ADS profile, 6 cells |
+| EvapControl | `elog` - direct current `.elo` log read |
 
-**Approved by / revision / date:** *Pending - to be supplied*
+### What remains chamber-owner controlled
 
-### Revision and evidence rule
-
-Keep the chamber owner's approval evidence with the manual release record. When one chamber changes, revise and reapprove only that chamber's register; do not copy the change into the other record. Neither register replaces its chamber SOP.
+These are software startup selections, not permission to ARM. ROI/crop, classifier package and enable state, save root and naming, sampling intervals, and every instrument setpoint remain governed by the matching chamber SOP and owner approval. Each chamber passes its own log directory to `ElogReader`; variables absent from that chamber's schema remain blank rather than being invented.
 
 ## 4. Open the RHEED post-processing labeler
 
@@ -228,7 +239,7 @@ Keep the chamber owner's approval evidence with the manual release record. When 
 
 The ZIP archive must contain exactly one member ending in `session_metadata.json`, exactly one member ending in `heartbeat_log.csv`, and every sibling `frames/` image referenced by the heartbeat rows. Saved-frame elapsed time, heartbeat index, capture sequence, and timezone-aware capture UTC must each increase strictly; gaps are allowed. Do not extract and rename frames manually.
 
-Read `chamber_id` from the session metadata and confirm that it names the intended O-MBE or Ch-MBE source. When the recorded MISTRAL mode is ADS, also preserve its recorded endpoint, ports, and cell count. Compare provenance only with the corresponding [Ch-MBE](#chmbe-approved-defaults) or [O-MBE](#ombe-approved-defaults) owner-approved register; never edit an archive to make it resemble the other chamber.
+Read `chamber_id` from the session metadata and confirm that it names the intended O-MBE or Ch-MBE source. When the recorded MISTRAL mode is ADS, also preserve its recorded endpoint, ports, and cell count. Compare provenance only with the corresponding [Ch-MBE](#chmbe-approved-defaults) or [O-MBE](#ombe-approved-defaults) startup-default record; never edit an archive to make it resemble the other chamber.
 
 ```text
 growth_session.zip
@@ -429,7 +440,7 @@ Browser Import performs immediate client-side provenance checks before replacing
 
 1. Preserve the exact error, time, branch, commit, selected paths, and launcher name.
 2. Do not begin by deleting environments, changing global variables, or force-resetting Git.
-3. Route live-GUI problems through the matching chamber section and approved-default register.
+3. Route live-GUI problems through the matching chamber section and startup-default record.
 4. Follow fail-visible messages; do not guess interface settings or edit data to bypass provenance checks.
 
 First preserve the exact error text, occurrence time, branch, commit, and selected paths. Do not begin by deleting environments, changing global variables, or force-resetting Git. A live-driver warning is fail-visible behavior, not a prompt for ad hoc dependency installation.
@@ -450,12 +461,12 @@ First preserve the exact error text, occurrence time, branch, commit, and select
 <a id="chmbe-troubleshooting-route"></a>
 ### Ch-MBE live troubleshooting route
 
-If the physical system is Ch-MBE, confirm that the launcher is `Start Ch-MBE Growth Monitor.cmd`, the title is **Chalcogenide MBE Growth Monitor**, and the chamber identity is `chmbe`. If any disagree, close normally and return to the [Ch-MBE launch route](#chmbe-launch-route). Compare interface selections only with the [Ch-MBE approved-default register](#chmbe-approved-defaults); pending entries must be escalated to the Ch-MBE owner.
+If the physical system is Ch-MBE, confirm that the launcher is `Start Ch-MBE Growth Monitor.cmd`, the title is **Chalcogenide MBE Growth Monitor**, and the chamber identity is `chmbe`. If any disagree, close normally and return to the [Ch-MBE launch route](#chmbe-launch-route). Compare reader selections with the [Ch-MBE startup-default record](#chmbe-approved-defaults); escalate any other unexplained operating value to the Ch-MBE owner.
 
 <a id="ombe-troubleshooting-route"></a>
 ### O-MBE live troubleshooting route
 
-If the physical system is O-MBE, confirm that the launcher is `Start O-MBE Growth Monitor.cmd`, the title is **Oxide MBE Growth Monitor**, and the chamber identity is `ombe`. If any disagree, close normally and return to the [O-MBE launch route](#ombe-launch-route). Compare interface selections only with the [O-MBE approved-default register](#ombe-approved-defaults); pending entries must be escalated to the O-MBE owner.
+If the physical system is O-MBE, confirm that the launcher is `Start O-MBE Growth Monitor.cmd`, the title is **Oxide MBE Growth Monitor**, and the chamber identity is `ombe`. If any disagree, close normally and return to the [O-MBE launch route](#ombe-launch-route). Compare reader selections with the [O-MBE startup-default record](#ombe-approved-defaults); escalate any other unexplained operating value to the O-MBE owner.
 
 ### Minimum evidence for the maintainer
 
@@ -498,7 +509,7 @@ Get-FileHash '.\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf' -Algo
 
 ### Companion text and AI prompts
 
-Use this Markdown manual for searchable text and the [English AI prompt pack](RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md) for constrained AI-assisted reading. The prompt pack does not authorize an AI to invent pending defaults or make instrument-control decisions.
+Use this Markdown manual for searchable text and the [English AI prompt pack](RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md) for constrained AI-assisted reading. The prompt pack does not authorize an AI to invent undocumented operating values or make instrument-control decisions.
 
 <a id="chmbe-startup-checklist"></a>
 ### Ch-MBE startup checklist
@@ -507,7 +518,7 @@ Use this Markdown manual for searchable text and the [English AI prompt pack](RH
 - [ ] Use `Start Ch-MBE Growth Monitor.cmd` or **Ch-MBE Growth Monitor**; never use the O-MBE launcher for this chamber.
 - [ ] Confirm the title **Chalcogenide MBE Growth Monitor** and chamber identity `chmbe`.
 - [ ] Confirm the launcher log identifies Ch-MBE, the intended repository, branch, commit, Python interpreter, and required optional drivers.
-- [ ] Compare every selected interface and logging field only with the [Ch-MBE approved-default register](#chmbe-approved-defaults); stop on any pending or unexplained value.
+- [ ] Confirm `vimba / modbus / ads / elog` against the [Ch-MBE startup-default record](#chmbe-approved-defaults); stop on any unexplained value.
 - [ ] Confirm an advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the Ch-MBE SOP.
 - [ ] ARM only when the authorized operator and Ch-MBE SOP permit it; this checklist grants no operating or setpoint authority.
 
@@ -518,7 +529,7 @@ Use this Markdown manual for searchable text and the [English AI prompt pack](RH
 - [ ] Use `Start O-MBE Growth Monitor.cmd` or **O-MBE Growth Monitor**; never use the Ch-MBE launcher for this chamber.
 - [ ] Confirm the title **Oxide MBE Growth Monitor** and chamber identity `ombe`.
 - [ ] Confirm the launcher log identifies O-MBE, the intended repository, branch, commit, Python interpreter, and required optional drivers.
-- [ ] Compare every selected interface and logging field only with the [O-MBE approved-default register](#ombe-approved-defaults); stop on any pending or unexplained value.
+- [ ] Confirm `vimba / modbus / ads / elog` against the [O-MBE startup-default record](#ombe-approved-defaults); stop on any unexplained value.
 - [ ] Confirm an advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the O-MBE SOP.
 - [ ] ARM only when the authorized operator and O-MBE SOP permit it; this checklist grants no operating or setpoint authority.
 

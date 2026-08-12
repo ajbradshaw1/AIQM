@@ -36,6 +36,8 @@ class MBESystemConfig:
     # Default driver mode selections for the Session config panel.
     # The GUI uses these as setCurrentText() seeds; the grower can still
     # override them manually before arming.
+    camera_mode_default: str = "vimba"
+    pyrometer_mode_default: str = "modbus"
     mistral_mode_default: str = "screengrab"
     evap_mode_default: str = "elog"
 
@@ -173,10 +175,10 @@ CHALCOGENIDE_MBE = MBESystemConfig(
     name="Chalcogenide MBE",
     chamber_id="chmbe",
     mistral_mode_default="ads",
-    # elog mode is left as screengrab default because Ch-MBE's elog
-    # variable map differs from Bulbasaur's (different cell names).
-    # Switch to "elog" once the Ch-MBE var_map is confirmed.
-    evap_mode_default="screengrab",
+    # Direct-read the chamber's own .elo file. Ch-MBE cell temperatures
+    # continue to come from ADS; ElogReader safely leaves schema fields that
+    # are absent from this chamber blank.
+    evap_mode_default="elog",
     evap_log_dir=r"C:\evap_control_1.2.0.48\log",
     # Cell1 = manipulator (substrate heater — confirmed Jul 22 2026).
     # Cell2–7 physical mapping (Fe/Se/Te cracker) pending Jiangang

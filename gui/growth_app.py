@@ -667,7 +667,9 @@ class GrowthApp(QMainWindow):
 
         if not self.evap_worker or not self.evap_worker.isRunning():
             self.evap_worker = EvapControlWorker(
-                mode=evap_mode, poll_interval=1.0,
+                mode=evap_mode,
+                poll_interval=1.0,
+                chamber_config=self._chamber_config,
             )
             self.evap_worker.state_updated.connect(self._on_evap_state)
             self.evap_worker.start()
