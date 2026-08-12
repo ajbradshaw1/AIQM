@@ -19,11 +19,12 @@ $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 if (-not [Environment]::Is64BitOperatingSystem -or -not [Environment]::Is64BitProcess) {
     throw "Release packaging must run in 64-bit PowerShell on 64-bit Windows."
 }
-$commit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
+$gitSafety = "safe.directory=$repositoryRoot"
+$commit = (& git -c $gitSafety -C $repositoryRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or -not $commit) {
     throw "Could not resolve the source commit."
 }
-$dirty = (& git -C $repositoryRoot status --porcelain --untracked-files=no) -join "`n"
+$dirty = (& git -c $gitSafety -C $repositoryRoot status --porcelain) -join "`n"
 if ($LASTEXITCODE -ne 0 -or $dirty.Trim()) {
     throw "Tracked files are dirty. Commit the intended release contents first."
 }
@@ -38,7 +39,7 @@ $checksumPath = "$releaseZip.sha256"
 
 try {
     New-Item -ItemType Directory -Path $scratch -Force | Out-Null
-    & git -C $repositoryRoot archive --format=zip --output=$sourceZip HEAD
+    & git -c $gitSafety -C $repositoryRoot archive --format=zip --output=$sourceZip HEAD
     if ($LASTEXITCODE -ne 0) {
         throw "git archive failed."
     }
