@@ -127,7 +127,7 @@ Configure in the Session tab → Config form before ARM/START:
 | Channel | Modes |
 |---|---|
 | RHEED camera | `vimba` (vmbpy SDK, bypasses kSA) / `screengrab` (WGC reads detached kSA Live Video by HWND) / `screengrab_mss` (legacy diagnostic) / `dummy` |
-| Pyrometer | `modbus` (Modbus RTU on COM4) / `exactus` (binary serial alternative) / `screengrab` (TemperaSure UI) / `dummy` |
+| Pyrometer | `modbus` (Modbus RTU — O-MBE COM4, Ch-MBE COM3; the port comes from the chamber config, not a fixed default) / `exactus` (binary serial alternative) / `screengrab` (TemperaSure UI) / `dummy` |
 | EvapControl | `elog` (parses EvapControl's own `.elo` binary log directly) / `screengrab` (OCR) / `dummy` |
 | MISTRAL | `screengrab` (OCR) / `dummy` — no direct-read driver yet |
 
@@ -136,6 +136,13 @@ the detached Live Video window does not contaminate the image. It fails closed
 if the window is minimized, closed, or stops producing frames. OCR screengrabs
 remain monitor-pixel based; direct-read modes also avoid their positioning and
 OCR mis-read failure modes.
+
+For the direct Vimba camera, the Session tab also provides a manual exposure
+setting in milliseconds. It is applied on **ARM**, verified by camera
+readback, and recorded in `session_metadata.json`. The setting is volatile
+(the application never saves a camera user set), requires Full camera access
+and `ExposureAuto=Off`, and is locked with the other hardware configuration
+while armed or running. Select **Keep current** to perform no exposure write.
 
 ### Output per session
 

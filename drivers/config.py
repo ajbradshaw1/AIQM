@@ -111,6 +111,10 @@ class MBESystemConfig:
     # Camera settings
     camera_index: int = 0
     camera_fps: float = 1.0
+    # Optional manual exposure for the direct Vimba path. ``None`` leaves
+    # the camera's current volatile setting untouched. Exposure is in
+    # microseconds to match the GenICam feature (ExposureTimeAbs).
+    camera_exposure_us: Optional[float] = None
 
     # MISTRAL ADS backend config — per-chamber Beckhoff PLC endpoint.
     # Empty ads_netid disables the "ads" MistralWorker mode for the chamber.
@@ -161,6 +165,25 @@ OXIDE_MBE = MBESystemConfig(
         r"C:\Users\Lab10\Desktop\Automated RHEED Image Acquisition"
         r"\Acquiring Images Via Python Script Tests\Stream Images"
     ),
+    # 500 ms on O-MBE — deliberately NOT the Ch-MBE value. Both chambers now
+    # request a manual exposure and fail ARM closed if the write cannot be
+    # proven applied, but the value is per-chamber, not shared.
+    #
+    # NOT YET MEASURED ON THIS CHAMBER. 500 ms is the grower-specified
+    # starting point pending O-MBE's own hardware acceptance run; Ch-MBE's
+    # 300 ms is a real measurement and does not transfer. Record the confirmed
+    # readback here once O-MBE acceptance is run.
+    #
+    # Headroom: the driver refuses any exposure above 90% of the trigger
+    # period, which is 900 ms at the 1 Hz default. 500 ms clears that.
+    #
+    # OPERATIONAL CONSEQUENCE: a manual write needs Full camera access, so
+    # kSA / Vimba X Viewer must release the camera before ARM on this chamber
+    # too. O-MBE previously defaulted to "Keep current", which performed no
+    # write and therefore coexisted with kSA. Since camera_mode_default is now
+    # "vimba", this fires on the FIRST ARM with no grower action selecting the
+    # direct path. See docs/acceptance_camera_exposure_ombe.md.
+    camera_exposure_us=500_000.0,
     # ADS: 6 cells on Bulbasaur (Cell7 raises symbol-not-found).
     # ads_display_confirmed=False because cell_display uses material
     # labels (Sr, Eu, Er, etc.) and the ADS Cell{N} → material mapping
@@ -218,6 +241,11 @@ CHALCOGENIDE_MBE = MBESystemConfig(
     pyrometer_modbus_backend="raw_serial",
     single_images_folder=r"C:\Dropbox\Data\RHEED\RHEED_YangGroup\FeSeTe_STO",
     stream_images_folder=r"C:\Dropbox\Data\RHEED\RHEED_YangGroup\FeSeTe_STO",
+    # VERIFIED 2026-08-06 on the Ch-MBE Manta G-033B (serial
+    # 50-0503464907): ExposureTimeAbs is writable and reads 300000 us with
+    # ExposureAuto=Off. This remains a per-arm volatile write; UserSetSave is
+    # never called.
+    camera_exposure_us=300_000.0,
     # ADS: 7 cells on Ch-MBE (Task #191 validated Jul 22 2026).
     # ads_display_confirmed=True because cell_display uses numeric
     # labels aligned with ADS Cell{N} (Cell1=Substrate, Cell2-7 by

@@ -20,6 +20,8 @@ where a kSA tooltip appeared inside a captured RHEED frame).
 """
 
 import logging
+import math
+import sys
 import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -95,6 +97,181 @@ def _configure_rheed_user32_argtypes() -> None:
     user32.IsWindow.restype = ctypes.wintypes.BOOL
     user32.IsIconic.argtypes = [ctypes.wintypes.HWND]
     user32.IsIconic.restype = ctypes.wintypes.BOOL
+
+
+class _Unreadable:
+    """Sentinel: a camera feature exists but its accessor raised.
+
+    Distinct from ``None``, which means the accessor is absent. A feature
+    that cannot be read is not a feature that is absent — the first leaves
+    a safety precondition unproven, the second means there is no
+    precondition to prove. See VmbCamera._optional_feature_call.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<unreadable>"
+
+
+UNREADABLE = _Unreadable()
+
+
+class _Absent:
+    """Sentinel: the camera genuinely does not expose this feature.
+
+    Distinct from ``UNREADABLE``, which means the node exists (or its status
+    could not be determined) and the lookup itself failed. Absence is a fact
+    about the camera and may be tolerated for optional features; an
+    unreadable lookup is an unproven precondition and must not be.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<absent>"
+
+
+ABSENT = _Absent()
+
+
+class RestorationFailedError(RuntimeError):
+    """A rollback could not be proven, so the camera is in an unknown state.
+
+    Raised only when the driver has mutated the camera and then failed to put
+    it back. The original failure is always chained as ``__cause__`` — losing
+    it would leave an operator with a restoration error and no idea what
+    provoked it.
+    """
+
+
+# Process-wide lease registry: which camera each live setup thread owns.
+#
+# The orphan guard cannot live on a VmbCamera instance. The GUI discards a
+# failed worker and builds a new driver object, so an instance-scoped check
+# sees a pristine object while the previous instance's daemon thread is still
+# blocked inside the SDK holding the same physical camera. Reproduced: a
+# second VmbCamera connected and streamed against the same camera index while
+# the first one's setup thread was still alive.
+#
+# Keyed by camera index until a stable device identity is known, then re-keyed
+# to that identity. Released only in the owning setup thread's finally.
+_CAMERA_LEASES: dict = {}
+_CAMERA_LEASE_LOCK = threading.Lock()
+
+
+def _acquire_camera_lease(key, owner: str):
+    """Claim a camera, returning a token the owning thread releases with.
+
+    The lease is acquired on the CALLING thread (connect()) but released on
+    the SETUP thread, so ownership cannot be identified by
+    ``threading.current_thread()`` at both ends — doing so silently never
+    matched, and the lease was never released. The token is the identity.
+
+    ``thread`` is filled in by _bind_camera_lease once the thread object
+    exists; until then the lease counts as held, so a concurrent connect
+    cannot slip through the gap between claim and start.
+    """
+    token = object()
+    with _CAMERA_LEASE_LOCK:
+        holder = _CAMERA_LEASES.get(key)
+        if holder is not None:
+            thread = holder["thread"]
+            if thread is None or thread.is_alive():
+                raise RuntimeError(
+                    f"Camera {key!r} is already held by a live setup thread "
+                    f"({holder['owner']}). Refusing a second connection to "
+                    "the same camera — wait for it to drain, or power-cycle "
+                    "if it never does."
+                )
+        _CAMERA_LEASES[key] = {"thread": None, "owner": owner, "token": token}
+    return (key, token)
+
+
+def _bind_camera_lease(lease, thread) -> None:
+    """Attach the setup thread to a lease claimed by its parent."""
+    if lease is None:
+        return
+    key, token = lease
+    with _CAMERA_LEASE_LOCK:
+        holder = _CAMERA_LEASES.get(key)
+        if holder is not None and holder["token"] is token:
+            holder["thread"] = thread
+
+
+def _reset_camera_leases() -> None:
+    """Drop every lease. TEST-HARNESS ONLY.
+
+    Represents "the process ended and the cameras went away". Production code
+    must never call this: it exists so a test harness that tears down its fake
+    SDK between cases does not inherit a lease held by a thread the previous
+    case deliberately left blocked.
+    """
+    with _CAMERA_LEASE_LOCK:
+        _CAMERA_LEASES.clear()
+
+
+def _release_camera_lease(lease) -> None:
+    """Release a lease, but only if this token still owns it."""
+    if lease is None:
+        return
+    key, token = lease
+    with _CAMERA_LEASE_LOCK:
+        holder = _CAMERA_LEASES.get(key)
+        if holder is not None and holder["token"] is token:
+            del _CAMERA_LEASES[key]
+
+
+class _HardwareTransaction:
+    """Every camera mutation in one ARM, rolled back together on failure.
+
+    ARM is a single hardware transaction: access mode, exposure, four trigger
+    features and start_streaming. Treating those as independent steps meant a
+    failure late in the sequence left earlier mutations applied — a camera
+    sitting at a requested exposure the GUI had reported as a failed ARM.
+
+    Mutations are recorded BEFORE the setter runs, because a setter can apply
+    the value and then block or raise. Rollback restores in reverse order and
+    verifies each one; anything unproven raises RestorationFailedError with
+    the original failure chained.
+    """
+
+    def __init__(self, verify):
+        self._entries: list = []
+        self._verify = verify
+        self.streaming_attempted = False
+        self.committed = False
+
+    def record(self, feature_name: str, feature, original) -> None:
+        self._entries.append((feature_name, feature, original))
+
+    def rollback(self, cam, cause: BaseException) -> None:
+        """Undo everything, newest first. Never raises the rollback's own
+        bookkeeping errors in place of ``cause``."""
+        failures = []
+        if self.streaming_attempted:
+            # May have partially succeeded before raising, so this is
+            # attempted unconditionally rather than only on clean success.
+            try:
+                cam.stop_streaming()
+            except Exception as exc:  # noqa: BLE001
+                log.debug("stop_streaming during rollback: %s", exc)
+        for feature_name, feature, original in reversed(self._entries):
+            try:
+                feature.set(original)
+                if not self._verify(feature, original):
+                    failures.append(feature_name)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("restore of %s raised: %s", feature_name, exc)
+                failures.append(feature_name)
+        self._entries.clear()
+        if failures:
+            raise RestorationFailedError(
+                "The camera was modified during a failed ARM and could not be "
+                f"restored: {', '.join(failures)}. POWER-CYCLE THE CAMERA "
+                "before the next session; its current configuration is not "
+                "what either the GUI or the stored user set describes."
+            ) from cause
 
 
 class FrameNotYetAvailableError(RuntimeError):
@@ -202,6 +379,14 @@ class VmbCamera(RheedCamera):
     # Valid access_mode values. Kept as a class-level constant so tests
     # can introspect the accepted set without importing the module twice.
     _ACCESS_MODE_CHOICES = ("auto", "full", "read")
+    _EXPOSURE_FEATURE_CANDIDATES = (
+        "ExposureTimeAbs",  # confirmed on Ch-MBE Manta G-033B
+        "ExposureTime",     # SFNC spelling on newer Allied Vision cameras
+    )
+    # Preserve at least 10% timing headroom between integration time and the
+    # software-trigger period. Camera transport/readout overhead makes an
+    # exposure equal to the entire period unsafe even if 1/exposure looks OK.
+    _MAX_EXPOSURE_PERIOD_FRACTION = 0.90
 
     def __init__(
         self,
@@ -210,14 +395,63 @@ class VmbCamera(RheedCamera):
         bit_depth: int = 12,
         apply_palette: bool = True,
         access_mode: str = "auto",
+        exposure_us: Optional[float] = None,
     ):
         if access_mode not in self._ACCESS_MODE_CHOICES:
             raise ValueError(
                 f"access_mode must be one of {self._ACCESS_MODE_CHOICES}, "
                 f"got {access_mode!r}"
             )
+        # Fail closed on non-finite and boolean inputs BEFORE any arithmetic.
+        # `nan <= 0` is False, so NaN passed the old positivity test; inf gave
+        # a zero-length trigger period (a spin loop); and bool is an int
+        # subclass, so True became a 1.0 Hz trigger nobody asked for.
+        if not self._usable_number(trigger_hz):
+            raise ValueError(
+                f"trigger_hz must be a finite positive number, got "
+                f"{trigger_hz!r}"
+            )
+        trigger_hz = float(trigger_hz)
+        # A finite subnormal survives the check above but overflows on
+        # inversion: 1.0 / 5e-324 is inf, which later reaches
+        # Event.wait(inf) and raises from inside the stream thread — far from
+        # the value that caused it. Validate the DERIVED period, which is what
+        # the trigger loop and the exposure ceiling actually use.
+        period_s = 1.0 / trigger_hz
+        if not (
+            math.isfinite(period_s)
+            and 0.0 < period_s <= threading.TIMEOUT_MAX
+        ):
+            # threading.TIMEOUT_MAX, not merely "finite": 1e-308 Hz inverts to
+            # a finite ~1e308 s period that Event.wait() rejects with
+            # OverflowError from inside the stream thread, far from the value
+            # that caused it. The loop must be able to actually wait on it.
+            raise ValueError(
+                f"trigger_hz={trigger_hz!r} yields an unusable trigger period "
+                f"({period_s!r} s); it must be positive and no greater than "
+                f"threading.TIMEOUT_MAX ({threading.TIMEOUT_MAX:g} s)"
+            )
+        if exposure_us is not None:
+            if not self._usable_number(exposure_us):
+                raise ValueError(
+                    f"exposure_us must be a finite positive number when "
+                    f"provided, got {exposure_us!r}"
+                )
+            exposure_us = float(exposure_us)
+            safe_max_us = (
+                1_000_000.0 / trigger_hz
+                * self._MAX_EXPOSURE_PERIOD_FRACTION
+            )
+            if exposure_us > safe_max_us:
+                raise ValueError(
+                    f"exposure_us={exposure_us:.0f} is too long for "
+                    f"trigger_hz={trigger_hz:.3g}; use <= {safe_max_us:.0f} us "
+                    "to preserve 10% acquisition headroom"
+                )
         self._camera_index = camera_index
         self._trigger_hz = trigger_hz
+        self._requested_exposure_us = exposure_us
+        self._exposure_us: Optional[float] = None
         self._bit_depth = bit_depth
         # Fixed normalization denominator (4095 for 12-bit Manta G-033B).
         # Used to map raw uint16 ADC samples into the uint8 range while
@@ -242,6 +476,10 @@ class VmbCamera(RheedCamera):
         # _frame_lock — the handler writes it under the same lock.
         self._stream_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        # Serialises the terminal decision (committed vs cancelled) so a
+        # connect() timeout and a setup-thread commit cannot both win.
+        self._lifecycle_lock = threading.Lock()
+        self._lease_key = None
         self._ready_event = threading.Event()
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
@@ -267,6 +505,19 @@ class VmbCamera(RheedCamera):
                 "or use ScreenGrabCamera for screen-scrape mode."
             )
 
+        # An orphaned setup thread from a previous cycle may still be blocked
+        # inside an SDK call. Starting a second one would give two threads the
+        # same camera, and the older one can still reach its exposure write
+        # once the block clears. Refuse until it has actually drained.
+        previous = self._stream_thread
+        if previous is not None and previous.is_alive():
+            raise RuntimeError(
+                "A previous Vimba setup thread is still running (it did not "
+                f"exit within {self.DISCONNECT_TIMEOUT_S:.0f}s of disconnect). "
+                "Refusing to connect a second thread to the same camera — "
+                "wait for it to drain, or power-cycle if it never does."
+            )
+
         # Fresh primitives per connect cycle — a connect after a previous
         # disconnect must not observe stale event state.
         self._stop_event = threading.Event()
@@ -274,12 +525,20 @@ class VmbCamera(RheedCamera):
         with self._error_lock:
             self._stream_error = None
             self._last_frame_error = None
+        self._exposure_us = None
         with self._frame_lock:
             self._latest_frame = None
 
+        # Process-level, not instance-level: the GUI discards a failed worker
+        # and builds a fresh driver object, so an instance check sees a clean
+        # slate while the previous daemon still holds the physical camera.
+        self._lease_key = _acquire_camera_lease(
+            self._camera_index, f"VmbCamera(index={self._camera_index})",
+        )
         self._stream_thread = threading.Thread(
             target=self._stream_loop, name="VmbCameraStream", daemon=True,
         )
+        _bind_camera_lease(self._lease_key, self._stream_thread)
         self._stream_thread.start()
 
         # Block until the thread is streaming, has reported a setup failure,
@@ -299,6 +558,595 @@ class VmbCamera(RheedCamera):
             "VmbCamera connected: camera_index=%d, trigger_hz=%.2f, bit_depth=%d",
             self._camera_index, self._trigger_hz, self._bit_depth,
         )
+
+    @staticmethod
+    def _optional_feature(owner, name: str):
+        """Look a feature up without trusting getattr's AttributeError guard.
+
+        vmbpy resolves features through ``__getattr__`` against the camera's
+        live GenICam node map, so an unavailable or unreadable node can
+        surface as an SDK-specific error rather than the AttributeError that
+        ``getattr(..., default)`` suppresses. That matters for the exposure
+        candidate search: an unguarded lookup of ``ExposureTimeAbs`` on a
+        camera that raises for it would abort before ``ExposureTime`` — the
+        valid alternative — is ever tried, and the camera would be reported
+        as having no exposure feature at all.
+        """
+        try:
+            return getattr(owner, name, None)
+        except Exception:  # noqa: BLE001 — vmbpy raises SDK-specific types
+            log.debug("Feature lookup for %r raised; treating as absent", name)
+            return None
+
+    @staticmethod
+    def _lookup_feature(owner, name: str):
+        """Three-outcome feature lookup: the feature, ``ABSENT``, or ``UNREADABLE``.
+
+        ``_optional_feature`` deliberately collapses a raising lookup into
+        "absent". That is correct for the exposure candidate search, where the
+        fallback is simply the next spelling — but it is fail-OPEN for a safety
+        precondition. An SDK error while locating ``ExposureAuto`` would be
+        reported as "this camera has no auto-exposure", and the caller's
+        ``is not None`` check would pass without ever proving the auto loop is
+        off. The write would then race it.
+
+        This is the fourth time this codebase has conflated absent with
+        unreadable in a vmbpy accessor; the distinction is the whole point of
+        the sentinels. Safety-critical callers must treat ``UNREADABLE`` as a
+        refusal and may tolerate ``ABSENT`` only where absence is genuinely
+        benign — i.e. where there is no precondition left to prove.
+        """
+        try:
+            return getattr(owner, name)
+        except AttributeError:
+            return ABSENT
+        except Exception:  # noqa: BLE001 — vmbpy raises SDK-specific types
+            log.debug("Feature lookup for %r raised; unreadable", name)
+            return UNREADABLE
+
+    @staticmethod
+    def _accessor_call(feature, method_name: str):
+        """Call an accessor with three honest outcomes.
+
+        * accessor attribute genuinely missing -> ``ABSENT``
+        * present but unusable, or it raised   -> ``UNREADABLE``
+        * otherwise                            -> the value
+
+        "Present but unusable" covers ``get = None`` and any non-callable. The
+        older helper returned its ``default`` for those, which is how a feature
+        that exists but cannot answer was read as "no such feature" — and
+        absence is tolerated for the optional ones. A safety precondition then
+        passed without ever being evaluated.
+
+        Only genuine ABSENCE may be tolerated, and only where the caller has
+        nothing left to prove. Anything else is an unproven precondition.
+        """
+        try:
+            method = getattr(feature, method_name)
+        except AttributeError:
+            return ABSENT
+        except Exception:  # noqa: BLE001 — vmbpy raises SDK-specific types
+            log.debug("Accessor lookup %r raised; unreadable", method_name)
+            return UNREADABLE
+        if method is None or not callable(method):
+            log.debug("Accessor %r is present but not callable; unreadable",
+                      method_name)
+            return UNREADABLE
+        try:
+            return method()
+        except Exception:  # noqa: BLE001 — vmbpy raises SDK-specific types
+            log.debug("Accessor %r raised; unreadable", method_name)
+            return UNREADABLE
+
+    # Every COMPLETE representation that counts as auto-exposure disabled.
+    #
+    # Matched whole, never by suffix and never after discarding an arbitrary
+    # prefix. Splitting on "." and keeping the tail accepted "Bogus.Off" and
+    # "ExposureAuto.Not.Off" — strings that say nothing about this camera's
+    # ExposureAuto node, or say the opposite. The accepted forms are the ones
+    # vmbpy actually produces for an enum feature: the bare entry name, the
+    # feature-qualified name, and the EnumEntry repr wrapping either.
+    _EXPOSURE_AUTO_OFF = "off"
+
+    @classmethod
+    def _is_exposure_auto_off(cls, value) -> bool:
+        """Whether an ExposureAuto read proves the auto loop is disabled.
+
+        Compares the WHOLE normalised representation against a canonical set.
+        A suffix test accepted "NotOff" and "TurnedOff"; discarding a dotted
+        prefix additionally accepted "Bogus.Off" and "ExposureAuto.Not.Off".
+        Neither says this camera's auto-exposure is off, and one says the
+        opposite.
+
+        vmbpy enum reads surface as the entry name, a feature-qualified name,
+        or an EnumEntry repr; a driver may also hand back an object exposing
+        ``get_name()``/``name``. All are normalised to a complete string and
+        matched in full.
+        """
+        if value is None:
+            return False
+        # vmbpy's EnumFeature.get() returns an EnumEntry whose string form is
+        # the bare entry name, so this is exact equality against "off" and
+        # nothing else. Successive attempts here each widened it — a suffix
+        # ("NotOff"), a dotted tail ("Bogus.Off"), a set of qualified
+        # spellings the SDK does not emit, then quote stripping that admitted
+        # "'Off'" — and every widening added a form that can WRONGLY authorise
+        # a hardware write. Whitespace is the only normalisation applied.
+        return str(value).strip().casefold() == cls._EXPOSURE_AUTO_OFF
+
+    class _CancelledError(RuntimeError):
+        """The connect cycle was abandoned while setup was still running."""
+
+    def _raise_if_cancelled(self, where: str) -> None:
+        """Abort setup if connect() gave up or disconnect() ran.
+
+        The setup thread can outlive both. connect() returns after
+        CONNECT_TIMEOUT_S whether or not the thread is finished, and
+        disconnect() only joins for DISCONNECT_TIMEOUT_S — so a thread blocked
+        inside an SDK call could wake afterwards and carry on configuring a
+        camera the GUI had already reported as failed and released. Observed:
+        connect() timed out, disconnect() returned with no write, the blocked
+        accessor was then released, and the orphan wrote 250000 us and started
+        streaming.
+
+        Checked at every point where the next statement would touch the camera
+        or publish state derived from it.
+        """
+        if self._stop_event.is_set():
+            raise self._CancelledError(
+                f"Vimba setup cancelled ({where}); the connect cycle was "
+                "abandoned before this step ran."
+            )
+
+    @staticmethod
+    def _finite_real(value) -> bool:
+        """True for a finite, non-boolean real number (zero and negatives OK).
+
+        ``bool`` is excluded because it is an ``int`` subclass, so a device
+        returning True for a range endpoint would otherwise be read as 1.0.
+        """
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        return math.isfinite(float(value))
+
+    @classmethod
+    def _matches(cls, observed: float, expected: float) -> bool:
+        """Tight equality for an exposure the device was told to apply.
+
+        Deliberately NOT a tolerance of one whole increment. The request has
+        already been snapped onto the device's own grid, so the device should
+        land exactly on it; allowing a full increment of slack accepted a
+        camera that quantised somewhere else entirely and reported a different
+        exposure than the one the GUI confirms to the grower.
+
+        The remaining slack is float-representation noise only. A device that
+        rounds off a grid it never declared will fail this and be restored —
+        which is the intended fail-closed outcome, not a bug: the exposure the
+        frames were taken at would otherwise be unknown.
+        """
+        return math.isclose(observed, expected, rel_tol=1e-9, abs_tol=1e-6)
+
+    @staticmethod
+    def _usable_number(value) -> bool:
+        """True for a finite, positive, non-boolean real number.
+
+        ``bool`` is excluded deliberately: it is a subclass of ``int``, so
+        ``isinstance(True, (int, float))`` passes and a camera returning True
+        for a frame-rate limit would otherwise be compared as 1.0 fps.
+        """
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        return math.isfinite(float(value)) and float(value) > 0.0
+
+    @classmethod
+    def _optional_feature_call(cls, feature, method_name: str, default=None):
+        """Call an optional read accessor, distinguishing absent from broken.
+
+        Three outcomes, and the difference between the last two is the whole
+        point:
+
+        * accessor missing        -> ``default``    (feature cannot answer)
+        * accessor raised         -> ``UNREADABLE`` (feature exists, read failed)
+        * otherwise               -> the value
+
+        Collapsing "raised" into "absent" would silently skip validation that
+        the caller believes it performed. A camera whose ``ExposureAuto`` read
+        fails is not a camera without auto-exposure — it is a camera whose
+        auto-exposure state is unknown, and a manual write must refuse rather
+        than race the auto loop. Safety-critical callers therefore check for
+        ``UNREADABLE`` explicitly; only genuinely optional reads (increment)
+        treat it as absent.
+
+        The post-``set`` readback deliberately does **not** go through here —
+        there a raising ``get()`` must propagate so the original exposure is
+        restored.
+        """
+        # Deliberately NOT routed through _optional_feature: that helper maps
+        # a raising lookup to "absent", which is right for the camera-level
+        # candidate search (fall through to the next spelling) and wrong
+        # here. An accessor whose lookup raises is a failed read, not a
+        # missing one, and must fail closed like any other failed read.
+        try:
+            method = getattr(feature, method_name, None)
+        except Exception:  # noqa: BLE001 — vmbpy raises SDK-specific types
+            log.debug("Accessor lookup %r raised; unreadable", method_name)
+            return UNREADABLE
+        if method is None or not callable(method):
+            return default
+        try:
+            return method()
+        except Exception:  # noqa: BLE001 — vmbpy raises SDK-specific types
+            log.debug("Feature accessor %r raised; unreadable", method_name)
+            return UNREADABLE
+
+    def _configure_exposure(self, cam, mode: str, txn=None) -> None:
+        """Read or apply the requested manual exposure before streaming.
+
+        A requested write is fail-closed: it requires Full access,
+        ExposureAuto=Off, a writable numeric feature, valid device range, an
+        exact readback, and an achievable frame-rate limit. If validation
+        after ``set`` fails, the original value is restored before raising.
+        No user-set save command is issued, so the change remains volatile.
+        """
+        feature_name = next(
+            (
+                name for name in self._EXPOSURE_FEATURE_CANDIDATES
+                if self._optional_feature(cam, name) is not None
+            ),
+            None,
+        )
+        if feature_name is None:
+            if self._requested_exposure_us is None:
+                return
+            raise RuntimeError(
+                "Manual exposure requested, but neither ExposureTimeAbs nor "
+                "ExposureTime exists on this camera"
+            )
+
+        self._raise_if_cancelled("before reading the current exposure")
+        feature = self._optional_feature(cam, feature_name)
+        current = self._accessor_call(feature, "get")
+        # PROVENANCE GATE. This value is published as CameraState.exposure_us
+        # and lands in session metadata as the confirmed exposure, so an
+        # unusable read must stay None rather than becoming a recorded number.
+        # `isinstance(current, (int, float))` admitted NaN and inf verbatim and
+        # silently turned True into 1.0 us.
+        if self._usable_number(current):
+            self._exposure_us = float(current)
+        else:
+            self._exposure_us = None
+            if current is not ABSENT and current is not UNREADABLE:
+                log.warning(
+                    "%s reported an unusable exposure (%r); recording no "
+                    "confirmed exposure for this arm rather than publishing "
+                    "an invalid one", feature_name, current,
+                )
+            else:
+                log.warning(
+                    "%s could not be read; recording no confirmed exposure "
+                    "for this arm", feature_name,
+                )
+        if self._requested_exposure_us is None:
+            # Keep-current: no write, and provenance stays honest above.
+            return
+        if mode != "full":
+            raise RuntimeError(
+                "Manual exposure requires Full camera access. Close kSA or "
+                "Vimba X Viewer, then disarm and arm again; the GUI refused "
+                "to pretend the requested exposure was applied in Read mode."
+            )
+
+        # A camera with no ExposureAuto feature has no auto loop to race, so
+        # genuine ABSENCE is tolerated. A lookup that RAISED proves nothing —
+        # it must refuse, not be mistaken for absence.
+        auto_feature = self._lookup_feature(cam, "ExposureAuto")
+        if auto_feature is UNREADABLE:
+            raise RuntimeError(
+                "Manual exposure requires ExposureAuto=Off, but the "
+                "ExposureAuto feature could not be looked up — refusing "
+                "rather than assuming the camera has no auto-exposure loop"
+            )
+        if auto_feature is not ABSENT:
+            # The node exists, so its state MUST be readable and demonstrably
+            # Off. An accessor that is missing, None, non-callable, raising, or
+            # answers None tells us nothing about the auto loop — and "nothing"
+            # is not "off".
+            auto_value = self._accessor_call(auto_feature, "get")
+            if auto_value is UNREADABLE or auto_value is ABSENT:
+                raise RuntimeError(
+                    "Manual exposure requires ExposureAuto=Off, but the "
+                    "ExposureAuto feature exists and could not report its "
+                    "state — refusing rather than racing a possibly active "
+                    "auto-exposure loop"
+                )
+            if auto_value is None:
+                raise RuntimeError(
+                    "ExposureAuto exists but reported no state; refusing "
+                    "rather than assuming the auto-exposure loop is off"
+                )
+            if not self._is_exposure_auto_off(auto_value):
+                raise RuntimeError(
+                    f"Manual exposure requires ExposureAuto=Off; camera "
+                    f"reports {auto_value!r}"
+                )
+
+        # Require a genuine two-Boolean tuple with BOTH bits explicitly True.
+        # `bool(access[1])` authorised the write for the string "False", the
+        # int 1, and any arbitrary object — every non-empty value is truthy,
+        # so a camera that reported its access mode in an unexpected shape was
+        # read as "writable". Readability matters too: the readback check is
+        # meaningless if the feature cannot be read back.
+        access = self._accessor_call(feature, "get_access_mode")
+        if not (
+            isinstance(access, tuple)
+            and len(access) == 2
+            and all(isinstance(bit, bool) for bit in access)
+        ):
+            raise RuntimeError(
+                f"{feature_name} reported an unusable access mode "
+                f"({access!r}); expected a (readable, writable) pair of "
+                "booleans — refusing the write"
+            )
+        readable, writable = access
+        if not (readable and writable):
+            raise RuntimeError(
+                f"{feature_name} is not readable+writable in Full camera "
+                f"access (readable={readable}, writable={writable}). Close "
+                "kSA or the Vimba X Viewer and arm again."
+            )
+        # The original is the restore target. A NaN/inf/boolean here means we
+        # could never put the camera back, so writing at all would be a
+        # one-way change to a grower's camera.
+        if not self._usable_number(current):
+            raise RuntimeError(
+                f"Could not read a usable original {feature_name} "
+                f"({current!r}); refusing to write an exposure that could not "
+                "then be restored"
+            )
+        current = float(current)
+
+        requested = float(self._requested_exposure_us)
+        bounds = self._accessor_call(feature, "get_range")
+        if bounds is UNREADABLE or bounds is ABSENT:
+            raise RuntimeError(
+                f"{feature_name} exposes a range that could not be read — "
+                "refusing the write rather than skipping range validation"
+            )
+        # A valid two-number range is REQUIRED, not optional. Falling through
+        # on a missing or malformed range would perform the write with no
+        # bounds check at all — the caller believes the device range was
+        # validated, so silently skipping it is the same fail-open the
+        # sentinels exist to prevent.
+        if not (
+            isinstance(bounds, tuple)
+            and len(bounds) == 2
+            and all(self._finite_real(b) for b in bounds)
+        ):
+            raise RuntimeError(
+                f"{feature_name} did not report a usable [min, max] range "
+                f"(got {bounds!r}) — refusing the write rather than skipping "
+                "range validation"
+            )
+        low, high = float(bounds[0]), float(bounds[1])
+        if not low <= high:
+            raise RuntimeError(
+                f"{feature_name} reported an inverted range "
+                f"[{low:.0f}, {high:.0f}] us — refusing the write"
+            )
+        if not low <= requested <= high:
+            raise RuntimeError(
+                f"Requested exposure {requested:.0f} us is outside the "
+                f"camera range [{low:.0f}, {high:.0f}] us"
+            )
+        # The ORIGINAL must also lie in the reported range, checked before any
+        # write. If it does not, the two facts are inconsistent — and the value
+        # we would hand back during restoration is one the device has just
+        # declared it cannot accept, so the restore could not succeed. Refusing
+        # here keeps the camera untouched instead of discovering that after the
+        # write has already landed.
+        if not low <= current <= high:
+            raise RuntimeError(
+                f"The camera's current {feature_name} ({current:.0f} us) is "
+                f"outside its own reported range [{low:.0f}, {high:.0f}] us, "
+                "so it could not be restored after a failed write — refusing "
+                "before touching the camera"
+            )
+        # Increment is optional only in the sense that a camera may not HAVE
+        # one. An accessor that exists and fails is a different thing: it means
+        # the quantisation grid is unknown, so the value written might not be
+        # representable. Downgrading that to "no increment" is the same
+        # fail-open pattern as the safety features, so it refuses.
+        increment = self._accessor_call(feature, "get_increment")
+        if increment is UNREADABLE:
+            raise RuntimeError(
+                f"{feature_name} exposes an increment that could not be read "
+                "— refusing rather than writing a value that may not sit on "
+                "the device's quantisation grid"
+            )
+        if increment is ABSENT:
+            increment = None
+        if increment is not None and not self._usable_number(increment):
+            raise RuntimeError(
+                f"{feature_name} reported an unusable increment "
+                f"({increment!r}) — refusing the write"
+            )
+        if increment is not None:
+            requested = low + round((requested - low) / increment) * increment
+            # Re-check AFTER snapping. The earlier bounds test validated the
+            # value the grower asked for, not the value actually about to be
+            # written: rounding to the nearest grid point can step past `high`.
+            # With range (100, 160) and increment 100, a request of 160 snaps
+            # to 200 — outside the device's own declared range, written anyway,
+            # and then "confirmed" by a tolerance wide enough to accept it.
+            if not self._finite_real(requested):
+                raise RuntimeError(
+                    f"{feature_name} quantisation produced an unusable value "
+                    f"({requested!r}) — refusing the write"
+                )
+            if not low <= requested <= high:
+                raise RuntimeError(
+                    f"Quantising to the {increment:g} us grid moved the "
+                    f"request to {requested:.0f} us, outside the camera range "
+                    f"[{low:.0f}, {high:.0f}] us — refusing rather than "
+                    "writing an out-of-range value"
+                )
+            # The timing ceiling must be re-checked too. It was validated in
+            # __init__ against the value the grower asked for, not the value
+            # about to be written. With a 1 Hz trigger, a 800000 us request on
+            # a 500000 us grid snaps to 1000100 us — past the 900000 us
+            # headroom ceiling AND past the whole trigger period. Without
+            # AcquisitionFrameRateLimit to catch it afterwards, that lands on
+            # the camera and quietly over-triggers it.
+            safe_max_us = (
+                1_000_000.0 / self._trigger_hz
+                * self._MAX_EXPOSURE_PERIOD_FRACTION
+            )
+            if requested > safe_max_us:
+                raise RuntimeError(
+                    f"Quantising to the {increment:g} us grid moved the "
+                    f"request to {requested:.0f} us, beyond the "
+                    f"{safe_max_us:.0f} us ceiling that preserves 10% "
+                    f"headroom at {self._trigger_hz:.3g} Hz — refusing"
+                )
+
+        # Validate the setter BEFORE assuming a write can be attempted, so a
+        # missing/non-callable set() is a refusal rather than an AttributeError
+        # that bypasses restoration entirely.
+        setter = getattr(feature, "set", None)
+        if setter is None or not callable(setter):
+            raise RuntimeError(
+                f"{feature_name} exposes no usable set() — refusing the write"
+            )
+
+        # Marked BEFORE invoking, not after it returns. A device can apply the
+        # value and then raise because its acknowledgement was lost; with the
+        # flag set afterwards that path skipped restoration and left the camera
+        # altered. Treating "possibly applied" as "applied" costs one redundant
+        # restore in the never-applied case and prevents a silent
+        # reconfiguration in the other.
+        # Last check before touching the camera. Past this point a
+        # cancellation must run verified restoration, not simply return.
+        self._raise_if_cancelled("immediately before the exposure write")
+
+        # Registered BEFORE invoking, so a setter that applies and then
+        # blocks or raises is still rolled back. From here the exposure is
+        # PROVISIONAL: it is only final once streaming commits.
+        if txn is not None:
+            txn.record(feature_name, feature, current)
+
+        wrote = True
+        try:
+            setter(requested)
+            # Inside the try: a cancellation detected here has to reach the
+            # restoration path, because the write may already have applied.
+            self._raise_if_cancelled("immediately after the exposure write")
+            # Validate BEFORE arithmetic. float(nan) succeeds and then every
+            # comparison against it is False, so `abs(nan - requested) >
+            # tolerance` silently accepted a NaN readback and stored it as the
+            # confirmed exposure.
+            raw_readback = feature.get()
+            if not self._usable_number(raw_readback):
+                raise RuntimeError(
+                    f"{feature_name} readback is not a usable number "
+                    f"({raw_readback!r}) — the applied exposure cannot be "
+                    "confirmed"
+                )
+            readback = float(raw_readback)
+            if not self._matches(readback, requested):
+                raise RuntimeError(
+                    f"{feature_name} readback {readback:.3f} us does not "
+                    f"match the requested {requested:.3f} us"
+                )
+
+            limit_feature = self._lookup_feature(
+                cam, "AcquisitionFrameRateLimit",
+            )
+            # Genuinely ABSENT -> rely on the conservative 90%-of-period
+            # ceiling enforced at construction. A lookup that RAISED is a
+            # failed verification, not an absent feature: refuse and restore.
+            if limit_feature is UNREADABLE:
+                raise RuntimeError(
+                    "AcquisitionFrameRateLimit could not be looked up, so the "
+                    f"{self._trigger_hz:.3f} Hz trigger rate cannot be "
+                    "confirmed achievable at the requested exposure"
+                )
+            if limit_feature is not ABSENT:
+                # The node exists, so it MUST produce a usable number. An
+                # accessor that is missing, None, non-callable, raising, or
+                # answers NaN/inf/<=0 leaves the achievable rate unproven, and
+                # an unproven rate is not a confirmed one.
+                limit = self._accessor_call(limit_feature, "get")
+                if limit is UNREADABLE or limit is ABSENT:
+                    raise RuntimeError(
+                        "AcquisitionFrameRateLimit exists but could not report "
+                        f"a value, so the {self._trigger_hz:.3f} Hz trigger "
+                        "rate cannot be confirmed achievable at the requested "
+                        "exposure"
+                    )
+                if not self._usable_number(limit):
+                    raise RuntimeError(
+                        "AcquisitionFrameRateLimit reported an unusable value "
+                        f"({limit!r}); the {self._trigger_hz:.3f} Hz trigger "
+                        "rate cannot be confirmed achievable"
+                    )
+                if self._trigger_hz > float(limit):
+                    raise RuntimeError(
+                        f"Camera reports a {float(limit):.3f} fps limit at "
+                        f"{readback:.0f} us, below the requested "
+                        f"{self._trigger_hz:.3f} Hz trigger rate"
+                    )
+            self._raise_if_cancelled("before publishing confirmed exposure")
+            self._exposure_us = readback
+            log.info(
+                "VmbCamera manual exposure applied: %s=%.0f us "
+                "(requested %.0f us, volatile)",
+                feature_name, readback, self._requested_exposure_us,
+            )
+        except Exception as exc:  # noqa: BLE001 — re-raised below
+            # With a transaction, rollback is owned there so every mutation is
+            # undone in reverse order. Restoring here as well would write the
+            # original twice and hide ordering bugs. The local path remains for
+            # a direct call with no transaction.
+            if wrote and txn is None:
+                # Restoration must be VERIFIED, not merely attempted. The old
+                # path set the original, read once, and stored whatever came
+                # back without comparing it. A device that silently clamps both
+                # the requested write and the restore would leave the camera
+                # altered while the caller saw only the original error — the
+                # grower's camera changed, and nothing said so.
+                try:
+                    feature.set(current)
+                    restored = feature.get()
+                except Exception as restore_exc:  # noqa: BLE001
+                    log.critical(
+                        "VmbCamera could not restore %s after a failed "
+                        "configuration: %s. The camera is left at an "
+                        "unintended exposure — POWER-CYCLE THE CAMERA.",
+                        feature_name, restore_exc,
+                    )
+                    raise RuntimeError(
+                        f"Exposure configuration failed AND {feature_name} "
+                        f"could not be restored ({restore_exc}). The camera "
+                        "is left at an unintended exposure — power-cycle it "
+                        "before the next arm."
+                    ) from exc
+                if not self._usable_number(restored) or not self._matches(
+                    float(restored), current,
+                ):
+                    log.critical(
+                        "VmbCamera restore of %s did not take: expected "
+                        "%.3f us, camera reports %r. POWER-CYCLE THE CAMERA.",
+                        feature_name, current, restored,
+                    )
+                    raise RuntimeError(
+                        f"Exposure configuration failed and the restore of "
+                        f"{feature_name} could not be verified: expected "
+                        f"{current:.3f} us, camera reports {restored!r}. The "
+                        "camera is left at an unintended exposure — "
+                        "power-cycle it before the next arm."
+                    ) from exc
+                self._exposure_us = float(restored)
+            raise
 
     def _stream_loop(self) -> None:
         """Background thread — owns every vmbpy call for one connect cycle.
@@ -369,6 +1217,10 @@ class VmbCamera(RheedCamera):
         finally:
             self._connected = False
             self._active_access_mode = ""
+            # Released here, in the owning thread, on EVERY exit path — a
+            # lease outliving its thread would lock the camera out forever.
+            if self._lease_key is not None:
+                _release_camera_lease(self._lease_key)
             # Unblock connect() even if setup failed before the set() above.
             self._ready_event.set()
 
@@ -388,31 +1240,64 @@ class VmbCamera(RheedCamera):
         import vmbpy
         access_enum = getattr(vmbpy.AccessMode, mode.capitalize())
 
+        # set_access_mode can block past the timeout; a cancelled Full attempt
+        # must not fall through into Read and open the camera anyway.
+        self._raise_if_cancelled(f"before requesting {mode} access")
         try:
             cam.set_access_mode(access_enum)
         except vmbpy.VmbCameraError as e:
+            self._raise_if_cancelled(f"after {mode} access was denied")
             raise _AccessDenialError(
                 f"AccessMode.{mode.capitalize()} denied at "
                 f"set_access_mode: {e}"
             ) from e
+        self._raise_if_cancelled(f"after {mode} access was granted")
 
+        txn = _HardwareTransaction(self._readback_matches)
         past_open = False
         try:
             with cam:
                 past_open = True
-                # Gate every feature write on the writable bit (constraint 3).
-                # In Full mode: writable=True → set() fires as before.
-                # In Read mode: writable=False → skip with an INFO log.
-                self._set_if_writable(cam, "TriggerSource", "Software", mode)
-                self._set_if_writable(cam, "TriggerSelector", "FrameStart", mode)
-                self._set_if_writable(cam, "TriggerMode", "On", mode)
-                self._set_if_writable(cam, "AcquisitionMode", "Continuous", mode)
+                # Opening the camera can itself block long enough for
+                # connect() to time out and disconnect() to run.
+                self._raise_if_cancelled("after opening the camera")
+                self._configure_exposure(cam, mode, txn)
+                # Full mode only — Read is passive and writes nothing. Each
+                # call snapshots the original and registers rollback before
+                # invoking the setter, and re-checks cancellation on both
+                # sides of it.
+                self._set_if_writable(cam, "TriggerSource", "Software", mode, txn)
+                self._set_if_writable(cam, "TriggerSelector", "FrameStart", mode, txn)
+                self._set_if_writable(cam, "TriggerMode", "On", mode, txn)
+                self._set_if_writable(cam, "AcquisitionMode", "Continuous", mode, txn)
 
+                # Never start acquisition for an abandoned cycle: it would
+                # hold the camera against kSA with no consumer.
+                self._raise_if_cancelled("immediately before start_streaming")
+                # Inside the transaction, and marked before invoking:
+                # start_streaming can partially succeed and then raise, so
+                # rollback must attempt stop_streaming regardless.
+                txn.streaming_attempted = True
                 cam.start_streaming(self._frame_handler)
                 try:
-                    # connect() unblocks here — the pipeline is live.
-                    self._active_access_mode = mode
-                    self._ready_event.set()
+                    # TERMINAL DECISION — exactly one outcome wins.
+                    #
+                    # Between the last cancellation check and publishing
+                    # "ready" there was a window where connect() could time
+                    # out and report failure while this thread went on to
+                    # commit. The lock makes the choice atomic: either the
+                    # cycle was already cancelled (roll everything back) or
+                    # this commit lands and later cancellation is a normal
+                    # disconnect of a genuinely live camera.
+                    with self._lifecycle_lock:
+                        if self._stop_event.is_set():
+                            raise self._CancelledError(
+                                "Vimba setup cancelled at the commit point; "
+                                "the connect cycle was abandoned."
+                            )
+                        txn.committed = True
+                        self._active_access_mode = mode
+                        self._ready_event.set()
                     log.info(
                         "VmbCamera connected in AccessMode.%s "
                         "(camera_index=%d, trigger_hz=%.2f)",
@@ -421,6 +1306,11 @@ class VmbCamera(RheedCamera):
                     self._trigger_and_idle_loop(cam, mode)
                 finally:
                     cam.stop_streaming()
+                    # Past a successful commit the exposure is deliberately
+                    # left applied: it is volatile and documented to survive
+                    # until power-cycle, and a normal DISARM must not silently
+                    # revert what the grower saw confirmed.
+                    txn.streaming_attempted = False
         except vmbpy.VmbCameraError as e:
             if not past_open:
                 raise _AccessDenialError(
@@ -428,8 +1318,30 @@ class VmbCamera(RheedCamera):
                     f"__enter__: {e}"
                 ) from e
             raise
+        finally:
+            # Any failure BEFORE the commit rolls the whole ARM back:
+            # streaming, trigger features, exposure — newest first, verified.
+            if not txn.committed:
+                pending = sys.exc_info()[1] or RuntimeError(
+                    "ARM did not complete"
+                )
+                txn.rollback(cam, pending)
 
-    def _set_if_writable(self, cam, feature_name: str, value, mode: str) -> None:
+    def _readback_matches(self, feature, expected) -> bool:
+        """Whether a restore provably landed on the original value."""
+        actual = self._accessor_call(feature, "get")
+        if actual is UNREADABLE or actual is ABSENT:
+            return False
+        if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+            if not self._finite_real(actual):
+                return False
+            return math.isclose(
+                float(actual), float(expected), rel_tol=1e-9, abs_tol=1e-6,
+            )
+        return actual == expected
+
+    def _set_if_writable(self, cam, feature_name: str, value, mode: str,
+                         txn=None) -> None:
         """Set a camera feature only if `feature.get_access_mode()[1]` is True.
 
         Discovery-driven — the driver asks the SDK, not the driver's own
@@ -441,25 +1353,58 @@ class VmbCamera(RheedCamera):
         * Read mode: log at INFO and skip. The driver is intentionally
           passive; a probe failure is bounded and non-fatal.
         """
+        # Read mode is the kSA-coexistence path and is PASSIVE: it performs
+        # zero configuration writes, regardless of what the writable bit says.
+        # Gating on writability alone meant a camera reporting these features
+        # as writable in Read mode got its trigger pipeline reconfigured out
+        # from under kSA — the exact interference the mode exists to avoid.
+        if mode != "full":
+            log.info(
+                "VmbCamera[Read]: not setting %s — Read mode performs no "
+                "configuration writes.", feature_name,
+            )
+            return
+
+        self._raise_if_cancelled(f"before writing {feature_name}")
         feature = getattr(cam, feature_name)
         try:
-            _readable, writable = feature.get_access_mode()
-        except Exception as exc:  # noqa: BLE001
-            if mode == "full":
-                raise
+            access = feature.get_access_mode()
+        except Exception:  # noqa: BLE001
+            raise
+        # An exact two-Boolean tuple. Unpacking and testing `not writable`
+        # authorised the write for ("True", "False"), (1, 1) and any other
+        # truthy shape — every non-empty value is truthy.
+        if not (
+            isinstance(access, tuple)
+            and len(access) == 2
+            and all(isinstance(bit, bool) for bit in access)
+        ):
+            raise RuntimeError(
+                f"{feature_name}.get_access_mode() returned {access!r}; "
+                "expected a (readable, writable) pair of booleans"
+            )
+        _readable, writable = access
+        if writable is not True:
             log.info(
-                "VmbCamera[Read]: %s.get_access_mode() raised (%s); "
-                "skipping set() — driver stays passive.",
-                feature_name, exc,
+                "VmbCamera[Full]: skipping %s.set(%r) — reported read-only",
+                feature_name, value,
             )
             return
-        if not writable:
-            log.info(
-                "VmbCamera[%s]: skipping %s.set(%r) — read-only in this mode",
-                mode.capitalize(), feature_name, value,
-            )
-            return
+
+        # A blocked get_access_mode() can span the whole timeout, so re-check
+        # right before touching the camera.
+        self._raise_if_cancelled(f"before setting {feature_name}")
+
+        # Snapshot and REGISTER ROLLBACK BEFORE invoking: a setter can apply
+        # the value and then block or raise, so registration afterwards would
+        # miss exactly the mutation that needs undoing.
+        original = self._accessor_call(feature, "get")
+        if txn is not None and original is not UNREADABLE and original is not ABSENT:
+            txn.record(feature_name, feature, original)
         feature.set(value)
+        # And immediately after: a blocked setter that applies on release must
+        # still reach rollback rather than continuing into start_streaming.
+        self._raise_if_cancelled(f"immediately after setting {feature_name}")
 
     def _trigger_and_idle_loop(self, cam, mode: str) -> None:
         """Per-mode trigger/idle loop; exits when `_stop_event` is set.
@@ -581,21 +1526,36 @@ class VmbCamera(RheedCamera):
         if not self._connected:
             raise RuntimeError("Camera not connected.")
         with self._frame_lock:
-            latest = self._latest_frame
-        if latest is None:
-            if self._active_access_mode == "read":
-                raise FrameNotYetAvailableError(
-                    "Connected in AccessMode.Read; no frame arrived yet. "
-                    "Frames flow only if another consumer (e.g. kSA Live "
-                    "Video) is triggering, camera multicast is enabled "
-                    "(Vimba X Viewer → user set), and external triggering "
-                    "is producing frames."
-                )
+            if self._latest_frame is not None:
+                return self._latest_frame.copy()
+
+        # No frame has arrived in this connect cycle.
+        if self._active_access_mode == "read":
             raise FrameNotYetAvailableError(
-                "Vimba camera is streaming but no frame has arrived yet — "
-                "expected within one trigger period after connect."
+                "Connected in AccessMode.Read; no frame arrived yet. "
+                "Frames flow only if another consumer (e.g. kSA Live "
+                "Video) is triggering, camera multicast is enabled "
+                "(Vimba X Viewer → user set), and external triggering "
+                "is producing frames."
             )
-        return latest.copy()
+        raise FrameNotYetAvailableError(
+            "Vimba camera is streaming but no frame has arrived yet — "
+            "expected within one trigger period after connect."
+        )
+
+    def request_stop(self) -> None:
+        """Signal cancellation without blocking. Safe from any thread.
+
+        RheedCameraWorker.stop() previously only cleared its own `running`
+        flag. A worker blocked inside connect() never reached the check, so
+        the driver's stop event stayed unset and setup carried on writing
+        exposure and starting streams after the grower pressed DISARM.
+
+        Deliberately does NOT join or touch the SDK: cleanup belongs to the
+        thread that owns the camera, and blocking here would just move the
+        stall into the GUI thread.
+        """
+        self._stop_event.set()
 
     def disconnect(self) -> None:
         self._connected = False
@@ -603,11 +1563,20 @@ class VmbCamera(RheedCamera):
         if self._stream_thread is not None:
             self._stream_thread.join(timeout=self.DISCONNECT_TIMEOUT_S)
             if self._stream_thread.is_alive():
+                # RETAIN the reference. Clearing it here made the orphan
+                # invisible, so the next connect() started a second thread
+                # against the same camera while this one was still blocked
+                # inside an SDK call — and it could still perform its exposure
+                # write after the GUI had reported ARM failed and returned to
+                # idle. connect() now refuses while this is alive, and only a
+                # thread that has actually died clears the slot.
                 log.warning(
                     "VmbCamera stream thread did not exit within %.1fs; "
-                    "leaking as daemon.", self.DISCONNECT_TIMEOUT_S,
+                    "retaining the reference so a reconnect cannot race it.",
+                    self.DISCONNECT_TIMEOUT_S,
                 )
-            self._stream_thread = None
+            else:
+                self._stream_thread = None
         with self._frame_lock:
             self._latest_frame = None
 
@@ -626,6 +1595,11 @@ class VmbCamera(RheedCamera):
         `access_mode="auto"`.
         """
         return self._active_access_mode
+
+    @property
+    def exposure_us(self) -> Optional[float]:
+        """Confirmed camera exposure readback for the active connect cycle."""
+        return self._exposure_us
 
 
 class ScreenGrabCamera(RheedCamera):

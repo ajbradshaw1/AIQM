@@ -49,6 +49,11 @@ class CameraState:
     connected: bool = False
     error: str = ""
     mode: str = ""  # "vimba", "screengrab", "screengrab_mss", or "dummy"
+    # Exposure the camera actually confirmed on the direct Vimba path, in
+    # microseconds — the readback, not the request. None for backends with no
+    # exposure to interrogate (screengrab, dummy) and whenever no manual write
+    # was requested.
+    exposure_us: Optional[float] = None
     capture_backend: str = ""
     captured_at_utc: str = ""
     capture_sequence: int = 0

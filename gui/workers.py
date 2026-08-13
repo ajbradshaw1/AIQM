@@ -12,6 +12,8 @@ from typing import Optional
 import numpy as np
 from PyQt6.QtCore import QMutex, QThread, pyqtSignal
 
+from drivers.rheed_camera import FrameNotYetAvailableError
+
 log = logging.getLogger(__name__)
 
 
@@ -399,10 +401,41 @@ class RheedCameraWorker(QThread):
 
     state_updated = pyqtSignal(CameraState)
 
-    def __init__(self, mode: str = "dummy", poll_interval: float = 1.0):
+    # Lower bound on the starvation deadlines, in seconds.
+    #
+    # The deadline scales with the trigger period (three periods), but a fast
+    # trigger must not make the GUI twitchy about a camera that is merely slow
+    # to produce its first frame — SDK startup, exposure application and the
+    # first integration all land inside that window. Five seconds is long
+    # enough to cover a 500 ms exposure plus SDK warm-up and short enough that
+    # a grower does not sit in front of a dead preview wondering.
+    MIN_FRAME_DEADLINE_S = 5.0
+
+    def _frame_deadline_s(self) -> float:
+        """Seconds of silence tolerated before the camera is called dead.
+
+        Three trigger periods, floored by MIN_FRAME_DEADLINE_S. Three rather
+        than one so a single missed callback — which happens routinely — is
+        never enough on its own to tear down an arm.
+        """
+        period = 1.0 / self.trigger_hz if self.trigger_hz > 0 else 1.0
+        return max(3.0 * period, self.MIN_FRAME_DEADLINE_S)
+
+    def __init__(
+        self,
+        mode: str = "dummy",
+        poll_interval: float = 1.0,
+        *,
+        camera_index: int = 0,
+        trigger_hz: float = 1.0,
+        exposure_us: Optional[float] = None,
+    ):
         super().__init__()
         self.mode = mode
         self.poll_interval = poll_interval
+        self.camera_index = camera_index
+        self.trigger_hz = trigger_hz
+        self.exposure_us = exposure_us
         # True from __init__ to close the stop()-before-run race
         # (see PowerSupplyWorker for the full comment).
         self.running = True
@@ -421,6 +454,7 @@ class RheedCameraWorker(QThread):
             self._camera = self._create_camera()
             self._camera.connect()
             state.connected = True
+            state.exposure_us = getattr(self._camera, "exposure_us", None)
         except Exception as e:
             state.connected = False
             state.error = str(e)
@@ -435,6 +469,11 @@ class RheedCameraWorker(QThread):
         frame_count = 0
         fps_start = time.time()
         fps_frame_count = 0
+        # Reference point for the starvation deadline. Starts at connect so an
+        # arm that never produces a first frame is bounded; each valid frame
+        # moves it forward so a mid-session stall is bounded too.
+        last_progress_monotonic = time.monotonic()
+        starvation_reported = False
 
         while self.running:
             read_started_ns = time.perf_counter_ns()
@@ -492,7 +531,66 @@ class RheedCameraWorker(QThread):
                     0.0, (read_finished_ns - read_started_ns) / 1_000_000.0,
                 )
                 state.valid = True
+                # A real frame is the only thing that counts as progress.
+                # Reset both the deadline reference and the reported flag so a
+                # camera that recovers is announced healthy again, and a later
+                # stall is reported afresh rather than swallowed by the
+                # earlier one.
+                last_progress_monotonic = time.monotonic()
+                if starvation_reported:
+                    starvation_reported = False
+                    log.info(
+                        "RHEED camera recovered: frame %d delivered after a "
+                        "starvation report", frame_count,
+                    )
 
+            except FrameNotYetAvailableError as e:
+                # Direct Vimba reads are edge-triggered: an SDK callback must
+                # have delivered a new frame since the previous read. A gap
+                # between callbacks is NORMAL and must stay quiet — emitting an
+                # error state here would make every ordinary poll look like a
+                # camera fault, and (since a refused ARM now disarms) would
+                # tear down the arm during routine warm-up.
+                #
+                # But the driver raises this for two different situations, and
+                # only one of them is benign. "No frame yet" also covers a
+                # camera that never delivers a first frame and one whose
+                # callbacks have stalled. Retrying those forever would leave
+                # the GUI armed, silent, and showing nothing. START is now
+                # gated on a live frame rather than the armed state alone, so
+                # this deadline is what keeps a camera that never delivers
+                # from leaving START enabled. The driver at this commit still
+                # re-serves the cached frame after the first callback, so a
+                # MID-ARM stall does not reach here yet; the sequence guard in
+                # the next commit is what makes that path live.
+                #
+                # So: quiet inside the deadline, explicit failure past it.
+                idle_s = time.monotonic() - last_progress_monotonic
+                deadline_s = self._frame_deadline_s()
+                if idle_s < deadline_s:
+                    time.sleep(self.poll_interval)
+                    continue
+                if not starvation_reported:
+                    starvation_reported = True
+                    had_frame = frame_count > 0
+                    log.error(
+                        "RHEED camera produced no %s frame for %.1fs "
+                        "(deadline %.1fs): %s",
+                        "new" if had_frame else "first", idle_s, deadline_s, e,
+                    )
+                    _mark_read_failed(state, (
+                        f"No {'new' if had_frame else 'first'} RHEED frame in "
+                        f"{idle_s:.0f}s. The camera is connected but not "
+                        f"delivering; check kSA/Vimba access and the trigger."
+                    ), read_started_ns)
+                    state.frame = None
+                    state.connected = False
+                    self.state_updated.emit(_emission_snapshot(state))
+                # Keep polling rather than exiting the loop. A later callback
+                # can still recover the camera, and during a running session
+                # sensor logging must continue regardless.
+                time.sleep(self.poll_interval)
+                continue
             except Exception as e:
                 _mark_read_failed(state, e)
                 state.acquire_started_monotonic_ns = read_started_ns
@@ -527,7 +625,11 @@ class RheedCameraWorker(QThread):
         """Factory method — import and instantiate camera driver."""
         if self.mode in ("vimba", "direct"):
             from drivers.rheed_camera import VmbCamera
-            return VmbCamera()
+            return VmbCamera(
+                camera_index=self.camera_index,
+                trigger_hz=self.trigger_hz,
+                exposure_us=self.exposure_us,
+            )
         elif self.mode == "screengrab":
             from drivers.rheed_camera import ScreenGrabCamera
             return ScreenGrabCamera()
@@ -540,8 +642,27 @@ class RheedCameraWorker(QThread):
             return DummyCamera(preset=preset)
 
     def stop(self):
-        """Stop the camera worker thread."""
+        """Stop the camera worker thread.
+
+        Clearing `running` alone was not enough. A worker blocked inside
+        VmbCamera.connect() — which waits up to CONNECT_TIMEOUT_S for the
+        setup thread — never reaches the loop condition, so the driver's own
+        stop event stayed unset and setup carried on writing exposure and
+        starting streams after the grower pressed DISARM.
+
+        request_stop() is non-blocking by contract: it signals cancellation
+        and returns. Joining and SDK teardown stay in the worker thread, so
+        DISARM never stalls the GUI thread on a wedged camera.
+        """
         self.running = False
+        camera = self._camera
+        if camera is not None:
+            request_stop = getattr(camera, "request_stop", None)
+            if callable(request_stop):
+                try:
+                    request_stop()
+                except Exception:  # noqa: BLE001 — never let DISARM raise
+                    log.debug("camera.request_stop() raised", exc_info=True)
 
 
 class PyrometerWorker(QThread):

@@ -23,6 +23,52 @@
 ## Testing
 Offline unit tests live in `tests/` and `tools/rheed_postprocessing_labeling/tests/` (run `pytest` from the repo root; `pytest.ini` limits collection to those paths). `scripts/` keeps the **hardware probe scripts** whose names also start with `test_` (`test_ads_read.py`, `test_elog.py`, `test_ksa_comm.py`, `test_ksa_single.py`, `test_mistral_jsonrpc_discovery.py`, `test_pyrometer.py`, plus `heater_step_test.py`, `owon_self_test.py`) — these talk to real instruments and exit at import on machines without them; never collect them with pytest.
 
+### Mac: export the Qt plugin path before pytest
+Without it the suite dies at the first `QApplication(...)` with a bare
+`Fatal Python error: Aborted` and a C-level traceback — no Python exception,
+no failing assertion. It looks exactly like a code regression and is not one.
+Either form works:
+
+```bash
+export QT_QPA_PLATFORM_PLUGIN_PATH=/opt/anaconda3/lib/python3.13/site-packages/PyQt6/Qt6/plugins/platforms
+```
+
+```bash
+export QT_PLUGIN_PATH=/opt/anaconda3/lib/python3.13/site-packages/PyQt6/Qt6/plugins
+```
+
+`QT_QPA_PLATFORM_PLUGIN_PATH` points at `platforms` itself; the broader
+`QT_PLUGIN_PATH` points at its **parent**. Pairing the narrow variable with
+the parent directory fails — verified on Qt 6.10.0 / PyQt 6.10.2. Same fix
+as the documented `gui.py` launch export; it is needed for pytest too.
+
+### Known pre-existing failures (measured 2026-08-12)
+
+Neither is a regression. Both reproduce with no local changes present, so a
+**third** failure is the one worth investigating.
+
+1. `tests/test_weak_primary_shadow.py::CollectionDiscoveryTests::test_bundled_package_is_complete_and_is_the_default`
+   — `ValueError: Release integrity validation failed` on the weak-primary
+   encoder metadata. `MANIFEST.json` expects sha256 `941f9ede…` / 3,870 bytes;
+   both committed copies are byte-identical at `fad75fc5…` / 3,793 bytes, and
+   the expected hash matches no JSON blob in the tree. Fails on Linux CI too.
+   Owned by the model bundle author — do not weaken the test or guess the
+   manifest.
+2. `tests/test_equalizer_alignment.py::CandidateTests::test_normal_candidate_ranks_first`
+   — `AssertionError: 'mirrored' != 'normal'`, alongside divide-by-zero /
+   overflow / invalid `RuntimeWarning`s from the `matmul` at
+   `gui/equalizer_alignment.py:1238`. **Mac-only:** reproduces on `6ab8a1b`
+   alone, while Linux CI on that same commit does not report it. Cause not
+   established; a numerical-backend difference is the leading hypothesis.
+
+Baselines for attribution: **Linux CI 989 passed / 1 failed / 1 skipped**;
+**macOS local 1021 passed / 2 failed / 16 skipped** (counts differ because
+`pytest.ini` also collects the labeler tests and the platform-gated skip sets
+differ).
+
+`tests/test_ocr.py` was moved to `scripts/` and is no longer collected; the
+older note about it failing on Mac no longer applies.
+
 ## Two GUI Applications
 
 This repo ships two distinct PyQt6 apps that share `gui/state.py`,
