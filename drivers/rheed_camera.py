@@ -480,6 +480,8 @@ class VmbCamera(RheedCamera):
         # connect() timeout and a setup-thread commit cannot both win.
         self._lifecycle_lock = threading.Lock()
         self._lease_key = None
+        # Set when a possibly-running stream could not be stopped.
+        self._unknown_hardware_state = None
         self._ready_event = threading.Event()
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
@@ -505,6 +507,13 @@ class VmbCamera(RheedCamera):
             raise ImportError(
                 "vmbpy not installed. Install the Allied Vision Vimba X SDK "
                 "or use ScreenGrabCamera for screen-scrape mode."
+            )
+
+        if self._unknown_hardware_state is not None:
+            raise RuntimeError(
+                "Refusing to arm: the camera was left in an unknown state — "
+                f"{self._unknown_hardware_state}. POWER-CYCLE the camera, "
+                "then restart the Growth Monitor."
             )
 
         # An orphaned setup thread from a previous cycle may still be blocked
@@ -1262,59 +1271,71 @@ class VmbCamera(RheedCamera):
         try:
             with cam:
                 past_open = True
-                # Opening the camera can itself block long enough for
-                # connect() to time out and disconnect() to run.
-                self._raise_if_cancelled("after opening the camera")
-                self._configure_exposure(cam, mode, txn)
-                # Full mode only — Read is passive and writes nothing. Each
-                # call snapshots the original and registers rollback before
-                # invoking the setter, and re-checks cancellation on both
-                # sides of it.
-                self._set_if_writable(cam, "TriggerSource", "Software", mode, txn)
-                self._set_if_writable(cam, "TriggerSelector", "FrameStart", mode, txn)
-                self._set_if_writable(cam, "TriggerMode", "On", mode, txn)
-                self._set_if_writable(cam, "AcquisitionMode", "Continuous", mode, txn)
-
-                # Never start acquisition for an abandoned cycle: it would
-                # hold the camera against kSA with no consumer.
-                self._raise_if_cancelled("immediately before start_streaming")
-                # Inside the transaction, and marked before invoking:
-                # start_streaming can partially succeed and then raise, so
-                # rollback must attempt stop_streaming regardless.
-                txn.streaming_attempted = True
-                cam.start_streaming(self._frame_handler)
                 try:
-                    # TERMINAL DECISION — exactly one outcome wins.
-                    #
-                    # Between the last cancellation check and publishing
-                    # "ready" there was a window where connect() could time
-                    # out and report failure while this thread went on to
-                    # commit. The lock makes the choice atomic: either the
-                    # cycle was already cancelled (roll everything back) or
-                    # this commit lands and later cancellation is a normal
-                    # disconnect of a genuinely live camera.
-                    with self._lifecycle_lock:
-                        if self._stop_event.is_set():
-                            raise self._CancelledError(
-                                "Vimba setup cancelled at the commit point; "
-                                "the connect cycle was abandoned."
-                            )
-                        txn.committed = True
-                        self._active_access_mode = mode
-                        self._ready_event.set()
-                    log.info(
-                        "VmbCamera connected in AccessMode.%s "
-                        "(camera_index=%d, trigger_hz=%.2f)",
-                        mode.capitalize(), self._camera_index, self._trigger_hz,
-                    )
-                    self._trigger_and_idle_loop(cam, mode)
+                    # Opening the camera can itself block long enough for
+                    # connect() to time out and disconnect() to run.
+                    self._raise_if_cancelled("after opening the camera")
+                    self._configure_exposure(cam, mode, txn)
+                    # Full mode only — Read is passive and writes nothing. Each
+                    # call snapshots the original and registers rollback before
+                    # invoking the setter, and re-checks cancellation on both
+                    # sides of it.
+                    self._set_if_writable(cam, "TriggerSource", "Software", mode, txn)
+                    self._set_if_writable(cam, "TriggerSelector", "FrameStart", mode, txn)
+                    self._set_if_writable(cam, "TriggerMode", "On", mode, txn)
+                    self._set_if_writable(cam, "AcquisitionMode", "Continuous", mode, txn)
+
+                    # Never start acquisition for an abandoned cycle: it would
+                    # hold the camera against kSA with no consumer.
+                    self._raise_if_cancelled("immediately before start_streaming")
+                    # Inside the transaction, and marked before invoking:
+                    # start_streaming can partially succeed and then raise, so
+                    # rollback must attempt stop_streaming regardless.
+                    txn.streaming_attempted = True
+                    cam.start_streaming(self._frame_handler)
+                    try:
+                        # TERMINAL DECISION — exactly one outcome wins.
+                        #
+                        # Between the last cancellation check and publishing
+                        # "ready" there was a window where connect() could time
+                        # out and report failure while this thread went on to
+                        # commit. The lock makes the choice atomic: either the
+                        # cycle was already cancelled (roll everything back) or
+                        # this commit lands and later cancellation is a normal
+                        # disconnect of a genuinely live camera.
+                        with self._lifecycle_lock:
+                            if self._stop_event.is_set():
+                                raise self._CancelledError(
+                                    "Vimba setup cancelled at the commit point; "
+                                    "the connect cycle was abandoned."
+                                )
+                            txn.committed = True
+                            self._active_access_mode = mode
+                            self._ready_event.set()
+                        log.info(
+                            "VmbCamera connected in AccessMode.%s "
+                            "(camera_index=%d, trigger_hz=%.2f)",
+                            mode.capitalize(), self._camera_index, self._trigger_hz,
+                        )
+                        self._trigger_and_idle_loop(cam, mode)
+                    finally:
+                        self._stop_streaming_or_flag_unknown(cam)
+                        # Past a successful commit the exposure is deliberately
+                        # left applied: it is volatile and documented to
+                        # survive until power-cycle, and a normal DISARM must
+                        # not silently revert what the grower saw confirmed.
+                        txn.streaming_attempted = False
                 finally:
-                    cam.stop_streaming()
-                    # Past a successful commit the exposure is deliberately
-                    # left applied: it is volatile and documented to survive
-                    # until power-cycle, and a normal DISARM must not silently
-                    # revert what the grower saw confirmed.
-                    txn.streaming_attempted = False
+                    # ROLLBACK RUNS HERE, still inside `with cam:`. Doing it in
+                    # the outer finally meant every restoring set() went to a
+                    # camera whose context had already exited — the writes
+                    # went nowhere and the camera stayed modified while the
+                    # driver reported a clean rollback.
+                    if not txn.committed:
+                        pending = sys.exc_info()[1] or RuntimeError(
+                            "ARM did not complete"
+                        )
+                        txn.rollback(cam, pending)
         except vmbpy.VmbCameraError as e:
             if not past_open:
                 raise _AccessDenialError(
@@ -1322,14 +1343,27 @@ class VmbCamera(RheedCamera):
                     f"__enter__: {e}"
                 ) from e
             raise
-        finally:
-            # Any failure BEFORE the commit rolls the whole ARM back:
-            # streaming, trigger features, exposure — newest first, verified.
-            if not txn.committed:
-                pending = sys.exc_info()[1] or RuntimeError(
-                    "ARM did not complete"
-                )
-                txn.rollback(cam, pending)
+
+    def _stop_streaming_or_flag_unknown(self, cam) -> None:
+        """Stop acquisition, or mark the camera unusable until power-cycled.
+
+        A stream that may be running and cannot be stopped is not a tidy
+        failure: the camera is still producing into a pipeline nobody owns,
+        and a second ARM would attach to hardware in an unknown state. The
+        flag survives this driver instance via the lease registry, so an
+        immediate re-ARM is refused rather than silently reattaching.
+        """
+        try:
+            cam.stop_streaming()
+        except Exception as exc:  # noqa: BLE001
+            self._unknown_hardware_state = (
+                f"stop_streaming() failed ({exc}); acquisition may still be "
+                "running on this camera"
+            )
+            log.critical(
+                "VmbCamera could not stop streaming: %s. The camera is in an "
+                "UNKNOWN state — POWER-CYCLE it before arming again.", exc,
+            )
 
     def _readback_matches(self, feature, expected) -> bool:
         """Whether a restore provably landed on the original value."""
@@ -1403,7 +1437,16 @@ class VmbCamera(RheedCamera):
         # the value and then block or raise, so registration afterwards would
         # miss exactly the mutation that needs undoing.
         original = self._accessor_call(feature, "get")
-        if txn is not None and original is not UNREADABLE and original is not ABSENT:
+        if original is UNREADABLE or original is ABSENT:
+            # No readable original means no possible rollback. Writing anyway
+            # would leave a mutation the driver cannot undo, so the ARM is
+            # refused instead — the camera stays as the grower left it.
+            raise RuntimeError(
+                f"{feature_name} could not report its current value, so the "
+                "write could not be rolled back if ARM fails — refusing to "
+                "modify a feature this driver cannot restore"
+            )
+        if txn is not None:
             txn.record(feature_name, feature, original)
         feature.set(value)
         # And immediately after: a blocked setter that applies on release must
@@ -1569,12 +1612,18 @@ class VmbCamera(RheedCamera):
         Deliberately does NOT join or touch the SDK: cleanup belongs to the
         thread that owns the camera, and blocking here would just move the
         stall into the GUI thread.
+
+        Takes the lifecycle lock so cancellation and commit cannot interleave:
+        without it a stop arriving mid-commit could be observed as "not
+        cancelled" by the setup thread and "cancelled" by the caller.
         """
-        self._stop_event.set()
+        with self._lifecycle_lock:
+            self._stop_event.set()
 
     def disconnect(self) -> None:
-        self._connected = False
-        self._stop_event.set()
+        with self._lifecycle_lock:
+            self._connected = False
+            self._stop_event.set()
         if self._stream_thread is not None:
             self._stream_thread.join(timeout=self.DISCONNECT_TIMEOUT_S)
             if self._stream_thread.is_alive():

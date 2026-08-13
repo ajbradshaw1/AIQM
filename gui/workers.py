@@ -451,7 +451,21 @@ class RheedCameraWorker(QThread):
 
         # Create camera driver based on mode
         try:
-            self._camera = self._create_camera()
+            camera = self._create_camera()
+            # Publish BEFORE connect() so stop() can reach it, then re-check
+            # `running`: a DISARM landing between _create_camera() and this
+            # assignment used to find self._camera still None, drop the
+            # cancellation on the floor, and let connect() proceed for the
+            # full 45 s timeout — writing exposure and starting a stream after
+            # the grower had already disarmed.
+            self._camera = camera
+            if not self.running:
+                request_stop = getattr(camera, "request_stop", None)
+                if callable(request_stop):
+                    request_stop()
+                raise RuntimeError(
+                    "Camera connect cancelled before it began (DISARM)"
+                )
             self._camera.connect()
             state.connected = True
             state.exposure_us = getattr(self._camera, "exposure_us", None)

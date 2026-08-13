@@ -485,3 +485,157 @@ class CameraTransactionTests(unittest.TestCase):
         self.assertEqual(
             _CAMERA_LEASES, {}, "lease survived a clean connect/disconnect",
         )
+
+
+class LabSafetyRegressionTests(unittest.TestCase):
+    """The five demonstrated paths that could make a lab run unsafe.
+
+    Each corresponds to a failure where the GUI would report ARM failed or
+    disarmed while the camera stayed modified, streaming, or unrecoverable.
+    """
+
+    def setUp(self):
+        import test_vimba_camera as T
+        self.T = T
+        self.addCleanup(T.uninstall_fake_vmbpy)
+
+    def _cam(self, stub, **kw):
+        self.T.install_fake_vmbpy([stub])
+        from drivers.rheed_camera import VmbCamera
+        params = dict(trigger_hz=1.0, access_mode="full", exposure_us=250_000.0)
+        params.update(kw)
+        cam = VmbCamera(**params)
+        cam.CONNECT_TIMEOUT_S = 0.4
+        cam.DISCONNECT_TIMEOUT_S = 0.2
+        return cam
+
+    def test_rollback_runs_before_the_camera_context_closes(self):
+        """Restoring after __exit__ writes to a closed camera and does nothing."""
+        exits = []
+
+        # Subclass, not an instance attribute: Python resolves dunder methods
+        # on the TYPE, so assigning stub.__exit__ is never consulted.
+        class _RecordingCamera(self.T.FakeCamera):
+            def __exit__(self, *a):
+                exits.append(self.ExposureTimeAbs.value)
+                return super().__exit__(*a)
+
+        stub = _RecordingCamera()
+
+        def boom(_handler):
+            raise RuntimeError("stream refused")
+        stub.start_streaming = boom
+
+        cam = self._cam(stub)
+        try:
+            cam.connect()
+        except Exception:
+            pass
+        cam.disconnect()
+        self.assertTrue(exits, "the camera context never closed")
+        self.assertEqual(
+            exits[0], 300_000.0,
+            "the exposure was still the requested value when the camera "
+            "context closed — rollback ran too late to reach the hardware",
+        )
+
+    def test_unreadable_trigger_original_refuses_the_mutation(self):
+        """No readable original means no possible rollback, so do not write."""
+        stub = self.T.FakeCamera()
+        stub.TriggerSource = self.T.FakeSettable()
+        stub.TriggerSource.get = None          # present but cannot answer
+        cam = self._cam(stub)
+        raised = None
+        try:
+            cam.connect()
+        except Exception as exc:
+            raised = exc
+        cam.disconnect()
+        self.assertIsNotNone(raised, "mutated a feature it could not restore")
+        self.assertEqual(
+            stub.TriggerSource.set_call_count, 0,
+            "wrote a trigger feature whose original value was unreadable",
+        )
+
+    def test_request_stop_and_commit_are_serialised(self):
+        """Cancellation and commit must not interleave."""
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=1.0)
+        held = threading.Event()
+        released = threading.Event()
+
+        def hold():
+            with cam._lifecycle_lock:
+                held.set()
+                released.wait(timeout=5.0)
+
+        t = threading.Thread(target=hold, daemon=True)
+        t.start()
+        self.assertTrue(held.wait(timeout=5.0))
+
+        done = threading.Event()
+        threading.Thread(
+            target=lambda: (cam.request_stop(), done.set()), daemon=True,
+        ).start()
+        self.assertFalse(
+            done.wait(timeout=0.3),
+            "request_stop() did not take the lifecycle lock, so cancellation "
+            "can interleave with the commit decision",
+        )
+        released.set()
+        self.assertTrue(done.wait(timeout=5.0))
+        t.join(timeout=5.0)
+
+    def test_worker_stop_before_camera_assignment_is_not_lost(self):
+        """DISARM between _create_camera() and connect() must still cancel."""
+        from gui.workers import RheedCameraWorker
+        stub = self.T.FakeCamera()
+        cam = self._cam(stub)
+        worker = RheedCameraWorker(mode="vimba", poll_interval=0.01)
+
+        def create_then_disarm():
+            worker.stop()          # the grower disarms during construction
+            return cam
+        worker._create_camera = create_then_disarm
+
+        emitted = []
+        worker.state_updated = type("_Sig", (), {
+            "emit": staticmethod(lambda s: emitted.append(s)),
+        })()
+        worker.run()
+
+        self.assertEqual(
+            stub.ExposureTimeAbs.set_call_count, 0,
+            "exposure was written after a DISARM that landed before the "
+            "camera was assigned",
+        )
+        self.assertEqual(stub.start_streaming_calls, 0)
+
+    def test_unstoppable_stream_blocks_the_next_arm(self):
+        """An unknown hardware state must not be re-armed automatically."""
+        stub = self.T.FakeCamera()
+
+        def wont_stop():
+            raise RuntimeError("stop_streaming refused")
+        stub.stop_streaming = wont_stop
+
+        cam = self._cam(stub)
+        try:
+            cam.connect()
+        except Exception:
+            pass
+        cam.disconnect()
+        if cam._stream_thread is not None:
+            cam._stream_thread.join(timeout=5.0)
+
+        self.assertIsNotNone(
+            cam._unknown_hardware_state,
+            "a stream that could not be stopped was treated as a clean stop",
+        )
+        raised = None
+        try:
+            cam.connect()
+        except Exception as exc:
+            raised = exc
+        self.assertIsNotNone(raised, "re-armed a camera in an unknown state")
+        self.assertIn("power-cycle", str(raised).lower())
