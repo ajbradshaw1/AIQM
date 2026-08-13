@@ -79,7 +79,7 @@
 \fancyhf{}
 \fancyhead[L]{\small\color{ManualMuted}AI4MBE | O-MBE + Ch-MBE}
 \fancyhead[R]{\small\color{ManualMuted}English operator manual}
-\fancyfoot[L]{\small\color{ManualMuted}Manual v1.6 | 2026-08-12}
+\fancyfoot[L]{\small\color{ManualMuted}Manual v1.7 | 2026-08-12}
 \fancyfoot[R]{\small\color{ManualMuted}Page \thepage\ of \pageref*{LastPage}}
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\footrulewidth}{0pt}
@@ -204,7 +204,7 @@ Install or refresh desktop shortcuts & \texttt{Install AI4MBE Desktop Shortcuts.
 \end{tabularx}
 \vfill
 {\small\color{ManualMuted}
-Manual v1.6 - English edition\\
+Manual v1.7 - English edition\\
 Issued 2026-08-12 for the Windows O-MBE and Ch-MBE workstations.\\[2mm]
 The screenshots show the actual applications using generated demo inputs. No experimental dataset is included.}
 
@@ -278,6 +278,14 @@ Surface-reconstruction labels, acquisition-quality QC, and FeSe film quality are
   \item If Windows displays an unexpected security warning, stop and ask the maintainer to verify the file source, branch, and commit. Do not bypass it.
 \end{enumerate}
 
+\begin{corebox}{Current combined deployment branch}
+Use \texttt{codex/gui-brightness-robust-four-output-shadow}. This branch
+contains the chamber launchers, standalone offline labeler, this manual, and
+the bundled brightness-robust four-output model. Record the exact commit for
+every run; do not infer it from the folder name or substitute \texttt{main}
+unless all four components have been separately verified there.
+\end{corebox}
+
 \subsection{Select exactly one chamber branch}
 \rowcolors{2}{ManualPale}{white}
 \begin{tabularx}{\linewidth}{L{22mm}L{56mm}Y}
@@ -325,7 +333,7 @@ Each launcher forces and preflights its chamber profile and owns a chamber-speci
 \inbrief{Both chambers start with \texttt{vimba}, \texttt{modbus}, \texttt{ads}, and \texttt{elog}: direct reads for RHEED, temperature, MISTRAL, and EvapControl. \texttt{dummy} modes generate test data and must not be mistaken for instruments.}
 \label{sec:chamber-defaults}
 
-The Configuration panel chooses one reader for each data source. A mode selects \emph{how the GUI reads}; it does not change an instrument setpoint. The four selectors are independent, and their selected values are frozen when the session is armed.
+The Configuration panel chooses one reader for each data source. A mode selects \emph{how the GUI reads}; it does not change an instrument setpoint. Reader modes, save folder, and model switches are frozen when the session is armed.
 
 \subsection{Camera mode - RHEED image source}
 \footnotesize
@@ -385,6 +393,31 @@ The Configuration panel chooses one reader for each data source. A mode selects 
 
 \begin{warnbox}{Direct read does not mean hardware synchronization}
 \texttt{vimba}, \texttt{modbus}, \texttt{ads}, and \texttt{elog} avoid screen OCR, but each worker still receives data independently. A sensor-log row is a latest-value software snapshot, not proof that exposure, temperature, PLC, and EvapControl were physically sampled at one instant.
+\end{warnbox}
+
+\subsection{Save folder and model switches}
+\footnotesize
+\rowcolors{2}{ManualPale}{white}
+\begin{tabularx}{\linewidth}{L{34mm}Y}
+\toprule
+\textbf{Setting} & \textbf{Exact behavior in this branch} \\
+\midrule
+Save folder / Browse & Root for new session output. Verify before ARM; it locks while armed/running and does not move old sessions. \\
+Live classifier & Existing five-output bare-STO worker; checked by default. Uncheck before ARM to prevent it loading. \\
+4-output shadow & Bundled 36-head \texttt{all\_extreme} ensemble; unchecked by default. Conditional Twinned, c(6x2), RT13, and HTR scores only; no 1x1 output. \\
+Events / Classify! & Separate on-demand Events-page classification; the live-model checkboxes do not disable it. \\
+\bottomrule
+\end{tabularx}
+\normalsize
+
+\begin{warnbox}{Model scope and FeSe recording}
+The four-output route is \texttt{weak\_shadow\_only} and
+\texttt{deployment\_eligible=false}. Its values are not surface fractions and
+never drive advice, control, or automatic capture. Both classifiers concern
+bare STO before growth, not FeSe film quality or FeSe reconstruction. For FeSe
+recording, STOP/DISARM, uncheck both live-model switches, ARM again, and do not
+use \textbf{Events / Classify!}. Logging and pixel-difference automatic capture
+continue with both models off.
 \end{warnbox}
 
 \begin{tcolorbox}[
@@ -723,6 +756,13 @@ python -m tools.rheed_postprocessing_labeling --help
 
 Use the resolved Python interpreter and repository path recorded by the matching chamber launcher or labeler launcher. Read \texttt{AI4MBE\_GUI\_PYTHON} only when it is already configured on that workstation; do not create it ad hoc. If the branch or commit differs from the team-specified version, or Git reports unknown modifications, stop and verify.
 
+For the combined deployment documented here, the expected branch is:
+\begin{center}
+\texttt{codex/gui-brightness-robust-four-output-shadow}
+\end{center}
+Record and verify the team-specified exact commit; do not guess it from the
+directory name.
+
 \subsection{O-MBE startup checklist}
 \begin{tcolorbox}[
   enhanced,colback=ManualBluePale,colframe=ManualBlue,boxrule=0.7pt,
@@ -731,7 +771,9 @@ Use the resolved Python interpreter and repository path recorded by the matching
   \checkitem{Use \texttt{Start O-MBE Growth Monitor.cmd}; never use the Ch-MBE launcher for this chamber.}
   \checkitem{Confirm the exact title \textbf{Oxide MBE Growth Monitor}.}
   \checkitem{Confirm the launcher log identifies O-MBE, the intended repository, branch, commit, Python, and required optional drivers.}
+  \checkitem{Confirm \texttt{codex/gui-brightness-robust-four-output-shadow} at the team-specified commit.}
   \checkitem{Confirm \texttt{vimba / modbus / ads / elog} against the O-MBE startup-default record in Chapter~\ref{sec:chamber-defaults}; stop on any unexplained value.}
+  \checkitem{Confirm the save folder and both live-model choices before ARM.}
   \checkitem{Confirm advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the O-MBE SOP.}
   \checkitem{ARM only when the authorized operator and O-MBE SOP permit it; this checklist grants no operating or setpoint authority.}
 \end{itemize}
@@ -745,7 +787,9 @@ Use the resolved Python interpreter and repository path recorded by the matching
   \checkitem{Use \texttt{Start Ch-MBE Growth Monitor.cmd}; never use the O-MBE launcher for this chamber.}
   \checkitem{Confirm the exact title \textbf{Chalcogenide MBE Growth Monitor}.}
   \checkitem{Confirm the launcher log identifies Ch-MBE, the intended repository, branch, commit, Python, and required optional drivers.}
+  \checkitem{Confirm \texttt{codex/gui-brightness-robust-four-output-shadow} at the team-specified commit.}
   \checkitem{Confirm \texttt{vimba / modbus / ads / elog} against the Ch-MBE startup-default record in Chapter~\ref{sec:chamber-defaults}; stop on any unexplained value.}
+  \checkitem{Confirm the save folder before ARM. For FeSe recording, disable both live models and do not use \textbf{Events / Classify!}.}
   \checkitem{Confirm advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the Ch-MBE SOP.}
   \checkitem{ARM only when the authorized operator and Ch-MBE SOP permit it; this checklist grants no operating or setpoint authority.}
 \end{itemize}

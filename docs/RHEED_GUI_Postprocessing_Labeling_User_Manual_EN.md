@@ -2,7 +2,7 @@
 
 ## English Operator Manual
 
-- Manual version: **v1.6**
+- Manual version: **v1.7**
 - Issued: **2026-08-12**
 - Scope: Windows O-MBE and Ch-MBE workstations and the shared offline RHEED post-processing labeler
 
@@ -84,6 +84,18 @@ The live GUI performs acquisition and display. The offline labeler works only on
 2. Confirm that the desktop contains refreshed shortcuts named **Ch-MBE Growth Monitor**, **O-MBE Growth Monitor**, and **RHEED Post-processing Labeler**.
 3. If Windows displays an unexpected security warning, do not bypass it. Stop and ask the maintainer to verify the file source and commit.
 
+### Current combined deployment branch
+
+The branch that contains the current Ch-MBE/O-MBE launchers, the standalone
+offline labeler, this manual, and the bundled brightness-robust four-output
+model is:
+
+`codex/gui-brightness-robust-four-output-shadow`
+
+Record the exact commit before every acquisition or labeling run. Do not infer
+the branch from the folder name, and do not substitute `main` unless the team
+has separately verified that all four components are present there.
+
 ### Select the chamber before launch
 
 | Physical chamber | Required launcher | Expected window title | Forced chamber identity |
@@ -128,6 +140,7 @@ Each live launcher refuses a second process for the same application through its
 - `vimba`, `modbus`, and `ads` are the validated direct-read startup paths for both chambers.
 - Both O-MBE and Ch-MBE default EvapControl to `elog`, so all four startup readers use direct data paths.
 - Every `dummy` option supplies generated test data and is not an instrument reading.
+- The save folder and both model switches must be set before ARM; they lock while armed or running.
 - Selecting a mode changes only how the GUI reads data. It does not change an instrument setpoint or prove hardware synchronization.
 
 The four selectors are independent. Their selected values are frozen when the session is armed.
@@ -171,6 +184,26 @@ The four selectors are independent. Their selected values are frozen when the se
 | `screengrab` | Captures the Evaporation Control window and OCRs chamber pressure. The window must be visible; fields absent from the crop remain unavailable. |
 
 > **Direct read is not hardware synchronization:** `vimba`, `modbus`, `ads`, and `elog` avoid screen OCR, but their workers receive data independently. A sensor-log row is a latest-value software snapshot, not proof that exposure, temperature, PLC, and EvapControl were physically sampled at one instant.
+
+### Save folder and model switches
+
+| Setting | Exact behavior in this branch |
+| --- | --- |
+| **Save folder / Browse** | Selects the root for new session output. Set and verify it before ARM. It locks while armed or running and does not move an older session. |
+| **Live classifier** | Starts the existing five-output bare-STO classifier worker when checked. It is checked by default. Unchecking it before ARM prevents that worker from loading. |
+| **4-output shadow** | Starts the bundled 36-head `all_extreme` ensemble when checked. It is unchecked by default. Its outputs are conditional scores for Twinned, c(6x2), RT13, and HTR; there is no 1x1 output. |
+| **Events / Classify!** | Performs a separate on-demand classification in the Events page. The two live-model checkboxes do not disable this button. |
+
+The four-output route is `weak_shadow_only` and `deployment_eligible=false`.
+Its values are not surface fractions, are not a FeSe classifier, and must not
+drive advice, control, or automatic capture. Pixel-difference automatic
+capture and ordinary logging continue when both live models are off.
+
+To change either model switch, STOP and DISARM first, change the checkbox, and
+ARM again. For FeSe growth recording, leave both **Live classifier** and
+**4-output shadow** unchecked and do not use **Events / Classify!**. These
+models concern the bare STO surface before growth, not FeSe film quality or
+FeSe reconstruction.
 
 <a id="chmbe-approved-defaults"></a>
 ### Ch-MBE GUI startup defaults
@@ -497,6 +530,11 @@ python --version
 python -m tools.rheed_postprocessing_labeling --help
 ```
 
+For the combined deployment documented by this manual, the expected branch is
+`codex/gui-brightness-robust-four-output-shadow`. The exact commit may advance;
+use the team-specified commit and record it rather than guessing from the
+directory name.
+
 Use the resolved Python interpreter and repository path recorded by the launcher. Read `AI4MBE_GUI_PYTHON` only when it is already configured on that workstation; do not create it ad hoc. If the branch or commit differs from the team-specified version, or Git reports unknown modifications, stop and verify.
 
 ### Integrity hashes
@@ -518,7 +556,9 @@ Use this Markdown manual for searchable text and the [English AI prompt pack](RH
 - [ ] Use `Start Ch-MBE Growth Monitor.cmd` or **Ch-MBE Growth Monitor**; never use the O-MBE launcher for this chamber.
 - [ ] Confirm the title **Chalcogenide MBE Growth Monitor** and chamber identity `chmbe`.
 - [ ] Confirm the launcher log identifies Ch-MBE, the intended repository, branch, commit, Python interpreter, and required optional drivers.
+- [ ] Confirm the branch is `codex/gui-brightness-robust-four-output-shadow` at the team-specified commit.
 - [ ] Confirm `vimba / modbus / ads / elog` against the [Ch-MBE startup-default record](#chmbe-approved-defaults); stop on any unexplained value.
+- [ ] Confirm the **Save folder** before ARM. For FeSe recording, uncheck both live-model switches and do not use **Events / Classify!**.
 - [ ] Confirm an advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the Ch-MBE SOP.
 - [ ] ARM only when the authorized operator and Ch-MBE SOP permit it; this checklist grants no operating or setpoint authority.
 
@@ -529,12 +569,16 @@ Use this Markdown manual for searchable text and the [English AI prompt pack](RH
 - [ ] Use `Start O-MBE Growth Monitor.cmd` or **O-MBE Growth Monitor**; never use the Ch-MBE launcher for this chamber.
 - [ ] Confirm the title **Oxide MBE Growth Monitor** and chamber identity `ombe`.
 - [ ] Confirm the launcher log identifies O-MBE, the intended repository, branch, commit, Python interpreter, and required optional drivers.
+- [ ] Confirm the branch is `codex/gui-brightness-robust-four-output-shadow` at the team-specified commit.
 - [ ] Confirm `vimba / modbus / ads / elog` against the [O-MBE startup-default record](#ombe-approved-defaults); stop on any unexplained value.
+- [ ] Confirm the **Save folder** and both live-model choices before ARM.
 - [ ] Confirm an advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the O-MBE SOP.
 - [ ] ARM only when the authorized operator and O-MBE SOP permit it; this checklist grants no operating or setpoint authority.
 
 ### Shared live-session checks
 
+- [ ] STOP and DISARM before changing the save folder, acquisition modes, or model switches.
+- [ ] Treat the four-output shadow values as conditional diagnostics only, never as fractions or control signals.
 - [ ] Close the GUI normally and wait for logging to finish.
 
 ### Shared offline and handoff checklist
