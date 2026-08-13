@@ -912,6 +912,51 @@ def test_manual_exposure_rejects_unsafe_trigger_pair_at_init() -> None:
     raise AssertionError("unsafe exposure/trigger pair was accepted")
 
 
+def test_cached_vimba_frame_is_not_delivered_twice() -> None:
+    """A read never returns the same acquisition twice.
+
+    Deliberately NOT phrased as "one callback == one delivered frame". The
+    driver keeps a single latest-frame slot, so several callbacks landing
+    between two polls legitimately collapse into one delivery — that is the
+    contract, not a defect. What must never happen is the reverse: one
+    acquisition satisfying two reads, which is what inflated the frame count
+    and FPS and fed duplicates to the classifier.
+    """
+    cam = None
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera, FrameNotYetAvailableError
+        cam = VmbCamera(trigger_hz=1.0, access_mode="read")
+        cam.connect()
+        frame = FakeFrame(np.full((12, 16), 2048, dtype=np.uint16))
+        assert fake_cam.handler is not None
+        fake_cam.handler(fake_cam, None, frame)
+
+        first = cam.read_frame()
+        assert first.shape == (12, 16, 3)
+
+        raised = None
+        try:
+            cam.read_frame()
+        except FrameNotYetAvailableError as exc:
+            raised = exc
+        assert raised is not None, "cached Vimba frame was delivered twice"
+        assert "cached image was not re-served" in str(raised), str(raised)
+
+        # A fresh callback makes the next read succeed again — the guard
+        # rejects repeats, it does not latch the camera off.
+        fake_cam.handler(fake_cam, None, frame)
+        assert cam.read_frame().shape == (12, 16, 3)
+    finally:
+        # In finally: a failed assertion above must not leak the streaming
+        # thread into the rest of the suite.
+        if cam is not None:
+            try:
+                cam.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+        uninstall_fake_vmbpy()
+
 
 def test_read_mode_frame_not_yet_error_includes_read_context() -> None:
     """(i) In Read mode, FrameNotYetAvailableError includes Read-mode context."""
@@ -2263,6 +2308,7 @@ TESTS = [
     test_manual_exposure_refuses_read_mode,
     test_manual_exposure_requires_auto_off,
     test_manual_exposure_rejects_unsafe_trigger_pair_at_init,
+    test_cached_vimba_frame_is_not_delivered_twice,
     test_exposure_lookup_survives_a_raising_feature_and_falls_back,
     test_out_of_range_exposure_fails_without_writing,
     test_bad_readback_restores_the_original_exposure,

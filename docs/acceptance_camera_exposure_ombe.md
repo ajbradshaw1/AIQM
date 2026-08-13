@@ -323,11 +323,11 @@ write was requested.
 > **Do not eyeball the live view for repeated images.** Genuinely fresh
 > frames can be pixel-identical — a static RHEED pattern at a steady exposure
 > produces exactly that — so "looks the same" proves nothing either way.
-> At this commit the driver can still re-serve a cached frame, so a repeated
-> image is not by itself evidence of a fault. What hardware acceptance can
-> establish is CADENCE: whether the real camera sustains the expected rate,
-> whether the counter keeps advancing, and whether the first-frame starvation
-> deadline ever trips.
+> Frame IDENTITY is checked automatically by the delivery-sequence tests in
+> `tests/test_vimba_camera.py`, which is where that question belongs. What
+> hardware acceptance can establish, and unit tests cannot, is CADENCE:
+> whether the real camera sustains the expected rate, whether the counter
+> keeps advancing, and whether the starvation deadline ever trips.
 
 RESULT — observed FPS: `________`
 

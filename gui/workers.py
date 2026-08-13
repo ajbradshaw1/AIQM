@@ -558,11 +558,9 @@ class RheedCameraWorker(QThread):
                 # callbacks have stalled. Retrying those forever would leave
                 # the GUI armed, silent, and showing nothing. START is now
                 # gated on a live frame rather than the armed state alone, so
-                # this deadline is what keeps a camera that never delivers
-                # from leaving START enabled. The driver at this commit still
-                # re-serves the cached frame after the first callback, so a
-                # MID-ARM stall does not reach here yet; the sequence guard in
-                # the next commit is what makes that path live.
+                # this deadline is also what RE-CLOSES that gate when delivery
+                # stops mid-arm — without it, a camera that dies after one
+                # good frame would leave START enabled indefinitely.
                 #
                 # So: quiet inside the deadline, explicit failure past it.
                 idle_s = time.monotonic() - last_progress_monotonic

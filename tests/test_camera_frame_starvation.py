@@ -17,8 +17,8 @@ against a **stubbed exception seam**: the stub camera raises
 went-quiet branches of the deadline are exercised here. Through the REAL
 driver, only first-frame starvation is reachable — without sequence
 bookkeeping ``read_frame`` keeps returning the cached frame after the first
-callback and never raises again. A guard that makes a genuine mid-arm Vimba
-stall observable is not present at this commit.
+callback and never raises again. The guard that makes a genuine mid-arm Vimba
+stall observable arrives in the following commit.
 
 A fake clock advances only when the worker sleeps, so the deadline logic is
 exercised without waiting in real time.

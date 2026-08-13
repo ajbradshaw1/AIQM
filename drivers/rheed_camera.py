@@ -483,6 +483,8 @@ class VmbCamera(RheedCamera):
         self._ready_event = threading.Event()
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
+        self._latest_frame_sequence = 0
+        self._last_delivered_sequence = 0
         # Any exception that terminated the stream thread. Populated by
         # _stream_loop's ``except`` block, read by ``read_frame`` so
         # mid-session stream death surfaces to the caller with its real
@@ -528,6 +530,8 @@ class VmbCamera(RheedCamera):
         self._exposure_us = None
         with self._frame_lock:
             self._latest_frame = None
+            self._latest_frame_sequence = 0
+            self._last_delivered_sequence = 0
 
         # Process-level, not instance-level: the GUI discards a failed worker
         # and builds a fresh driver object, so an instance check sees a clean
@@ -1469,6 +1473,7 @@ class VmbCamera(RheedCamera):
             rgb = self._to_rgb_uint8(img)
             with self._frame_lock:
                 self._latest_frame = rgb
+                self._latest_frame_sequence += 1
         except Exception as exc:  # noqa: BLE001
             # Record but don't kill the stream — one bad frame shouldn't
             # take down the whole session. Guarded by _error_lock so
@@ -1527,7 +1532,17 @@ class VmbCamera(RheedCamera):
             raise RuntimeError("Camera not connected.")
         with self._frame_lock:
             if self._latest_frame is not None:
-                return self._latest_frame.copy()
+                if self._latest_frame_sequence <= self._last_delivered_sequence:
+                    raise FrameNotYetAvailableError(
+                        "No new Vimba frame has arrived since the previous "
+                        "read; the cached image was not re-served as a new "
+                        "acquisition."
+                    )
+                # Copy and mark consumed under the same lock as the callback's
+                # update so a new arrival cannot race sequence bookkeeping.
+                result = self._latest_frame.copy()
+                self._last_delivered_sequence = self._latest_frame_sequence
+                return result
 
         # No frame has arrived in this connect cycle.
         if self._active_access_mode == "read":
