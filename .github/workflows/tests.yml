@@ -1,7 +1,8 @@
 name: tests
 
 # Hardware probes stay in scripts/. pytest.ini restricts automated collection
-# to offline tests under tests/ so CI never opens cameras or instrument links.
+# to offline tests under tests/ and tools/rheed_postprocessing_labeling/tests,
+# so CI never opens cameras or instrument links.
 on:
   push:
     branches: [main]
@@ -34,7 +35,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run headless pytest suite
+      - name: Run GUI and offline-labeler pytest suites
         env:
           QT_QPA_PLATFORM: offscreen
           MPLBACKEND: Agg

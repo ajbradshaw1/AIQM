@@ -556,6 +556,7 @@ class PyrometerWorker(QThread):
         samples_per_poll: int = 5,
         port: str = "COM4",
         baudrate: int = 115200,
+        device_id: int = 1,
         rts: Optional[bool] = None,
         modbus_backend: str = "pymodbus",
     ):
@@ -574,6 +575,7 @@ class PyrometerWorker(QThread):
         self.samples_per_poll = max(1, int(samples_per_poll))
         self.port = port
         self.baudrate = baudrate
+        self.device_id = int(device_id)
         # True from __init__ to close the stop()-before-run race
         # (see PowerSupplyWorker for the full comment).
         self.running = True
@@ -704,6 +706,7 @@ class PyrometerWorker(QThread):
             return ModbusPyrometer(
                 port=self.port,
                 baudrate=self.baudrate,
+                device_id=self.device_id,
                 rts=self.rts,
                 backend=self.modbus_backend,
             )
@@ -887,10 +890,19 @@ class EvapControlWorker(QThread):
 
     state_updated = pyqtSignal(EvapControlState)
 
-    def __init__(self, mode: str = "screengrab", poll_interval: float = 1.0):
+    def __init__(
+        self,
+        mode: str = "screengrab",
+        poll_interval: float = 1.0,
+        log_dir: Optional[str] = None,
+    ):
         super().__init__()
         self.mode = mode
         self.poll_interval = poll_interval
+        # Explicit chamber path from MBESystemConfig.  Passing it through to
+        # ElogReader prevents its generic cross-workstation auto-detection
+        # from selecting another chamber's install.
+        self.log_dir = str(log_dir or "").strip()
         # True from __init__ to close the stop()-before-run race
         # (see PowerSupplyWorker for the full comment).
         self.running = True
@@ -902,6 +914,7 @@ class EvapControlWorker(QThread):
     def run(self):
         state = EvapControlState(mode=self.mode)
         self._driver = self._create_driver()
+        state.source_path = str(getattr(self._driver, "source_path", "") or "")
 
         while self.running:
             if not self._driver.connected:
@@ -909,6 +922,9 @@ class EvapControlWorker(QThread):
                     self._driver.connect()
                     state.connected = True
                     state.error = ""
+                    state.source_path = str(
+                        getattr(self._driver, "source_path", "") or ""
+                    )
                 except Exception as e:
                     state.connected = False
                     _mark_read_failed(state, e)
@@ -932,6 +948,9 @@ class EvapControlWorker(QThread):
             try:
                 read_started_ns = time.perf_counter_ns()
                 vals = self._driver.read()
+                state.source_path = str(
+                    getattr(self._driver, "source_path", "") or ""
+                )
                 # Pressure: populated by both screengrab and elog modes.
                 state.chamber_pressure_mbar = vals.get("chamber_pressure_mbar")
                 # Substrate + cells + plasma: populated by elog mode only;
@@ -996,7 +1015,7 @@ class EvapControlWorker(QThread):
             return EvapControl()
         elif self.mode == "elog":
             from drivers.evap_control import ElogReader
-            return ElogReader()
+            return ElogReader(log_dir=self.log_dir or None)
         else:
             from drivers.evap_control import DummyEvapControl
             return DummyEvapControl()

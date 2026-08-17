@@ -70,6 +70,15 @@ def test_launcher_dry_run_is_relocatable_and_sanitized():
     assert payload["python_source"] == "AI4MBE_GUI_PYTHON"
     assert payload["arguments"] == ["growth_monitor_chmbe.py"]
     assert payload["python_no_user_site"] == "1"
+    assert payload["required_production_modules"] == [
+        "vmbpy", "pyads", "serial",
+    ]
+    assert payload["dependency_probe"] == "skipped_dry_run"
+    assert payload["dependency_status"] == {
+        "vmbpy": "not_probed",
+        "pyads": "not_probed",
+        "serial": "not_probed",
+    }
     assert "PYTHONPATH" in payload["sanitized_variables"]
     assert "QT_QPA_PLATFORM" in payload["sanitized_variables"]
 
@@ -87,3 +96,5 @@ def test_launcher_never_installs_or_changes_persistent_environment():
     assert "pip install" not in text
     assert "conda install" not in text
     assert "setenvironmentvariable" not in text
+    assert "Get-RequiredProductionModules".lower() in text
+    assert "$driverImports".lower() in text

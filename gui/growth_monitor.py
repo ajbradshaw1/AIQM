@@ -11,7 +11,7 @@ Tab layout:
 """
 
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -29,33 +29,33 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QFont, QShortcut, QKeySequence
 
 
-def _default_save_path() -> str:
+def _default_save_path(config: Optional[MBESystemConfig] = None) -> str:
     """Pick the default growth-log save path.
 
-    On Bulbasaur (Windows with the T9 SSD mounted at E:), prefer
-    ``E:\\OMBE\\GrowthMonitor`` per PI directive that growth data goes
-    on the SSD, not C:'s bloat. Checks the DRIVE (``E:\\``), not the
-    ``OMBE`` folder — the folder is created on first save. Historically
-    the check required ``E:\\OMBE`` to already exist, which fell back to
-    the repo when a fresh Bulbasaur launch hadn't yet materialized the
-    folder — bug found Jul 8 2026.
+    On Windows with the T9 SSD mounted at E:, use a chamber-specific root:
+    ``E:\\OMBE\\GrowthMonitor`` or ``E:\\ChMBE\\GrowthMonitor``.  Checks the
+    DRIVE (``E:\\``), not a chamber folder — the folder is created on first
+    save.  This keeps a Ch-MBE launch from silently inheriting an O-MBE path.
 
     Fallbacks:
-      - Windows without the T9 mounted → ``%USERPROFILE%\\Documents\\OMBE``.
+      - Windows without the T9 mounted → the corresponding chamber folder
+        under ``%USERPROFILE%\\Documents``.
         Better than the repo path because it's still off C:'s bloat
         (whichever partition Documents lives on, typically not the
         overflowing one).
       - Non-Windows (Mac dev) → ``logs/growths`` relative to the repo.
         Backwards-compatible for local dev / CI test paths.
     """
+    cfg = config or get_active_config()
+    chamber_folder = "ChMBE" if cfg.chamber_id == "chmbe" else "OMBE"
     if sys.platform == "win32":
         # Check the drive itself, not the OMBE folder — folder gets
         # created on first save if missing.
         if Path("E:\\").exists():
-            return r"E:\OMBE\GrowthMonitor"
+            return str(Path("E:\\") / chamber_folder / "GrowthMonitor")
         # Windows without T9: prefer Documents over C: root; keeps growth
         # sessions per-user and off any C:-bloat path.
-        return str(Path.home() / "Documents" / "OMBE")
+        return str(Path.home() / "Documents" / chamber_folder)
     # Non-Windows dev: repo-relative default preserves test / CI paths.
     return "logs/growths"
 
@@ -719,20 +719,23 @@ class GrowthMonitor(QWidget):
         )
         rheed_qc_row.addWidget(self.rheed_energy_btn, 0)
 
-        self.rheed_qc_pass_btn = QPushButton("QC PASS")
+        self.rheed_qc_pass_btn = QPushButton("IMAGE USABLE")
         self.rheed_qc_pass_btn.setToolTip(
-            "Explicitly label the current full RHEED image as globally usable. "
-            "This is not a reconstruction label."
+            "Mark the current full RHEED acquisition image as usable for "
+            "analysis. This describes image acquisition quality only; it is "
+            "not a surface reconstruction or film-quality label."
         )
         self.rheed_qc_pass_btn.clicked.connect(
             lambda: self._emit_rheed_qc_label("qc_pass"),
         )
         rheed_qc_row.addWidget(self.rheed_qc_pass_btn, 0)
 
-        self.rheed_qc_reject_btn = QPushButton("QC REJECT")
+        self.rheed_qc_reject_btn = QPushButton("IMAGE UNUSABLE")
         self.rheed_qc_reject_btn.setToolTip(
-            "Explicitly label the current full RHEED image as unusable for "
-            "classification. Add a reason in the note box when possible."
+            "Mark the current full RHEED acquisition image as unusable for "
+            "analysis. This describes acquisition failure or obstruction, "
+            "not surface reconstruction or film quality. Add a reason in "
+            "the note box when possible."
         )
         self.rheed_qc_reject_btn.setStyleSheet(
             "QPushButton { background-color: #7f1d1d; color: white; }"
@@ -1111,7 +1114,7 @@ class GrowthMonitor(QWidget):
 
         save_row = QHBoxLayout()
         self.config_save_path = QLineEdit()
-        default_save = _default_save_path()
+        default_save = _default_save_path(self._cfg)
         self.config_save_path.setPlaceholderText(default_save)
         self.config_save_path.setText(default_save)
         save_row.addWidget(self.config_save_path)
@@ -1167,10 +1170,14 @@ class GrowthMonitor(QWidget):
             5,
             "Legacy monitor-pixel capture; overlays can contaminate frames.",
         )
+        self.config_camera_mode.setCurrentText(self._cfg.camera_mode_default)
         config_form.addRow("Camera mode:", self.config_camera_mode)
 
         self.config_pyrometer_mode = QComboBox()
         self.config_pyrometer_mode.addItems(["dummy", "exactus", "modbus", "screengrab"])
+        self.config_pyrometer_mode.setCurrentText(
+            self._cfg.pyrometer_mode_default,
+        )
         config_form.addRow("Pyrometer mode:", self.config_pyrometer_mode)
 
         # Seeded from the active chamber config so each chamber opens on its
@@ -2309,6 +2316,7 @@ class GrowthMonitor(QWidget):
         """
         if not self.mark_event_btn.isEnabled():
             return
+        event_at_utc = datetime.now(timezone.utc).isoformat()
 
         # PSU snapshot — same priority as _on_commit (mistral > direct >
         # none). Keeps psu_source semantically identical between the two
@@ -2338,6 +2346,7 @@ class GrowthMonitor(QWidget):
         note = self.log_note_input.toPlainText().strip()
 
         payload = {
+            "event_at_utc": event_at_utc,
             "elapsed_s": self.get_elapsed_seconds(),
             "pyro_temp": pyro_temp,
             "voltage_V": voltage_v,
@@ -2749,6 +2758,21 @@ class GrowthMonitor(QWidget):
             "mistral_mode": mistral_mode,
             "evap_mode": self.config_evap_mode.currentText(),
             "pyrometer_mode": self.config_pyrometer_mode.currentText(),
+            # Record the effective serial settings, including user-editable
+            # COM/baud values and chamber-bound transport fields.  These are
+            # provenance only and do not authorize a setpoint change.
+            "pyrometer_port": (
+                self.config_exactus_port.text().strip()
+                or self._cfg.pyrometer_port
+            ),
+            "pyrometer_baudrate": int(
+                self.config_exactus_baud.currentText()
+            ),
+            "pyrometer_device_id": self._cfg.pyrometer_device_id,
+            "pyrometer_rts": self._cfg.pyrometer_rts,
+            "pyrometer_modbus_backend": (
+                self._cfg.pyrometer_modbus_backend
+            ),
             "weak_primary_shadow_enabled": (
                 self.config_weak_primary_shadow_enabled.isChecked()
             ),
@@ -2762,6 +2786,16 @@ class GrowthMonitor(QWidget):
             metadata["mistral_ads_cell_count"] = self._cfg.ads_cell_count
             metadata["mistral_ads_port_main"]  = self._cfg.ads_port_main
             metadata["mistral_ads_port_pid"]   = self._cfg.ads_port_pid
+        if metadata["evap_mode"] == "elog":
+            metadata["evap_log_dir"] = self._cfg.evap_log_dir
+            latest_evap = self._latest_evap
+            source_path = (
+                latest_evap.source_path
+                if latest_evap is not None
+                else ""
+            )
+            metadata["evap_source_path"] = source_path
+            metadata["evap_source_resolved"] = bool(source_path)
         return metadata
 
     # ----- Reset -----------------------------------------------------------

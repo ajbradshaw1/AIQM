@@ -236,6 +236,11 @@ class EvapControlState:
     connected: bool = False
     error: str = ""
     mode: str = ""  # "screengrab", "elog", or "dummy"
+    # Concrete input selected by the driver.  In elog mode this is the
+    # current .elo file once one has been found and stays blank before then.
+    # It is provenance only; consumers must not open or mutate this path
+    # through the state object.
+    source_path: str = ""
     # Elog mode populates ``source_at_utc`` from the LabVIEW record. OCR and
     # dummy modes have no source clock and leave it None.
     source_at_utc: Optional[str] = None

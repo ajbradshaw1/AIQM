@@ -1,5 +1,8 @@
 [CmdletBinding()]
 param(
+    [ValidateSet("chmbe", "ombe")]
+    [string]$Chamber = "chmbe",
+
     [string]$PythonPath,
 
     # Resolve and describe the launch without opening Qt or hardware.
@@ -29,6 +32,29 @@ function Add-PythonCandidate {
             [pscustomobject]@{ Path = $Path; Source = $Source }
         )
     }
+}
+
+function Get-RequiredProductionModules {
+    param([string]$ChamberName)
+
+    # Both production profiles start on Vimba, ADS, and a serial pyrometer.
+    # O-MBE uses pymodbus; Ch-MBE's verified backend is the repository's raw
+    # serial implementation and therefore needs pyserial but not pymodbus.
+    $modules = @("vmbpy", "pyads", "serial")
+    if ($ChamberName -eq "ombe") {
+        $modules += "pymodbus"
+    }
+    return $modules
+}
+
+function New-DependencyStatus {
+    param([string[]]$Modules, [object]$Value)
+
+    $status = [ordered]@{}
+    foreach ($moduleName in $Modules) {
+        $status[$moduleName] = $Value
+    }
+    return [pscustomobject]$status
 }
 
 function Get-PythonCandidates {
@@ -92,10 +118,15 @@ function Invoke-NativeCapture {
 }
 
 function Resolve-Ai4mbePython {
-    param([string]$RepositoryRoot, [bool]$SkipProbe)
+    param(
+        [string]$RepositoryRoot,
+        [bool]$SkipProbe,
+        [string]$ChamberName
+    )
 
     $seen = @{}
     $failures = New-Object System.Collections.Generic.List[string]
+    $requiredModules = @(Get-RequiredProductionModules $ChamberName)
     foreach ($candidate in Get-PythonCandidates $RepositoryRoot) {
         if (-not (Test-Path -LiteralPath $candidate.Path -PathType Leaf)) {
             if ($candidate.Source -in @("-PythonPath", "AI4MBE_GUI_PYTHON")) {
@@ -115,20 +146,55 @@ function Resolve-Ai4mbePython {
             return [pscustomobject]@{
                 Path = $resolved
                 Source = $candidate.Source
+                RequiredModules = $requiredModules
+                DependencyProbe = "skipped_dry_run"
+                DependencyStatus = (
+                    New-DependencyStatus $requiredModules "not_probed"
+                )
             }
         }
 
         # Match growth_monitor_app.py's Windows DLL rule: torch must load its
-        # Intel OpenMP runtime before PyQt6 attempts plugin loading.
+        # Intel OpenMP runtime before PyQt6 attempts plugin loading.  Import
+        # every module required by this chamber's production defaults as part
+        # of the same candidate check: an unrelated base/.venv must not win
+        # merely because it can render Qt while lacking camera/PLC/serial I/O.
+        $driverChecks = @{
+            vmbpy = (
+                "import vmbpy; assert hasattr(vmbpy, 'VmbSystem')"
+            )
+            pyads = (
+                "import pyads; assert hasattr(pyads, 'Connection')"
+            )
+            serial = (
+                "import serial; assert hasattr(serial, 'Serial')"
+            )
+            pymodbus = (
+                "from pymodbus.client import ModbusSerialClient"
+            )
+        }
+        $driverImports = (
+            $requiredModules | ForEach-Object { $driverChecks[$_] }
+        ) -join "; "
+        $probeCode = (
+            "import struct; assert struct.calcsize('P') == 8; " +
+            "import torch; import PyQt6, numpy, PIL; " +
+            $driverImports
+        )
         $probe = Invoke-NativeCapture $resolved @(
             "-I",
             "-c",
-            "import struct; assert struct.calcsize('P') == 8; import torch; import PyQt6, numpy, PIL"
+            $probeCode
         )
         if ($probe.ExitCode -eq 0) {
             return [pscustomobject]@{
                 Path = $resolved
                 Source = $candidate.Source
+                RequiredModules = $requiredModules
+                DependencyProbe = "passed"
+                DependencyStatus = (
+                    New-DependencyStatus $requiredModules $true
+                )
             }
         }
         $summary = ([string]$probe.Output).Trim()
@@ -145,8 +211,10 @@ function Resolve-Ai4mbePython {
         ""
     }
     throw (
-        "Could not find a 64-bit GUI Python with torch, PyQt6, numpy, and " +
-        "Pillow.$details`nUse the repository .venv, activate ai4mbe-gui, or " +
+        "Could not find a 64-bit GUI Python with torch, PyQt6, numpy, " +
+        "Pillow, and the $ChamberName production drivers " +
+        "($($requiredModules -join ', ')).$details`nUse the repository " +
+        ".venv, activate ai4mbe-gui, or " +
         "set AI4MBE_GUI_PYTHON to its python.exe."
     )
 }
@@ -205,9 +273,16 @@ try {
     $repositoryRoot = (
         Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")
     ).Path
-    $entry = Join-Path $repositoryRoot "growth_monitor_chmbe.py"
+    $entryFile = if ($Chamber -eq "ombe") {
+        "growth_monitor_ombe.py"
+    }
+    else {
+        "growth_monitor_chmbe.py"
+    }
+    $applicationLabel = if ($Chamber -eq "ombe") { "O-MBE" } else { "Ch-MBE" }
+    $entry = Join-Path $repositoryRoot $entryFile
     if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
-        throw "Ch-MBE entry point is missing: $entry"
+        throw "$applicationLabel entry point is missing: $entry"
     }
 
     foreach ($variable in $sanitizedVariables) {
@@ -216,10 +291,10 @@ try {
     $env:PYTHONNOUSERSITE = "1"
     $env:PIP_USER = "no"
     # Never trust a stale user/machine chamber variable.
-    $env:AIQM_CHAMBER = "chmbe"
+    $env:AIQM_CHAMBER = $Chamber
 
     $skipProbe = [bool]$DryRun -and -not [bool]$ProbeCandidates
-    $python = Resolve-Ai4mbePython $repositoryRoot $skipProbe
+    $python = Resolve-Ai4mbePython $repositoryRoot $skipProbe $Chamber
     $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
     if (-not $localAppData) {
         $localAppData = $env:TEMP
@@ -229,16 +304,19 @@ try {
 
     $launchPlan = [ordered]@{
         dry_run = [bool]$DryRun
-        application = "chmbe"
+        application = $Chamber
         repository_root = $repositoryRoot
         working_directory = $repositoryRoot
         python = $python.Path
         python_source = $python.Source
+        required_production_modules = @($python.RequiredModules)
+        dependency_probe = $python.DependencyProbe
+        dependency_status = $python.DependencyStatus
         git_branch = Get-GitValue $repositoryRoot @(
             "symbolic-ref", "--short", "-q", "HEAD"
         )
         git_commit = Get-GitValue $repositoryRoot @("rev-parse", "HEAD")
-        arguments = @("growth_monitor_chmbe.py")
+        arguments = @($entryFile)
         chamber = $env:AIQM_CHAMBER
         python_no_user_site = $env:PYTHONNOUSERSITE
         sanitized_variables = $sanitizedVariables
@@ -252,15 +330,16 @@ try {
     $chamberProbe = Invoke-NativeCapture $python.Path @(
         "-I",
         "-c",
-        "import sys; sys.path.insert(0, sys.argv[1]); from drivers.config import get_active_config; assert get_active_config().chamber_id == 'chmbe'",
-        $repositoryRoot
+        "import sys; sys.path.insert(0, sys.argv[1]); from drivers.config import get_active_config; assert get_active_config().chamber_id == sys.argv[2]",
+        $repositoryRoot,
+        $Chamber
     )
     if ($chamberProbe.ExitCode -ne 0) {
-        throw "Ch-MBE chamber preflight failed: $($chamberProbe.Output)"
+        throw "$applicationLabel chamber preflight failed: $($chamberProbe.Output)"
     }
 
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
-    $logStem = Join-Path $logDirectory "chmbe-$timestamp"
+    $logStem = Join-Path $logDirectory "$Chamber-$timestamp"
     $metadataLog = "$logStem-launch.json"
     $stdoutLog = "$logStem-stdout.log"
     $stderrLog = "$logStem-stderr.log"
@@ -269,7 +348,7 @@ try {
 
     $process = Start-Process `
         -FilePath $python.Path `
-        -ArgumentList @("growth_monitor_chmbe.py") `
+        -ArgumentList @($entryFile) `
         -WorkingDirectory $repositoryRoot `
         -WindowStyle Hidden `
         -RedirectStandardOutput $stdoutLog `
@@ -278,7 +357,7 @@ try {
         -PassThru
     if ($process.ExitCode -ne 0) {
         throw (
-            "Ch-MBE Growth Monitor exited with code $($process.ExitCode)." +
+            "$applicationLabel Growth Monitor exited with code $($process.ExitCode)." +
             "`nError log: $stderrLog"
         )
     }
@@ -303,7 +382,8 @@ catch {
     catch {
         # The dialog still contains the original failure when logging fails.
     }
-    Show-LaunchMessage $message "AI4MBE Ch-MBE launch failed" $true
+    $failureLabel = if ($Chamber -eq "ombe") { "O-MBE" } else { "Ch-MBE" }
+    Show-LaunchMessage $message "AI4MBE $failureLabel launch failed" $true
     Write-Error $message
     exit 1
 }

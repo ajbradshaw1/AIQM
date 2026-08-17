@@ -46,6 +46,8 @@ from gui.equalizer_alignment import (  # noqa: E402
     CalibrationRecord,
     RheedFrameSnapshot,
 )
+from gui.equalizer_label_contract import build_equalizer_payload  # noqa: E402
+from gui.rheed_point_events import PointEventError  # noqa: E402
 
 
 _TEST_BASIS_BUNDLE = BasisBundle(tuple([
@@ -384,6 +386,87 @@ class CaptureProvenanceTests(unittest.TestCase):
                 self.assertEqual(row["realignment_active"], "False")
                 self.assertEqual(row["calibration_id"], "cal-test-001")
                 self.assertEqual(row["basis_bundle_id"], "basis-test-sha256")
+
+    def test_auto_capture_point_event_anchors_unique_trigger_not_last_buffer_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = GrowthLogger(base_dir=tmp)
+            logger.start_session("BUFFER_TRIGGER")
+            sequences = (200, 201, 202)
+            metadata = [
+                {
+                    "capture_backend": "wgc",
+                    "captured_at_utc": f"2026-07-27T12:00:0{position}.000Z",
+                    "capture_sequence": sequence,
+                    "captured_monotonic_ns": 9_000_000_000 + position,
+                    "source_hwnd": 9001,
+                    "capture_geometry_id": "wgc:9001:300x200:roi-full:v1",
+                    "camera_width": 300,
+                    "camera_height": 200,
+                }
+                for position, sequence in enumerate(sequences)
+            ]
+
+            result = logger.record_auto_capture_event(
+                event_idx=1,
+                score=2.5,
+                elapsed_s=1.0,
+                frames=[_good_frame(), _good_frame(), _good_frame()],
+                frame_capture_metadata=metadata,
+                event_capture_metadata=metadata[1],
+            )
+
+            self.assertTrue(result.committed)
+            self.assertTrue(result.point_event_id)
+            state = logger.point_event_store.get(result.point_event_id)
+            self.assertEqual(state["source"]["capture_sequence"], "201")
+            self.assertEqual(state["review"]["anchor"]["capture_sequence"], "201")
+            self.assertIn("buf_01_", state["review"]["anchor"]["frame_path"])
+            self.assertNotIn("buf_02_", state["review"]["anchor"]["frame_path"])
+            logger.end_session()
+
+    def test_auto_capture_point_event_stays_unresolved_without_unique_trigger_frame(self):
+        cases = (
+            ("missing", (300, 302), 301),
+            ("ambiguous", (301, 301), 301),
+        )
+        for case_name, sequences, trigger_sequence in cases:
+            with self.subTest(case=case_name), tempfile.TemporaryDirectory() as tmp:
+                logger = GrowthLogger(base_dir=tmp)
+                logger.start_session(f"BUFFER_{case_name.upper()}")
+                metadata = [
+                    {
+                        "capture_backend": "wgc",
+                        "captured_at_utc": f"2026-07-27T12:00:0{position}.000Z",
+                        "capture_sequence": sequence,
+                        "captured_monotonic_ns": 9_000_000_000 + position,
+                        "source_hwnd": 9001,
+                        "capture_geometry_id": "wgc:9001:300x200:roi-full:v1",
+                        "camera_width": 300,
+                        "camera_height": 200,
+                    }
+                    for position, sequence in enumerate(sequences)
+                ]
+                event_metadata = dict(metadata[0])
+                event_metadata["capture_sequence"] = trigger_sequence
+
+                result = logger.record_auto_capture_event(
+                    event_idx=1,
+                    score=2.5,
+                    elapsed_s=1.0,
+                    frames=[_good_frame(), _good_frame()],
+                    frame_capture_metadata=metadata,
+                    event_capture_metadata=event_metadata,
+                )
+
+                self.assertTrue(result.committed)
+                self.assertTrue(result.point_event_id)
+                state = logger.point_event_store.get(result.point_event_id)
+                self.assertEqual(
+                    state["source"]["capture_sequence"], str(trigger_sequence),
+                )
+                self.assertIsNone(state["review"]["anchor"])
+                self.assertEqual(state["source"]["original_frame_path"], "")
+                logger.end_session()
 
     def test_auto_capture_encoder_failure_writes_no_manifest_row(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1214,6 +1297,126 @@ class EqualizerLiveLabelTests(unittest.TestCase):
     def _rows(self) -> list[dict]:
         with open(self.csv_path, newline="") as stream:
             return list(csv.DictReader(stream))
+
+    def _point_event_and_live_label(self) -> tuple[str, int, dict[str, object]]:
+        capture_metadata = {
+            "capture_backend": self.snapshot.capture_backend,
+            "captured_at_utc": self.snapshot.captured_at_utc,
+            "capture_sequence": self.snapshot.capture_sequence,
+            "frame_age_ms": self.snapshot.logging_age_ms(),
+            "source_hwnd": self.snapshot.source_hwnd,
+            "capture_geometry_id": self.snapshot.capture_geometry_id,
+        }
+        self.assertEqual(self.logger.record_manual_event(
+            elapsed_s=12.0,
+            frame=self.snapshot.rgb,
+            capture_metadata=capture_metadata,
+            event_at_utc=self.snapshot.captured_at_utc,
+        ), 1)
+        event_id = self.logger.last_point_event_id
+        self.assertTrue(event_id)
+        weights = {
+            "1x1": 0.4,
+            "Tw(2x1)": 0.3,
+            "c(6x2)": 0.2,
+            "RT13": 0.1,
+        }
+        payload = build_equalizer_payload(
+            raw_weights=None,
+            final_weights=weights,
+            fit_mode="manual",
+            normalization_applied=False,
+            residual_rms=2.5,
+            valid_coverage=0.8,
+        )
+        label_idx = self.logger.record_live_label(
+            13.0,
+            weights,
+            calibration=self.calibration,
+            snapshot=self.snapshot,
+            equalizer_payload=payload,
+            labeler="reviewer-a",
+        )
+        self.assertGreater(label_idx, 0)
+        return event_id, label_idx, payload
+
+    def test_point_event_equalizer_binding_verifies_exact_saved_pixels(self):
+        event_id, label_idx, payload = self._point_event_and_live_label()
+
+        updated = self.logger.attach_live_equalizer_to_point_event(
+            event_id,
+            live_label_index=label_idx,
+            actor="reviewer-a",
+            calibration=self.calibration,
+            snapshot=self.snapshot,
+            equalizer_payload=payload,
+        )
+
+        review = updated["review"]
+        self.assertEqual(review["anchor"]["capture_sequence"], 102)
+        self.assertEqual(
+            review["anchor"]["capture_geometry_id"],
+            self.snapshot.capture_geometry_id,
+        )
+        self.assertEqual(
+            review["equalizer"]["frame_sha256"],
+            review["anchor"]["image_sha256"],
+        )
+        self.assertEqual(review["equalizer"]["calibration_id"], "cal-test-001")
+        self.assertEqual(updated["revision_number"], 3)
+
+    def test_point_event_equalizer_metadata_mismatch_adds_no_revision(self):
+        event_id, label_idx, payload = self._point_event_and_live_label()
+        original_row = self._rows()[0]
+        original_state = self.logger.point_event_store.get(event_id)
+        self.logger._close_live_label_stream()
+        cases = (
+            ("capture_sequence", "999", "capture_sequence"),
+            ("captured_at_utc", "2026-07-31T12:00:02Z", "captured_at_utc"),
+            ("calibration_id", "cal-other", "calibration_id"),
+            ("basis_bundle_id", "bundle-other", "basis_bundle_id"),
+            ("capture_geometry_id", "geometry-other", "capture_geometry_id"),
+        )
+        for field, bad_value, message in cases:
+            with self.subTest(field=field):
+                tampered = dict(original_row)
+                tampered[field] = bad_value
+                self.assertTrue(self.logger._atomic_write_csv(
+                    self.csv_path, self.logger.LIVE_LABEL_FIELDS, [tampered],
+                ))
+                with self.assertRaisesRegex(PointEventError, message):
+                    self.logger.attach_live_equalizer_to_point_event(
+                        event_id,
+                        live_label_index=label_idx,
+                        actor="reviewer-a",
+                        calibration=self.calibration,
+                        snapshot=self.snapshot,
+                        equalizer_payload=payload,
+                    )
+                self.assertEqual(
+                    self.logger.point_event_store.get(event_id), original_state,
+                )
+        self.assertTrue(self.logger._atomic_write_csv(
+            self.csv_path, self.logger.LIVE_LABEL_FIELDS, [original_row],
+        ))
+
+    def test_point_event_equalizer_pixel_mismatch_adds_no_revision(self):
+        event_id, label_idx, payload = self._point_event_and_live_label()
+        original_state = self.logger.point_event_store.get(event_id)
+        frame_path = Path(self._rows()[0]["frame_path"])
+        from PIL import Image
+
+        Image.fromarray(np.zeros_like(self.snapshot.rgb)).save(frame_path, format="BMP")
+        with self.assertRaisesRegex(PointEventError, "pixels"):
+            self.logger.attach_live_equalizer_to_point_event(
+                event_id,
+                live_label_index=label_idx,
+                actor="reviewer-a",
+                calibration=self.calibration,
+                snapshot=self.snapshot,
+                equalizer_payload=payload,
+            )
+        self.assertEqual(self.logger.point_event_store.get(event_id), original_state)
 
     def test_typed_snapshot_is_saved_with_current_provenance_and_htr_blank(self):
         idx = self.logger.record_live_label(

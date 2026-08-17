@@ -73,6 +73,10 @@ class TestGetActiveConfig(unittest.TestCase):
 
 class TestOmbConfig(unittest.TestCase):
 
+    def test_live_reader_mode_defaults(self):
+        self.assertEqual(OXIDE_MBE.camera_mode_default, "vimba")
+        self.assertEqual(OXIDE_MBE.pyrometer_mode_default, "modbus")
+
     def test_mistral_mode_default(self):
         # Switched from "screengrab" to "ads" Jul 27 2026 after
         # direct pyads to Bulbasaur PLC validated. Fallback modes
@@ -81,6 +85,10 @@ class TestOmbConfig(unittest.TestCase):
 
     def test_evap_mode_default(self):
         self.assertEqual(OXIDE_MBE.evap_mode_default, "elog")
+
+    def test_ombe_evap_log_dir_is_explicit(self):
+        self.assertTrue(OXIDE_MBE.evap_log_dir)
+        self.assertIn("1.2.0.51", OXIDE_MBE.evap_log_dir)
 
     def test_five_cells(self):
         self.assertEqual(len(OXIDE_MBE.cell_display), 5)
@@ -111,11 +119,15 @@ class TestOmbConfig(unittest.TestCase):
 
 class TestChMbeConfig(unittest.TestCase):
 
+    def test_live_reader_mode_defaults(self):
+        self.assertEqual(CHALCOGENIDE_MBE.camera_mode_default, "vimba")
+        self.assertEqual(CHALCOGENIDE_MBE.pyrometer_mode_default, "modbus")
+
     def test_mistral_mode_default(self):
         self.assertEqual(CHALCOGENIDE_MBE.mistral_mode_default, "ads")
 
     def test_evap_mode_default(self):
-        self.assertEqual(CHALCOGENIDE_MBE.evap_mode_default, "screengrab")
+        self.assertEqual(CHALCOGENIDE_MBE.evap_mode_default, "elog")
 
     def test_seven_cells(self):
         self.assertEqual(len(CHALCOGENIDE_MBE.cell_display), 7)
@@ -127,6 +139,7 @@ class TestChMbeConfig(unittest.TestCase):
 
     def test_evap_log_dir_set(self):
         self.assertTrue(CHALCOGENIDE_MBE.evap_log_dir)
+        self.assertIn("1.2.0.48", CHALCOGENIDE_MBE.evap_log_dir)
 
     def test_cell_labels_not_empty(self):
         for cell in CHALCOGENIDE_MBE.cell_display:

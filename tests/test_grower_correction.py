@@ -778,6 +778,18 @@ class DefaultSavePathTests(unittest.TestCase):
                 result = gm._default_save_path()
         self.assertEqual(result, r"E:\OMBE\GrowthMonitor")
 
+    def test_chmbe_with_t9_uses_separate_ssd_path(self):
+        import gui.growth_monitor as gm
+        from drivers.config import CHALCOGENIDE_MBE
+
+        with unittest.mock.patch.object(gm, "sys") as mock_sys:
+            mock_sys.platform = "win32"
+            with unittest.mock.patch.object(
+                gm.Path, "exists", return_value=True,
+            ):
+                result = gm._default_save_path(CHALCOGENIDE_MBE)
+        self.assertEqual(result, r"E:\ChMBE\GrowthMonitor")
+
     def test_windows_without_t9_falls_back_to_documents(self):
         # Simulate a Windows box without the T9 SSD.
         import gui.growth_monitor as gm
@@ -793,6 +805,22 @@ class DefaultSavePathTests(unittest.TestCase):
             result.endswith("Documents/OMBE")
             or result.endswith("Documents\\OMBE"),
             f"expected Documents/OMBE fallback, got {result}",
+        )
+
+    def test_chmbe_without_t9_uses_separate_documents_folder(self):
+        import gui.growth_monitor as gm
+        from drivers.config import CHALCOGENIDE_MBE
+
+        with unittest.mock.patch.object(gm, "sys") as mock_sys:
+            mock_sys.platform = "win32"
+            with unittest.mock.patch.object(
+                gm.Path, "exists", return_value=False,
+            ):
+                result = gm._default_save_path(CHALCOGENIDE_MBE)
+        self.assertTrue(
+            result.endswith("Documents/ChMBE")
+            or result.endswith("Documents\\ChMBE"),
+            f"expected Documents/ChMBE fallback, got {result}",
         )
 
     def test_non_windows_returns_repo_relative(self):
