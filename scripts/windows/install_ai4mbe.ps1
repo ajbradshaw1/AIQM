@@ -20,6 +20,7 @@ $OutputEncoding = [Console]::OutputEncoding
 $productId = "AI4MBE.GrowthMonitor.Windows"
 $markerName = ".ai4mbe-install.json"
 $requiredFiles = @(
+    "assets\ai4mbe_app_icon.ico",
     "growth_monitor_ombe.py",
     "growth_monitor_chmbe.py",
     "requirements-installer.txt",

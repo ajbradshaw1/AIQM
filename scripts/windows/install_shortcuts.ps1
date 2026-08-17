@@ -54,6 +54,11 @@ try {
         throw "Windows did not provide SystemRoot for shortcut icons."
     }
     $shellIcons = Join-Path $systemRoot "System32\shell32.dll"
+    $appIcon = Join-Path $repositoryRoot "assets\ai4mbe_app_icon.ico"
+    if (-not (Test-Path -LiteralPath $appIcon -PathType Leaf)) {
+        throw "AI4MBE application icon is missing: $appIcon"
+    }
+    $appIconLocation = "$appIcon,0"
     $powershell = Get-Command powershell.exe -ErrorAction Stop
     $launcher = Join-Path $repositoryRoot "scripts\windows\launch_ai4mbe.ps1"
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
@@ -78,7 +83,7 @@ try {
                 "Start O-MBE Growth Monitor.cmd"
             )
             Description = "Start the AI4MBE O-MBE Growth Monitor"
-            Icon = "$shellIcons,13"
+            Icon = $appIconLocation
         },
         [ordered]@{
             Name = "Ch-MBE Growth Monitor"
@@ -92,7 +97,7 @@ try {
                 "Start Ch-MBE Growth Monitor.cmd"
             )
             Description = "Start the AI4MBE Ch-MBE Growth Monitor"
-            Icon = "$shellIcons,13"
+            Icon = $appIconLocation
         },
         [ordered]@{
             Name = "RHEED Post-processing Labeler"
@@ -106,7 +111,7 @@ try {
                 "Start RHEED Post-processing Labeler.cmd"
             )
             Description = "Build, open, and validate offline RHEED labeling reports"
-            Icon = "$shellIcons,70"
+            Icon = $appIconLocation
         },
         [ordered]@{
             Name = "AI4MBE Operator Manual"

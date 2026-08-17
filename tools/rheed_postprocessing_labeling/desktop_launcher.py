@@ -33,6 +33,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from gui.app_icon import install_application_icon
+
 from .report_builder import (
     validate_existing_report_destination,
     validate_output_destination,
@@ -779,6 +781,7 @@ def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setOrganizationName("AI4MBE")
     app.setApplicationName("RHEED Post-processing and Temporal Labeling")
+    install_application_icon(app)
     window = LabelingDesktopLauncher()
     window.show()
     return app.exec()

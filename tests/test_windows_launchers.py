@@ -184,6 +184,11 @@ def test_shortcut_installer_dry_run_never_writes_lnk(tmp_path):
         assert "-ExecutionPolicy Bypass" in item["Arguments"]
         assert str(WINDOWS_SCRIPTS / "launch_ai4mbe.ps1") in item["Arguments"]
         assert Path(item["TroubleshootingWrapper"]).is_file()
+        icon_path, icon_index = item["Icon"].rsplit(",", 1)
+        assert icon_index == "0"
+        assert Path(icon_path).resolve() == (
+            ROOT / "assets" / "ai4mbe_app_icon.ico"
+        ).resolve()
     assert "-Application chmbe" in applications["Ch-MBE Growth Monitor"]
     assert "-Application ombe" in applications["O-MBE Growth Monitor"]
     assert (
@@ -336,6 +341,17 @@ def test_inno_setup_is_x64_per_user_and_uses_existing_runtime_installer():
     assert "{userdocs}\\AI4MBE\\GrowthSessions" in text
     assert "[UninstallDelete]" in text
     assert 'Type: filesandordirs; Name: "{app}"' in text
+    assert (
+        "SetupIconFile={#PayloadRoot}\\assets\\ai4mbe_app_icon.ico"
+        in text
+    )
+    assert (
+        "UninstallDisplayIcon={app}\\assets\\ai4mbe_app_icon.ico"
+        in text
+    )
+    assert text.count(
+        'IconFilename: "{app}\\assets\\ai4mbe_app_icon.ico"'
+    ) == 6
 
 
 def test_windows_release_workflow_builds_exe_and_keeps_zip_fallback():
@@ -346,6 +362,14 @@ def test_windows_release_workflow_builds_exe_and_keeps_zip_fallback():
     assert "ISCC.exe" in text
     assert "Windows-x64-Setup.exe" in text
     assert "gh release create" in text
+
+
+def test_release_builder_fails_if_application_icon_is_not_archived():
+    text = (WINDOWS_SCRIPTS / "build_release.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert 'Join-Path $packageRoot "assets\\ai4mbe_app_icon.ico"' in text
+    assert "Release package is missing the AI4MBE application icon." in text
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows uninstaller")

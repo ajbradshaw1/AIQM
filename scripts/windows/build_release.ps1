@@ -48,6 +48,10 @@ try {
     }
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     Expand-Archive -LiteralPath $sourceZip -DestinationPath $packageRoot -Force
+    $packagedIcon = Join-Path $packageRoot "assets\ai4mbe_app_icon.ico"
+    if (-not (Test-Path -LiteralPath $packagedIcon -PathType Leaf)) {
+        throw "Release package is missing the AI4MBE application icon."
+    }
     # Ship only runtime/operator content. These paths remain in Git history,
     # but a workstation installer must not contain old experiment logs,
     # development metadata, tests, or the duplicated pre-release model bundle.

@@ -34,6 +34,8 @@ UninstallDisplayName={#MyAppName}
 UninstallFilesDir={localappdata}\AI4MBE\Uninstall
 MinVersion=10.0.17763
 SetupLogging=yes
+SetupIconFile={#PayloadRoot}\assets\ai4mbe_app_icon.ico
+UninstallDisplayIcon={app}\assets\ai4mbe_app_icon.ico
 
 [Tasks]
 Name: "desktopicon"; Description: "Create Desktop shortcuts"; GroupDescription: "Additional shortcuts:"; Flags: checkedonce
@@ -42,14 +44,14 @@ Name: "desktopicon"; Description: "Create Desktop shortcuts"; GroupDescription: 
 Source: "{#PayloadRoot}\*"; DestDir: "{tmp}\AI4MBE-Payload"; Flags: ignoreversion recursesubdirs createallsubdirs deleteafterinstall
 
 [Icons]
-Name: "{group}\O-MBE Growth Monitor"; Filename: "{app}\Start O-MBE Growth Monitor.cmd"; WorkingDir: "{app}"
-Name: "{group}\Ch-MBE Growth Monitor"; Filename: "{app}\Start Ch-MBE Growth Monitor.cmd"; WorkingDir: "{app}"
-Name: "{group}\RHEED Post-processing Labeler"; Filename: "{app}\Start RHEED Post-processing Labeler.cmd"; WorkingDir: "{app}"
+Name: "{group}\O-MBE Growth Monitor"; Filename: "{app}\Start O-MBE Growth Monitor.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\assets\ai4mbe_app_icon.ico"
+Name: "{group}\Ch-MBE Growth Monitor"; Filename: "{app}\Start Ch-MBE Growth Monitor.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\assets\ai4mbe_app_icon.ico"
+Name: "{group}\RHEED Post-processing Labeler"; Filename: "{app}\Start RHEED Post-processing Labeler.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\assets\ai4mbe_app_icon.ico"
 Name: "{group}\AI4MBE Operator Manual"; Filename: "{app}\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf"
 Name: "{group}\Uninstall AI4MBE Growth Monitor"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\O-MBE Growth Monitor"; Filename: "{app}\Start O-MBE Growth Monitor.cmd"; WorkingDir: "{app}"; Tasks: desktopicon
-Name: "{autodesktop}\Ch-MBE Growth Monitor"; Filename: "{app}\Start Ch-MBE Growth Monitor.cmd"; WorkingDir: "{app}"; Tasks: desktopicon
-Name: "{autodesktop}\RHEED Post-processing Labeler"; Filename: "{app}\Start RHEED Post-processing Labeler.cmd"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\O-MBE Growth Monitor"; Filename: "{app}\Start O-MBE Growth Monitor.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\assets\ai4mbe_app_icon.ico"; Tasks: desktopicon
+Name: "{autodesktop}\Ch-MBE Growth Monitor"; Filename: "{app}\Start Ch-MBE Growth Monitor.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\assets\ai4mbe_app_icon.ico"; Tasks: desktopicon
+Name: "{autodesktop}\RHEED Post-processing Labeler"; Filename: "{app}\Start RHEED Post-processing Labeler.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\assets\ai4mbe_app_icon.ico"; Tasks: desktopicon
 Name: "{autodesktop}\AI4MBE Operator Manual"; Filename: "{app}\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf"; Tasks: desktopicon
 
 [UninstallDelete]
