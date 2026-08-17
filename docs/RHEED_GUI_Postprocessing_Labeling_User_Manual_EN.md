@@ -1,20 +1,18 @@
-# O-MBE and Ch-MBE GUI and RHEED Post-processing Labeling
+# O-MBE and Ch-MBE GUI and RHEED Point-event Review
 
 ## English Operator Manual
 
-- Manual version: **v1.7**
-- Issued: **2026-08-12**
+- Manual version: **v2.0 source draft**
+- Issued: **2026-08-17**
 - Scope: Windows O-MBE and Ch-MBE workstations and the shared offline RHEED post-processing labeler
 
-This Markdown document is the accessible companion to the [English PDF manual](RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf). The screenshots show the actual applications with generated demo inputs. They do not contain experimental data and do **not** define production defaults for Ch-MBE or O-MBE.
+This Markdown manual is the searchable companion to the English PDF manual. The screenshots below are from the actual applications using generated demonstration inputs. They contain no experimental data and do not define operating permission or setpoints.
 
-| Ch-MBE Growth Monitor demo | O-MBE Growth Monitor demo |
+| Ch-MBE Growth Monitor | O-MBE Growth Monitor |
 | --- | --- |
-| ![Ch-MBE Growth Monitor with generated demo inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/chmbe_growth_monitor_dummy.png) | ![O-MBE Growth Monitor with generated demo inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/ombe_growth_monitor_dummy.png) |
+| ![Ch-MBE Growth Monitor with generated inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/chmbe_growth_monitor_dummy.png) | ![O-MBE Growth Monitor with generated inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/ombe_growth_monitor_dummy.png) |
 
-> **Screenshot scope:** These are the actual chamber-specific applications with generated demo inputs. They illustrate the implemented interfaces only and are not evidence of either chamber's approved configuration.
-
-> **Core boundary:** The post-processing labeler reads archived data only. It does not connect to or control cameras, pyrometers, power supplies, or any other instrument.
+> The offline labeler reads archived files only. It never controls a camera, heater, power supply, or other instrument.
 
 ### Quick entry
 
@@ -22,308 +20,209 @@ This Markdown document is the accessible companion to the [English PDF manual](R
 | --- | --- |
 | Ch-MBE live GUI | `Start Ch-MBE Growth Monitor.cmd` |
 | O-MBE live GUI | `Start O-MBE Growth Monitor.cmd` |
-| RHEED offline labeler | `Start RHEED Post-processing Labeler.cmd` |
-| Install or refresh desktop shortcuts | `Install AI4MBE Desktop Shortcuts.cmd` |
+| Offline RHEED labeler | `Start RHEED Post-processing Labeler.cmd` |
+| Refresh shortcuts | `Install AI4MBE Desktop Shortcuts.cmd` |
 
-### Contents
-
-1. [Understand the two independent paths](#1-understand-the-two-independent-paths)
-2. [Install shortcuts and start the correct chamber GUI](#2-install-shortcuts-and-start-the-correct-chamber-gui)
-3. [Understand Configuration modes and chamber defaults](#3-understand-configuration-modes-and-chamber-defaults)
-4. [Open the RHEED post-processing labeler](#4-open-the-rheed-post-processing-labeler)
-5. [Prepare inputs and verify provenance](#5-prepare-inputs-and-verify-provenance)
-6. [Build and open a report safely](#6-build-and-open-a-report-safely)
-7. [Label temporal segments like an editing timeline](#7-label-temporal-segments-like-an-editing-timeline)
-8. [Review, display controls, and drafts](#8-review-display-controls-and-drafts)
-9. [Export, import, and fail-closed validation](#9-export-import-and-fail-closed-validation)
-10. [Data safety and scientific boundaries](#10-data-safety-and-scientific-boundaries)
-11. [Troubleshooting](#11-troubleshooting)
-12. [Version verification and quick checklist](#12-version-verification-and-quick-checklist)
-
-## 1. Understand the two independent paths
+## 1. Understand the live and offline paths
 
 ### In brief
 
-- The live GUI acquires and displays instrument data and writes the session archive.
-- The offline labeler reads a completed archive, prediction tables, and model specifications.
-- The offline tool never sends commands back to instruments.
-- Surface reconstruction, acquisition QC, and FeSe film quality are different concepts.
+- Growth Monitor acquires data and creates the immutable session evidence.
+- The offline labeler reviews completed sessions as editable point events.
+- Equalizer is an auxiliary visual fit, not a human label or model probability.
 
-### Live acquisition and offline review
+The live and offline paths share event identities but have different authority. During an experiment, **MARK EVENT** records what happened without interrupting the grower. After the experiment, the labeler shows that same event in the **Unfinished** queue so the grower can select a better saved frame, add a comment, run Equalizer, and explicitly complete the review.
 
-The live GUI performs acquisition and display. The offline labeler works only on completed archived sessions. Never interpret an offline result as a real-time control instruction.
+The current classifier concerns the bare STO surface before growth. Keep these concepts separate:
 
-| Live acquisition | Offline build and validation |
-| --- | --- |
-| ![Growth Monitor writes the archived session](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/chmbe_growth_monitor_dummy.png) | ![The labeler combines archived inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_labeler_build.png) |
-| Growth Monitor writes the archived session. | The labeler combines the ZIP with predictions and model specifications. |
+- **Human reconstruction interpretation:** what a reviewer believes the surface pattern represents.
+- **Equalizer result:** a visual linear fit using four active basis images.
+- **Image acquisition quality:** whether the captured image is usable for analysis. It is not a statement about surface or FeSe film quality.
+- **Model output:** a prediction displayed for reference. It must not overwrite either the human interpretation or Equalizer result.
 
-> **Application boundary:** The live GUI creates session records. The labeler reads those records later, produces a browser report, and exports validated JSON. It never sends commands back to instruments.
-
-### Operating principle
-
-- The GUI reads live instrument sources and writes session records under operator control.
-- Post-processing combines an archived session with one or more already-generated prediction tables.
-- Human labels are stored as frame-bound temporal segments with provenance.
-- Model outputs remain visible, so these annotations are assisted review, not blind-gold labels.
-
-> **Keep the concepts separate:** Surface-reconstruction labels, acquisition-quality QC, and FeSe film quality are three different concepts. The current classifier concerns the bare STO surface before growth.
-
-## 2. Install shortcuts and start the correct chamber GUI
+## 2. Start the correct chamber application
 
 ### In brief
 
-1. Install or refresh the shortcuts from the current repository checkout.
-2. Choose the launcher that matches the physical chamber and verify its exact window title.
-3. Check the matching chamber register in [Chapter 3](#3-keep-ch-mbe-and-o-mbe-defaults-separate), then inspect live sources and logging before ARM.
-4. ARM only under the applicable experiment SOP and close normally so logs finish writing.
+1. Refresh the five desktop shortcuts from the current checkout after cloning or moving it.
+2. Use the launcher that matches the physical chamber.
+3. Verify the exact title, reader modes, live validity, and log path before ARM.
+4. Close normally so CSV and JSONL records finish writing.
 
-### Shared first setup or after moving the checkout
+Install shortcuts from the current checkout after cloning or moving it. Stop if the physical chamber, launcher, title, or displayed chamber identity disagree.
 
-1. From the GUI repository root, double-click `Install AI4MBE Desktop Shortcuts.cmd`.
-2. Confirm that the desktop contains refreshed shortcuts named **Ch-MBE Growth Monitor**, **O-MBE Growth Monitor**, and **RHEED Post-processing Labeler**.
-3. If Windows displays an unexpected security warning, do not bypass it. Stop and ask the maintainer to verify the file source and commit.
+### Unified Windows launcher and shortcut set
 
-### Current combined deployment branch
+Double-click `Install AI4MBE Desktop Shortcuts.cmd` to create or refresh exactly these five shortcuts:
 
-The branch that contains the current Ch-MBE/O-MBE launchers, the standalone
-offline labeler, this manual, and the bundled brightness-robust four-output
-model is:
+- **O-MBE Growth Monitor**
+- **Ch-MBE Growth Monitor**
+- **RHEED Post-processing Labeler**
+- **AI4MBE Operator Manual**
+- **Uninstall AI4MBE Growth Monitor**
 
-`codex/gui-brightness-robust-four-output-shadow`
+The three application shortcuts and their three root-level `Start *.cmd` troubleshooting wrappers route through the shared `scripts/windows/launch_ai4mbe.ps1` launcher with `-Application ombe`, `-Application chmbe`, or `-Application labeler`. The three application shortcuts use the bundled Yang Lab icon at `assets/ai4mbe_app_icon.ico`; the icon is visual identification only and never proves the chamber, repository, commit, or Python environment. The manual shortcut opens the English PDF, and uninstall removes installed program files and shortcuts while preserving experiment sessions and launcher logs.
 
-Record the exact commit before every acquisition or labeling run. Do not infer
-the branch from the folder name, and do not substitute `main` unless the team
-has separately verified that all four components are present there.
+The shared launcher discovers a compatible 64-bit `ai4mbe-gui` Python, starts from the resolved repository or installed-program root, sanitizes process-local Python and Qt environment variables, and writes diagnostics under `%LOCALAPPDATA%\AI4MBE\LauncherLogs`. It does not install packages, change persistent environment variables, alter instrument settings, or choose acquisition modes. `AI4MBE_GUI_PYTHON` may identify an already validated interpreter; do not create or change it ad hoc during an operating run.
 
-### Select the chamber before launch
+| Chamber | Launcher | Expected title |
+| --- | --- | --- |
+| Ch-MBE | `Start Ch-MBE Growth Monitor.cmd` | **Chalcogenide MBE Growth Monitor** |
+| O-MBE | `Start O-MBE Growth Monitor.cmd` | **Oxide MBE Growth Monitor** |
 
-| Physical chamber | Required launcher | Expected window title | Forced chamber identity |
-| --- | --- | --- | --- |
-| Ch-MBE | `Start Ch-MBE Growth Monitor.cmd` | **Chalcogenide MBE Growth Monitor** | `AIQM_CHAMBER=chmbe` |
-| O-MBE | `Start O-MBE Growth Monitor.cmd` | **Oxide MBE Growth Monitor** | `AIQM_CHAMBER=ombe` |
+For O-MBE and Ch-MBE, the shared launcher forces the requested chamber before Python can cache configuration, verifies the chamber profile, and relies on the application's chamber-specific single-instance mutex. Their configurations are not interchangeable. A runtime or chamber-preflight failure blocks launch. The launcher separately reports optional live-driver imports; an optional-driver warning does not hide the GUI, but it is a stop condition for any production mode that needs the missing driver. The operator may still use an unaffected approved mode under the applicable SOP. Windows Graphics Capture is an optional diagnostic mode and is checked by the GUI when selected.
 
-> **Stop on disagreement:** If the physical chamber, launcher, title, or displayed chamber identity do not agree, close the GUI normally and investigate. Do not ARM. The launcher selects the chamber; changing a GUI field is not a substitute.
+Before ARM, confirm an advancing RHEED sequence, valid temperature state, other instrument validity, current data ages, and intended log directory under the applicable chamber SOP. Launching the GUI never authorizes a setpoint change.
 
-<a id="chmbe-launch-route"></a>
-### Ch-MBE launch route
-
-Double-click `Start Ch-MBE Growth Monitor.cmd` or **Ch-MBE Growth Monitor**. The launcher calls the shared startup path for the Ch-MBE application, forces `AIQM_CHAMBER=chmbe`, uses the Ch-MBE single-instance mutex, performs preflight, and records launcher diagnostics. Continue only when the title is **Chalcogenide MBE Growth Monitor**. Use only the [Ch-MBE startup-default record](#chmbe-approved-defaults).
-
-<a id="ombe-launch-route"></a>
-### O-MBE launch route
-
-Double-click `Start O-MBE Growth Monitor.cmd` or **O-MBE Growth Monitor**. The launcher calls the shared PowerShell startup with `-Application ombe`, forces `AIQM_CHAMBER=ombe`, uses the O-MBE single-instance mutex, performs preflight, and records launcher diagnostics. Continue only when the title is **Oxide MBE Growth Monitor**. Use only the [O-MBE startup-default record](#ombe-approved-defaults).
-
-### Shared pre-ARM and shutdown checks
-
-1. Confirm the physical chamber, launcher route, exact title, and displayed chamber identity.
-2. Inspect every device status. Confirm an advancing RHEED frame sequence, a valid temperature state, and the intended log directory under the applicable chamber SOP.
-3. Verify the four reader modes against the matching startup-default record in [Chapter 3](#3-understand-configuration-modes-and-chamber-defaults), then verify all remaining operating settings against the applicable SOP.
-4. ARM or start a session only when the authorized operator is ready under the applicable experiment SOP. Launching the GUI does not authorize setpoint changes.
-5. At the end, close through the GUI normally and wait for the window to disappear. Do not force-kill Python while logs are being written.
-
-| Ch-MBE Session tab demo | O-MBE Session tab demo |
+| Ch-MBE Session tab | O-MBE Session tab |
 | --- | --- |
-| ![Ch-MBE Session tab with generated demo inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/chmbe_growth_monitor_session.png) | ![O-MBE Session tab with generated demo inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/ombe_growth_monitor_session.png) |
+| ![Ch-MBE Session tab with generated inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/chmbe_growth_monitor_session.png) | ![O-MBE Session tab with generated inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/ombe_growth_monitor_session.png) |
 
-> **Screenshot status:** These are the actual chamber-specific Session tabs in hardware-free demos. Their dummy selections are demonstration values, not Ch-MBE or O-MBE production defaults. Confirm the physical chamber and every selected interface before ARM.
-
-Each live launcher refuses a second process for the same application through its chamber-specific Windows single-instance mutex. The two launchers do not make their configurations interchangeable.
-
-> **Expected environment behavior:** Launcher logs are stored below `%LOCALAPPDATA%\AI4MBE\LauncherLogs`. They record the resolved Python interpreter, repository path, branch, commit, chamber, and optional-driver status. A missing optional driver produces a visible warning without hiding the GUI; do not ARM a production mode that needs the missing driver. Do not assume a fixed drive letter or create global environment variables ad hoc.
+These are generated demonstrations, not operating defaults.
 
 ## 3. Understand Configuration modes and chamber defaults
 
 ### In brief
 
-- `vimba`, `modbus`, and `ads` are the validated direct-read startup paths for both chambers.
-- Both O-MBE and Ch-MBE default EvapControl to `elog`, so all four startup readers use direct data paths.
-- Every `dummy` option supplies generated test data and is not an instrument reading.
-- The save folder and both model switches must be set before ARM; they lock while armed or running.
-- Selecting a mode changes only how the GUI reads data. It does not change an instrument setpoint or prove hardware synchronization.
+- The four selectors choose how the GUI reads data; they do not change instrument setpoints.
+- Both chamber profiles start with `vimba`, `modbus`, `ads`, and `elog`.
+- Every `dummy` mode is generated test data, never an instrument reading.
 
-The four selectors are independent. Their selected values are frozen when the session is armed.
+The selections are frozen when a session is armed.
 
-### Camera mode - RHEED image source
+### Camera mode
 
 | Option | Meaning |
 | --- | --- |
-| `dummy` | Fixed generated/demo STO 1x1 image; no camera connection. |
-| `dummy_c6x2` | Fixed c(6x2) demonstration image; no camera connection. |
-| `dummy_tw` | Fixed Twinned (2x1) demonstration image; no camera connection. |
-| `dummy_rt13_tilted` | Rotated RT13 demonstration image for alignment testing; no camera connection. |
-| `screengrab` | Windows Graphics Capture of a detached kSA **Live Video** window. It captures composed window pixels, not raw camera data. |
-| `screengrab_mss` | Legacy monitor-pixel capture. Window position, overlap, DPI, and foreground order can contaminate frames; diagnostic fallback only. |
-| `vimba` | Direct AVT camera acquisition through the Vimba SDK. This is the default live RHEED source. kSA camera ownership/access mode must permit the connection. |
+| `dummy` | Generated STO 1x1 demonstration image. |
+| `dummy_c6x2` | Generated c(6x2) demonstration image. |
+| `dummy_tw` | Generated Twinned (2x1) demonstration image. |
+| `dummy_rt13_tilted` | Rotated RT13 demonstration image for alignment testing. |
+| `screengrab` | Windows Graphics Capture of a detached kSA Live Video window. |
+| `screengrab_mss` | Legacy monitor-pixel capture; diagnostic use only because overlap, position, and DPI can affect it. |
+| `vimba` | Direct AVT camera acquisition through Vimba; production startup default. |
 
-### Pyrometer mode - substrate temperature source
+### Vimba exposure and ARM fail-closed behavior
+
+The **Direct exposure** control applies only to direct `vimba` acquisition. The current O-MBE profile requests 500 ms and the current Ch-MBE profile requests 300 ms during ARM. They are deliberately different software requests, not transferable chamber setpoints or operating authorization. The confirmed camera readback, not the displayed request alone, is the evidence of what was applied. The control is locked while armed or running.
+
+- A nonzero request is a volatile write performed during ARM. It requires Full camera access and `ExposureAuto=Off`. Close kSA or Vimba X Viewer when either application holds the camera and prevents Full access.
+- `0` displays **Keep current**. It performs no exposure write, but the driver still reads and records the camera's current exposure when that read is available.
+- The UI ceiling preserves at least 10 percent of the trigger period for acquisition overhead. The driver also rejects non-finite, out-of-range, or unsafe exposure and trigger combinations before writing.
+- After a write, the driver reads the feature back. ARM succeeds only when the requested value can be proven applied. On a post-write failure, the driver attempts a verified restoration of the original exposure and reports the failure; an unverified restoration remains an explicit stop condition.
+- The application never calls `UserSetSave`. The change is volatile, and a camera power cycle restores the stored camera user set.
+
+Session metadata distinguishes `camera_exposure_requested_ms` from `camera_exposure_readback_ms`. **Keep current** therefore records a null request and may still record a numeric readback. A requested value without a matching confirmed readback is not evidence that the camera accepted the setting.
+
+### Camera ownership, freshness, and start gate
+
+ARM is one cancellable startup transaction. A failed or abandoned camera setup releases its worker and camera ownership before the GUI returns to idle; do not launch a second process to work around an ARM failure. The direct Vimba path does not re-serve its cached last frame as a new acquisition. Capture sequence and arrival time must advance, and START remains disabled until the current ARM cycle has delivered a qualifying live frame. If delivery stalls, DISARM and investigate camera access, triggering, and the recorded error rather than treating the last displayed image as current data.
+
+Windows Graphics Capture can capture a detached kSA Live Video window while another window covers it, but it fails closed when the source window is minimized, closed, or stops delivering new frames. `screengrab_mss` remains a monitor-pixel diagnostic fallback and can be contaminated by overlap, position, scaling, and display changes.
+
+### Pyrometer mode
 
 | Option | Meaning |
 | --- | --- |
-| `dummy` | Generated temperature values for offline GUI checks; not an instrument reading. |
-| `exactus` | Direct serial read using the Exactus protocol and the displayed COM/baud fields. |
-| `modbus` | Direct read using the chamber profile's COM, baud, RTS, device ID, and Modbus backend. This is the default. |
-| `screengrab` | Reads the existing TemperaSure application through Windows UI automation. It depends on the correct window being open and updating. |
+| `dummy` | Generated temperature values. |
+| `exactus` | Direct serial Exactus protocol. |
+| `modbus` | Direct read using the chamber COM, baud, RTS, device ID, and backend; production startup default. |
+| `screengrab` | TemperaSure value through Windows UI automation. |
 
-### MISTRAL mode - power and cell data source
-
-| Option | Meaning |
-| --- | --- |
-| `dummy` | Generated voltage/current values; no PLC or MISTRAL connection. |
-| `screengrab` | Captures MistralGui and OCRs setpoint and actual voltage/current. The window must be visible and its layout must match the calibrated crop. |
-| `jsonrpc` | Experimental HTTP direct connection. Its read-method map is not configured, so it can connect while returning no V/I values; do not use for production logging. |
-| `ads` | Read-only direct Beckhoff TwinCAT ADS access using the chamber-specific endpoint, ports, schema, and cell count. This is the default. |
-
-### EvapControl mode - pressure and evaporation data source
+### MISTRAL mode
 
 | Option | Meaning |
 | --- | --- |
-| `dummy` | Generated pressure values; no EvapControl connection. |
-| `elog` | Directly reads EvapControl's current `.elo` binary log. It needs no OCR or visible window and can expose pressure, substrate, cell, and plasma fields present in the validated schema. |
-| `screengrab` | Captures the Evaporation Control window and OCRs chamber pressure. The window must be visible; fields absent from the crop remain unavailable. |
+| `dummy` | Generated voltage and current values. |
+| `screengrab` | MistralGui screenshot plus OCR. |
+| `jsonrpc` | Experimental HTTP route; it may connect while returning no values. |
+| `ads` | Read-only Beckhoff TwinCAT ADS using the chamber profile; production startup default. |
 
-> **Direct read is not hardware synchronization:** `vimba`, `modbus`, `ads`, and `elog` avoid screen OCR, but their workers receive data independently. A sensor-log row is a latest-value software snapshot, not proof that exposure, temperature, PLC, and EvapControl were physically sampled at one instant.
+### EvapControl mode
 
-### Save folder and model switches
-
-| Setting | Exact behavior in this branch |
+| Option | Meaning |
 | --- | --- |
-| **Save folder / Browse** | Selects the root for new session output. Set and verify it before ARM. It locks while armed or running and does not move an older session. |
-| **Live classifier** | Starts the existing five-output bare-STO classifier worker when checked. It is checked by default. Unchecking it before ARM prevents that worker from loading. |
-| **4-output shadow** | Starts the bundled 36-head `all_extreme` ensemble when checked. It is unchecked by default. Its outputs are conditional scores for Twinned, c(6x2), RT13, and HTR; there is no 1x1 output. |
-| **Events / Classify!** | Performs a separate on-demand classification in the Events page. The two live-model checkboxes do not disable this button. |
+| `dummy` | Generated pressure values. |
+| `elog` | Direct read of the current EvapControl `.elo` log; production startup default. |
+| `screengrab` | EvapControl window screenshot plus OCR. |
 
-The four-output route is `weak_shadow_only` and `deployment_eligible=false`.
-Its values are not surface fractions, are not a FeSe classifier, and must not
-drive advice, control, or automatic capture. Pixel-difference automatic
-capture and ordinary logging continue when both live models are off.
-
-To change either model switch, STOP and DISARM first, change the checkbox, and
-ARM again. For FeSe growth recording, leave both **Live classifier** and
-**4-output shadow** unchecked and do not use **Events / Classify!**. These
-models concern the bare STO surface before growth, not FeSe film quality or
-FeSe reconstruction.
+Direct reads avoid OCR but are still independent software workers. A sensor-log row is a latest-value snapshot, not proof that camera exposure, temperature, ADS, and EvapControl were physically sampled at one instant.
 
 <a id="chmbe-approved-defaults"></a>
 ### Ch-MBE GUI startup defaults
 
-This record applies only to the [Ch-MBE launch route](#chmbe-launch-route).
-
-| Selector | Startup selection and source |
+| Selector | Startup selection |
 | --- | --- |
 | Camera | `vimba` - direct AVT camera read |
 | Pyrometer | `modbus` - COM3, 115200 baud, device 1, RTS off, `raw_serial` backend |
-| MISTRAL | `ads` - chamber-specific read-only ADS profile, 7 cells |
-| EvapControl | `elog` - direct read from the Ch-MBE `.elo` log directory |
+| MISTRAL | `ads` - chamber-specific read-only profile, 7 cells |
+| EvapControl | `elog` - Ch-MBE `.elo` log directory |
 
 <a id="ombe-approved-defaults"></a>
 ### O-MBE GUI startup defaults
 
-This record applies only to the [O-MBE launch route](#ombe-launch-route).
-
-| Selector | Startup selection and source |
+| Selector | Startup selection |
 | --- | --- |
 | Camera | `vimba` - direct AVT camera read |
 | Pyrometer | `modbus` - COM4, 115200 baud, device 1, RTS off, `pymodbus` backend |
-| MISTRAL | `ads` - chamber-specific read-only ADS profile, 6 cells |
+| MISTRAL | `ads` - chamber-specific read-only profile, 6 cells |
 | EvapControl | `elog` - direct current `.elo` log read |
 
 ### What remains chamber-owner controlled
 
-These are software startup selections, not permission to ARM. ROI/crop, classifier package and enable state, save root and naming, sampling intervals, and every instrument setpoint remain governed by the matching chamber SOP and owner approval. Each chamber passes its own log directory to `ElogReader`; variables absent from that chamber's schema remain blank rather than being invented.
+ROI and crop, classifier package and enable state, save-root approval and naming, intervals, and every instrument setpoint remain governed by the matching chamber SOP. The initial Windows save field uses separate `OMBE` and `ChMBE` folders and remains editable before ARM. Each production profile passes its own explicit directory to `ElogReader`; a generic `AIQM_EVAP_LOG_DIR` is only a standalone-reader fallback and does not override the GUI profile. Session metadata records the effective pyrometer serial settings, configured Elog directory, and exact `.elo` source once connected. Variables absent from that chamber's schema remain blank rather than being invented.
 
-## 4. Open the RHEED post-processing labeler
+## 4. Open the offline labeler correctly
 
 ### In brief
 
-1. Start the dedicated offline-labeler shortcut.
-2. Confirm the **Build** and **Open / Validate** tabs and their expected buttons.
-3. Verify that Growth Monitor and instrument processes do not start.
+- Use the desktop labeler when Equalizer or Complete is needed.
+- A directly opened static HTML can inspect and edit Drafts but cannot run Equalizer or Complete.
+- The local service binds only to `127.0.0.1` and uses a random session token.
 
-1. Double-click `Start RHEED Post-processing Labeler.cmd` or its desktop shortcut.
-2. Confirm that the application has the **Build** and **Open / Validate** tabs, plus **Build report and open**, **Open report**, **Validate annotations**, and **Open English PDF manual**. It must not start Growth Monitor or contact instruments.
+Double-click `Start RHEED Post-processing Labeler.cmd`. Confirm the **Build** and **Open / Validate** tabs and verify that no Growth Monitor or instrument program starts.
 
-![Offline labeler Build tab with generated fixture](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_labeler_build.png)
+![Offline labeler Build tab](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_labeler_build.png)
 
-> **Screenshot status:** This is the actual desktop labeler Build tab populated with a generated local fixture. The application is offline and no instrument process is running.
+The desktop labeler starts a loopback-only local service for the selected report. This service gives the browser a narrow route to request the existing PyQt retrospective Equalizer and to record audited revisions. It is not an instrument server and must not bind to a network interface.
 
-| Area | Purpose |
+If `interactive_report.html` is opened directly with `file:///`, navigation and Draft editing remain available. **Run Equalizer** and **Complete** must show that the report needs to be reopened through the desktop labeler.
+
+## 5. Prepare the archive and understand event sources
+
+### In brief
+
+- Preserve the original ZIP and let the tool verify every saved frame and hash.
+- Manual marks and automatic image-change events become editable Drafts.
+- Adjustment, image-unusable, and sensor records remain read-only context.
+
+The archive must contain one session metadata record, its acquisition CSV files, and every referenced frame. Read `chamber_id` from the session metadata and confirm it names the intended chamber. For Modbus sessions, preserve COM, baud, RTS, device ID, and backend. For ADS sessions, preserve endpoint, ports, and cell count. For Elog sessions, preserve the configured directory and resolved source file. Never edit an archive to make it resemble the other chamber.
+
+### Editable point-event sources
+
+| Source | Meaning |
 | --- | --- |
-| Session ZIP | Select one archived Growth Monitor session. |
-| Model inputs | Pair one prediction CSV with its model-spec JSON on each row. |
-| Output directory | Select a new or empty directory, preferably outside Git. |
-| Message log | Preserve complete build and validation messages. |
-| Open report button | Open a previously generated `interactive_report.html`. |
-| Validate annotations | Check exported JSON against the exact report provenance. |
+| `manual` | A grower pressed **MARK EVENT** during acquisition. The live click creates a Draft without opening a dialog. |
+| `auto_capture` | The image-change detector recorded a change point. This identifies a visual change, not its physical cause. |
+| `posthoc` | A reviewer adds a point at an actual saved frame after the run. |
 
-> **Offline by design:** This application can run on a computer without instrument software when the archived inputs are complete and the Python environment is valid. Report construction and validation run in an isolated child process so the desktop application remains responsive.
+Future live and posthoc events use UUIDs. Older rows receive deterministic IDs derived from session identity, source file, source index, time, and capture sequence, so identical `event_idx` values in different CSV files cannot collide.
 
-## 5. Prepare inputs and verify provenance
+### Read-only reference sources
 
-### In brief
+RHEED direction, beam current, and beam energy adjustments are displayed as reference points. An **image unusable for analysis** record means only that acquisition or capture made that frame unsuitable for interpretation; it must never be read as poor surface or film quality. Temperature, voltage, current, pressure, and data-age values are read from the original logs near the event time. They are context, not editable label fields.
 
-- Use the original session ZIP without manually renaming or reordering frames.
-- Pair every prediction CSV with its matching model-spec JSON in the same row order.
-- Let the tool verify saved-frame provenance, timing, filenames, and SHA-256 values.
-- Any mismatch stops the build; never edit inputs to bypass the check.
+Legacy `events_labels.csv` can seed old automatic-event review fields. A legacy `live_labels.csv` row is linked only when capture sequence and frame hash identify exactly one event. Ambiguous rows remain unlinked for manual resolution. Legacy temporal-segment reports remain readable but are not automatically converted because a segment has no unique scientific point.
 
-### Session archive
-
-The ZIP archive must contain exactly one member ending in `session_metadata.json`, exactly one member ending in `heartbeat_log.csv`, and every sibling `frames/` image referenced by the heartbeat rows. Saved-frame elapsed time, heartbeat index, capture sequence, and timezone-aware capture UTC must each increase strictly; gaps are allowed. Do not extract and rename frames manually.
-
-Read `chamber_id` from the session metadata and confirm that it names the intended O-MBE or Ch-MBE source. When the recorded MISTRAL mode is ADS, also preserve its recorded endpoint, ports, and cell count. Compare provenance only with the corresponding [Ch-MBE](#chmbe-approved-defaults) or [O-MBE](#ombe-approved-defaults) startup-default record; never edit an archive to make it resemble the other chamber.
-
-```text
-growth_session.zip
-  session_metadata.json
-  heartbeat_log.csv
-  frames/
-    heartbeat_000001_....bmp
-    heartbeat_000002_....bmp
-```
-
-### Prediction tables and model specifications are positional pairs
-
-| File | Required content | Check |
-| --- | --- | --- |
-| Prediction CSV | Frame index, heartbeat index, elapsed time, capture UTC, capture sequence, frame name, frame SHA-256, and score columns | Rows match the saved-frame order exactly. |
-| Model-spec JSON | Schema version 1, non-empty key and title, at least two unique classes, and equally sized unique probability columns | Class order matches the score columns; status and provenance are optional. |
-| Session ZIP | Metadata, heartbeat log, and frames | Every referenced frame exists in the archive. |
-
-Prediction `frame_index` may begin at 0 or 1, but it must then remain contiguous. Heartbeat indices, capture sequences, and elapsed times may contain gaps. The tool follows actual saved frames and recorded times; it never assumes exact 1 Hz sampling.
-
-> **Fail closed:** Any mismatch in row count, order, time, sequence, filename, or SHA-256 stops the build. Do not edit the inputs to bypass an error.
-
-### Recommended local layout
-
-Use a local data root outside the source repository. The names below are illustrative only and contain no real experimental path:
-
-```text
-<local-data-root>\<run-name>\
-  source\growth_session.zip
-  predictions\model_A.csv
-  specs\model_A.json
-  output\
-  exports\
-```
-
-## 6. Build and open a report safely
+## 6. Build and open a point-event report
 
 ### In brief
 
-1. Select the preserved ZIP and each correctly paired prediction/specification row.
-2. Choose a new or empty output directory outside Git.
-3. Build, wait for success, and keep the entire generated report directory together.
-4. Use CLI overwrite only when you understand its strict safety boundary.
+1. Select the preserved ZIP and correctly paired model inputs.
+2. Build into a new or empty directory outside Git.
+3. Keep the full report directory and the read-only source archive together.
 
-1. Choose the preserved archive copy in **Session ZIP**.
-2. Add one Prediction CSV and Model-spec JSON row for every model to display. Pairing is positional, so preserve row order.
-3. Choose a new or empty directory outside the repository. The desktop labeler will not overwrite a non-empty directory.
-4. Enter a report title. Review quality changes only the lossy review images; it never changes archived pixels or model predictions. The default value of 78 is suitable for routine use.
-5. Click **Build report and open**. Wait for success and for `interactive_report.html` to open automatically.
-
-### PowerShell fallback
+Select the session ZIP, add each prediction CSV beside its matching model-spec JSON, choose a new output directory, and click **Build report and open**. Prediction rows must match the saved-frame order, time, capture sequence, filename, and SHA-256. Any mismatch stops the build.
 
 ```powershell
 Set-Location '<GUI repository>'
@@ -332,269 +231,156 @@ python -m tools.rheed_postprocessing_labeling build `
   --session '<local-data-root>\growth_session.zip' `
   --predictions '<local-data-root>\predictions.csv' `
   --model-spec '<local-data-root>\model_spec.json' `
-  --output-dir '<local-data-root>\labeling-output'
+  --output-dir '<local-data-root>\point-event-review'
 ```
 
-### Copy the entire report directory
+Keep `interactive_report.html`, `images/`, `vendor/`, `run_manifest.json`, and `annotations/` together. Review WebP images are for display only. Equalizer reads the original BMP or PNG bytes from the ZIP.
 
-The report consists of `interactive_report.html`, `images/`, `vendor/`, and `run_manifest.json`. Copy the entire directory during handoff. Preserve the original prediction CSV and model-spec JSON separately outside the report directory.
-
-> **Advanced CLI overwrite boundary:** The desktop application always refuses a non-empty output directory. CLI `--overwrite` may replace only a recognized, unmodified tool output. It validates the new inputs and stages a complete replacement first. If the old report changes during the build, replacement stops and the original content is restored. Filesystem roots, repository paths, the current directory, and directories containing inputs are always rejected.
-
-## 7. Label temporal segments like an editing timeline
+## 7. Review and complete point events
 
 ### In brief
 
-1. Move the synchronized playhead to the first saved frame and select **Mark In**.
-2. Move to the inclusive final frame and select **Mark Out**.
-3. Choose a label, identify the labeler, add useful notes, and save the segment.
-4. Review endpoints frame by frame; adjacent segments are allowed, but overlap is rejected.
+1. Select an Unfinished event or add a posthoc event at the playhead.
+2. Snap the review point to the best saved frame, write a comment, and identify the reviewer.
+3. Run and adjust Equalizer, save the Draft, then explicitly click Complete.
 
-![Timeline segment editor with generated RHEED frames](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_timeline_editor.png)
+There are no **Mark In**, **Mark Out**, interval-overlap, or inclusive-end rules in `rheed-point-events-v1`. Each item is a point. Multiple events may share one timestamp or one saved frame and still retain different IDs.
 
-> **Screenshot status:** This is the actual English browser editor with generated RHEED frames, synthetic model curves, saved human segments, and a synchronized playhead.
+### Original point and review point
 
-1. Move the Frame playhead or click a model plot to locate the first saved frame of a segment. Click **Mark In**.
-2. Move to the final saved frame of the segment and click **Mark Out**. The Out marker is inclusive.
-3. Choose a reconstruction label, enter the labeler name, add notes when useful, and click **Add segment**.
-4. Select a saved segment to edit it. Update preserves its annotation ID. Adjacent segments are allowed; overlapping segments are rejected.
+The **original point** is immutable evidence: event ID, source, original time, original frame if available, capture sequence, image SHA-256, original note, and source-row SHA-256. The **review point** may move, but only by snapping to an actual saved frame. Moving it never changes the original point and automatically clears the old Equalizer result because that result belonged to another image.
 
-The displayed and exported saved-frame ordinal is 1-based. Every endpoint also records heartbeat index, capture sequence, UTC, and frame SHA-256. This preserves traceability even when the sampling interval or sequence contains gaps.
+### Required review actions
 
-> **Frame-bound interval semantics:** Labels cover the saved frames from In through Out, inclusive. They do not claim that unsaved camera frames or every capture-sequence number in between was reviewed.
+1. Select a Draft from **Unfinished**.
+2. Inspect the original and current review markers.
+3. Move the review point if a nearby saved frame better represents the event.
+4. Enter a meaningful comment and reviewer. Confidence and human reconstruction before/after fields are optional.
+5. Click **Run Equalizer**. If no compatible accepted calibration exists for the exact frame geometry, view segment, and basis bundle, perform the three-point alignment and confirm handedness first.
+6. Adjust and save the Equalizer measurement.
+7. Click **Complete** explicitly.
 
-## 8. Review, display controls, and drafts
+![Point-event editor with generated demo inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_timeline_editor.png)
 
-### In brief
+The actual editor uses point markers and an **Unfinished** queue; the former interval-label controls are absent.
 
-- The main timeline, plots, image, metadata, and enlarged-view timeline remain synchronized.
-- Brightness, contrast, zoom, and enlargement change review display only, not source data or predictions.
-- Export JSON frequently; browser localStorage is only a draft.
-- Treat labels as model-assisted surface-reconstruction review, not acquisition QC or blind-gold truth.
+Complete is disabled until all of these are present: nonempty comment, reviewer, saved review frame, and valid Equalizer result for that exact frame. Editing a completed event's comment, review point, or Equalizer automatically returns it to Draft. Use **Reopen** when intentionally continuing review.
 
-### All time indicators remain synchronized
+Source events cannot be deleted. They may be marked **Dismissed** only with a reason, preserving the original evidence. A posthoc event may be deleted with an audited reason and later restored.
 
-| Action | Must update together | Must not change |
-| --- | --- | --- |
-| Move the main timeline | Current RHEED image, model guides, enlarged-view timeline | Archive and prediction values |
-| Click a model curve | Main playhead, image, and metadata | Saved segments |
-| Adjust brightness or contrast | On-screen appearance | Pixels, SHA-256, and model outputs |
-| Enlarge the image | Zoom view and its adjustable timeline | Source image and segment boundaries |
-
-![Enlarged RHEED frame and synchronized timeline](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_timeline_zoom.png)
-
-> **Screenshot status:** This is the actual enlarged-frame dialog. Its timeline changes the selected frame while preserving zoom, pan, and display adjustments.
-
-### Drafts and editing
-
-- The browser stores a draft scoped by both dataset ID and model-context fingerprint in localStorage. This is not a durable backup.
-- Export JSON frequently, especially during long reviews and before changing computers, browsers, or cache settings.
-- **Delete selected** requires confirmation. Undo restores only the most recent annotation mutation.
-- Import JSON validates before replacement. On failure, the current segment set remains unchanged.
-
-### Interpretation
-
-Labels describe the dominant surface-reconstruction category seen by the reviewer during the interval. The displayed **Uncertain** label exports as `unknown`; **1x1 / none-weak** exports as `none_weak`. Never overwrite a human selection with model argmax, and never interpret `unknown` as acquisition-quality rejection.
-
-> **Display adjustment is not data modification:** Brightness, contrast, zoom, and image enlargement aid inspection only. Brightness and contrast are stored with each segment; zoom is not exported. The report never rewrites archived images or model outputs.
-
-Use a four-pass review rhythm: survey the full run, confirm every In and Out frame, inspect gaps and uncertain labels, then export and validate the canonical JSON.
-
-## 9. Export, import, and fail-closed validation
+## 8. Interpret Equalizer, logs, and display controls
 
 ### In brief
 
-- Export JSON is the canonical artifact; CSV is only a convenient table.
-- Validate the JSON against the exact original report before downstream use.
-- Provenance binds the session, ordered frames, model context, and every segment endpoint.
-- Never bypass a validation failure.
+- Equalizer is a separate visual fit and never fills a human reconstruction field.
+- Temperature, voltage, current, pressure, and data age are read-only context.
+- Brightness, contrast, zoom, and image enlargement never modify archived pixels.
 
-### JSON is the canonical artifact
+Equalizer records calibration ID, basis-bundle ID, raw/final/normalized weights, fit residual, valid coverage, exact frame hash, and four active classes: `1x1`, `Tw`, `c6x2`, and `RT13`. HTR has no canonical basis and must remain null. Equalizer weights are not model probabilities, area fractions, or automatic human labels.
 
-Use **Export JSON** to resume work, validate provenance, and support downstream processing. Export CSV is useful for meetings and tabular analysis, but it does not replace the complete nested provenance in JSON.
+![Enlarged frame view with adjustable timeline](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_timeline_zoom.png)
 
-| Binding | Purpose |
-| --- | --- |
-| `dataset_id` and source archive SHA-256 | Bind the source session. |
-| Ordered-frame fingerprint | Bind frame order and per-frame SHA-256. |
-| `model_context_fingerprint` | Bind the visible predictions and model specifications. |
-| Endpoint provenance | Bind saved-frame ordinal, heartbeat, UTC, sequence, and SHA-256. |
-| `model_outputs_visible=true` | Disclose that the models were visible. |
-| `eligible_for_gold=false` | Prevent blind-gold misuse. |
+The playhead, image, model guides, event markers, and enlarged-view timeline must remain synchronized. Brightness and contrast alter display only. The source frame bytes and SHA-256 never change.
 
-### Validate in the desktop application
+Instrument context is looked up from original logs at the event time. Data age helps judge how old a cached reading was, but shared display time does not prove simultaneous physical sampling. Do not copy these readings into comment or reconstruction fields merely to duplicate the logs.
 
-1. Select the original `interactive_report.html`.
-2. Select the exported annotation JSON.
-3. Click **Validate annotations**. Continue only when the application says **Annotation JSON is valid for this report**.
+## 9. Preserve revisions, drafts, and exports
 
-### PowerShell validation
+### In brief
+
+- Every edit is append-only and records actor, UTC, action, before/after state, and base revision.
+- The ZIP stays read-only; offline changes live in the adjacent `annotations/` sidecar.
+- JSON is canonical; CSV is a collaboration convenience.
+
+Live sessions retain the acquisition CSVs, `rheed_event_revisions.jsonl`, and a rebuildable current-state summary. Offline reports write the same revision concept beside the report, never into the ZIP. A pending transaction marker allows an interrupted write to be recovered exactly once.
+
+Browser local storage is only a convenience Draft. Export JSON frequently. Export CSV for meetings or review tables, but retain JSON for complete provenance and revision history. Import must verify dataset identity, ordered frame hashes, model context, event IDs, review anchors, and revision chain before replacing the current Draft.
 
 ```powershell
 python -m tools.rheed_postprocessing_labeling validate `
-  --report '<local-data-root>\labeling-output\interactive_report.html' `
-  --annotations '<local-data-root>\exports\segment_annotations.json'
+  --report '<local-data-root>\point-event-review\interactive_report.html' `
+  --annotations '<local-data-root>\point-event-review\annotations\point_events.json'
 ```
 
-> **Never bypass a validation failure:** A wrong run, changed model context, altered endpoint, overlapping segment, invalid label, or gold-data claim causes validation to fail. Return to the correct report and original export and investigate the exact message.
+Old `rheed-temporal-segments-v1` JSON remains available to its original validator as read-only compatibility data. Do not reinterpret segment start, middle, or end as an event without scientific review.
 
-Browser Import performs immediate client-side provenance checks before replacing the current draft. Desktop **Validate annotations** is the authoritative full fail-closed validation.
-
-## 10. Data safety and scientific boundaries
+## 10. Follow data and scientific safety boundaries
 
 ### In brief
 
-- Keep real archives, images, logs, predictions, reports, annotations, checkpoints, and unpublished results out of Git by default.
-- Preserve an immutable source ZIP, canonical JSON, hashes, and the complete report directory.
-- These labels are model-assisted review of bare STO surface reconstruction, not blind-gold data or FeSe film-quality judgments.
+- Keep real archives, images, predictions, reports, annotations, and checkpoints out of Git.
+- Treat visible-model review as assisted annotation, not blind-gold truth.
+- Never infer surface or film quality from an image-unusable flag.
 
-### What belongs in Git
+Track tool code, tests, templates, example specifications, and sanitized screenshots. Keep experiment ZIP files, raw images, logs, predictions, generated reports, annotation sidecars, checkpoints, credentials, and unpublished results outside Git by default.
 
-| May be tracked | Keep out by default |
+Equalizer and model plots are visible during this workflow, so the result is model-assisted review and is not blind-gold. Equalizer must not overwrite a human label, and model argmax must not overwrite either. Image acquisition quality describes analyzability only. The current reconstruction target is bare STO before growth and is not FeSe film quality.
+
+Preserve the source ZIP SHA-256, report manifest, revision journal, canonical JSON, model specifications, and complete report directory during handoff.
+
+## 11. Troubleshoot without destroying evidence
+
+### In brief
+
+Record the exact error, time, chamber, launcher, commit, environment, paths, and validity state before changing anything. Never repair one chamber by copying settings from the other.
+
+| Symptom | Safe action |
 | --- | --- |
-| Tool code, templates, tests, and documentation | Real session ZIP files, raw RHEED images, and sensor logs |
-| Example model specifications | Real predictions, generated reports, and annotation JSON or CSV |
-| Sanitized documentation screenshots made with generated demo inputs | Checkpoints, unpublished results, and experiment-specific screenshots |
+| Shortcut is missing, opens an old checkout, or has an old icon | Run `Install AI4MBE Desktop Shortcuts.cmd` from the intended current checkout; verify the shared launcher path and bundled icon. |
+| Wrong chamber title | Close normally and use the matching chamber launcher. |
+| Launcher reports an optional live driver missing | Preserve the launcher log and do not ARM a production mode that needs that driver; do not install packages during an operating run. |
+| Direct exposure is refused | Stay idle. For a nonzero request, verify Full camera access and that kSA or Vimba X Viewer has released the camera; never bypass readback or restoration checks. |
+| START remains disabled or the frame counter stalls | DISARM and inspect camera ownership, triggering, sequence, arrival age, and the exact worker error. Do not treat the last displayed frame as fresh. |
+| Temperature or instrument value invalid | Record mode, connected/valid/error state, sequence, and age; do not guess COM or setpoint values. |
+| Build rejects inputs | Check the ZIP, positional prediction/spec pairs, hashes, and empty output directory. |
+| HTML has no images | Restore the complete report directory. |
+| Unfinished event is missing | Verify the source CSV row and source-row hash, then inspect revision replay errors. |
+| Run Equalizer unavailable | Reopen the report through the desktop labeler, not `file:///`. |
+| Equalizer is rejected | Verify exact raw frame, calibration compatibility, handedness, geometry, view segment, and basis hash. |
+| Complete is disabled | Supply comment, reviewer, saved review frame, and valid Equalizer result. |
+| Revision recovery fails | Preserve JSONL and pending marker; do not hand-edit them. |
 
-### Safe handling sequence
+For O-MBE, confirm **Oxide MBE Growth Monitor** and the intended repository, branch, commit, Python interpreter. For Ch-MBE, confirm **Chalcogenide MBE Growth Monitor** and the intended repository, branch, commit, Python interpreter.
 
-1. Keep the source session ZIP read-only or preserve an immutable copy, and record its SHA-256.
-2. Create a dedicated working directory outside the repository. Keep reports, exports, and screenshots there.
-3. For handoff, copy the complete report directory and canonical JSON. Separately preserve the original prediction CSV, model-spec JSON, and SHA manifest. Never send only the HTML.
-4. Run statistics or training-data preparation only after validation, and preserve the original export unchanged.
-
-> **Model-assisted review, not blind-gold:** Model plots and lossy review images are visible during labeling. These annotations are eligible only as model-assisted review. Formal blind-gold labels require a separate workflow that hides model and Equalizer outputs and preserves the required audit evidence.
-
-> **Do not over-interpret the output:** The current classification target is bare STO surface reconstruction before growth. Do not interpret a reconstruction label as FeSe film quality. Do not equate reconstruction `unknown` with acquisition-quality `QC_REJECT`.
-
-## 11. Troubleshooting
-
-### In brief
-
-1. Preserve the exact error, time, branch, commit, selected paths, and launcher name.
-2. Do not begin by deleting environments, changing global variables, or force-resetting Git.
-3. Route live-GUI problems through the matching chamber section and startup-default record.
-4. Follow fail-visible messages; do not guess interface settings or edit data to bypass provenance checks.
-
-First preserve the exact error text, occurrence time, branch, commit, and selected paths. Do not begin by deleting environments, changing global variables, or force-resetting Git. A live-driver warning is fail-visible behavior, not a prompt for ad hoc dependency installation.
-
-### Shared issues
-
-| Symptom | Likely cause | Safe action |
-| --- | --- | --- |
-| Desktop shortcut is absent or opens an old checkout | Installer was not run after the checkout moved | Run the shortcut installer from the current repository root. |
-| Launcher window closes immediately | Environment or dependency failure | Read the newest launcher log; if needed, run the same CMD from PowerShell. |
-| Temperature or RHEED has no valid reading | Interface, vendor window, or selected mode issue | Record connected, error, and mode; do not guess global settings. |
-| Labeler rejects Build | Missing input, mismatched pair, or non-empty output | Check the session, each positional pair, and a new output directory. |
-| Provenance mismatch | Predictions do not belong to the ZIP or rows changed | Find the matching predictions and spec; do not edit the CSV. |
-| HTML has no images or curves | Only the HTML was copied or assets are missing | Restore the complete report directory and relative paths. |
-| Draft disappeared | Browser, computer, or localStorage changed | Import the latest JSON and export more frequently. |
-| Import or validation fails | Run, context, endpoint, overlap, or label mismatch | Use the original report and JSON; read the fail-closed message. |
-
-<a id="chmbe-troubleshooting-route"></a>
-### Ch-MBE live troubleshooting route
-
-If the physical system is Ch-MBE, confirm that the launcher is `Start Ch-MBE Growth Monitor.cmd`, the title is **Chalcogenide MBE Growth Monitor**, and the chamber identity is `chmbe`. If any disagree, close normally and return to the [Ch-MBE launch route](#chmbe-launch-route). Compare reader selections with the [Ch-MBE startup-default record](#chmbe-approved-defaults); escalate any other unexplained operating value to the Ch-MBE owner.
-
-<a id="ombe-troubleshooting-route"></a>
-### O-MBE live troubleshooting route
-
-If the physical system is O-MBE, confirm that the launcher is `Start O-MBE Growth Monitor.cmd`, the title is **Oxide MBE Growth Monitor**, and the chamber identity is `ombe`. If any disagree, close normally and return to the [O-MBE launch route](#ombe-launch-route). Compare reader selections with the [O-MBE startup-default record](#ombe-approved-defaults); escalate any other unexplained operating value to the O-MBE owner.
-
-### Minimum evidence for the maintainer
-
-- Full error text and occurrence time. Do not report only that it does not work.
-- Output of `git status --short --branch` and `git rev-parse HEAD`.
-- Physical chamber, launcher name, exact window title, displayed chamber identity, environment path, input filenames, and output directory. Keep sensitive data out of public channels.
-- The newest relevant file below `%LOCALAPPDATA%\AI4MBE\LauncherLogs`, with credentials and sensitive paths redacted before public sharing.
-- For labeling issues, report-manifest and annotation-JSON SHA values. Raw images are not initially required.
-
-## 12. Version verification and quick checklist
+## 12. Verify versions and finish the checklist
 
 ### In brief
 
-- Record the repository, commit, environment, and Python version before acquisition or labeling.
-- Stop if the version or Git state differs from the team-specified state.
-- Hash the source ZIP, canonical JSON, and manual.
-- Complete the checklist for the selected chamber and the shared offline handoff; stop on unexplained instrument, stale-data, version, provenance, or validation states.
-
-### Record versions before acquisition or labeling
+Record versions and hashes, use only the selected chamber checklist, validate the point-event export, and stop when identity, provenance, or instrument state cannot be explained.
 
 ```powershell
 Set-Location '<GUI repository>'
 git status --short --branch
 git rev-parse HEAD
-conda env list
 conda activate ai4mbe-gui
 python --version
 python -m tools.rheed_postprocessing_labeling --help
-```
-
-For the combined deployment documented by this manual, the expected branch is
-`codex/gui-brightness-robust-four-output-shadow`. The exact commit may advance;
-use the team-specified commit and record it rather than guessing from the
-directory name.
-
-Use the resolved Python interpreter and repository path recorded by the launcher. Read `AI4MBE_GUI_PYTHON` only when it is already configured on that workstation; do not create it ad hoc. If the branch or commit differs from the team-specified version, or Git reports unknown modifications, stop and verify.
-
-### Integrity hashes
-
-```powershell
 Get-FileHash '<local-data-root>\growth_session.zip' -Algorithm SHA256
-Get-FileHash '<local-data-root>\exports\segment_annotations.json' -Algorithm SHA256
-Get-FileHash '.\docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf' -Algorithm SHA256
 ```
 
-### Companion text and AI prompts
-
-Use this Markdown manual for searchable text and the [English AI prompt pack](RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md) for constrained AI-assisted reading. The prompt pack does not authorize an AI to invent undocumented operating values or make instrument-control decisions.
-
-<a id="chmbe-startup-checklist"></a>
-### Ch-MBE startup checklist
-
-- [ ] The physical chamber is Ch-MBE.
-- [ ] Use `Start Ch-MBE Growth Monitor.cmd` or **Ch-MBE Growth Monitor**; never use the O-MBE launcher for this chamber.
-- [ ] Confirm the title **Chalcogenide MBE Growth Monitor** and chamber identity `chmbe`.
-- [ ] Confirm the launcher log identifies Ch-MBE, the intended repository, branch, commit, Python interpreter, and required optional drivers.
-- [ ] Confirm the branch is `codex/gui-brightness-robust-four-output-shadow` at the team-specified commit.
-- [ ] Confirm `vimba / modbus / ads / elog` against the [Ch-MBE startup-default record](#chmbe-approved-defaults); stop on any unexplained value.
-- [ ] Confirm the **Save folder** before ARM. For FeSe recording, uncheck both live-model switches and do not use **Events / Classify!**.
-- [ ] Confirm an advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the Ch-MBE SOP.
-- [ ] ARM only when the authorized operator and Ch-MBE SOP permit it; this checklist grants no operating or setpoint authority.
-
-<a id="ombe-startup-checklist"></a>
 ### O-MBE startup checklist
 
-- [ ] The physical chamber is O-MBE.
-- [ ] Use `Start O-MBE Growth Monitor.cmd` or **O-MBE Growth Monitor**; never use the Ch-MBE launcher for this chamber.
-- [ ] Confirm the title **Oxide MBE Growth Monitor** and chamber identity `ombe`.
-- [ ] Confirm the launcher log identifies O-MBE, the intended repository, branch, commit, Python interpreter, and required optional drivers.
-- [ ] Confirm the branch is `codex/gui-brightness-robust-four-output-shadow` at the team-specified commit.
-- [ ] Confirm `vimba / modbus / ads / elog` against the [O-MBE startup-default record](#ombe-approved-defaults); stop on any unexplained value.
-- [ ] Confirm the **Save folder** and both live-model choices before ARM.
-- [ ] Confirm an advancing RHEED sequence, valid temperature and instrument states, data age, and intended log directory under the O-MBE SOP.
-- [ ] ARM only when the authorized operator and O-MBE SOP permit it; this checklist grants no operating or setpoint authority.
+- Use only `Start O-MBE Growth Monitor.cmd` and confirm **Oxide MBE Growth Monitor**.
+- Confirm the launcher log identifies O-MBE, the intended repository, branch, commit, Python, a passed chamber preflight, and optional-driver status.
+- Confirm `vimba / modbus / ads / elog` against the O-MBE record.
+- Confirm the O-MBE direct-exposure request, Full-access requirement when writing, and reported readback. Do not borrow Ch-MBE's exposure.
+- Confirm an advancing RHEED capture sequence and current frame, valid instrument states, data age, and intended log directory.
+- ARM only under the O-MBE SOP and authorized operator.
 
-### Shared live-session checks
+### Ch-MBE startup checklist
 
-- [ ] STOP and DISARM before changing the save folder, acquisition modes, or model switches.
-- [ ] Treat the four-output shadow values as conditional diagnostics only, never as fractions or control signals.
-- [ ] Close the GUI normally and wait for logging to finish.
+- Use only `Start Ch-MBE Growth Monitor.cmd` and confirm **Chalcogenide MBE Growth Monitor**.
+- Confirm the launcher log identifies Ch-MBE, the intended repository, branch, commit, Python, a passed chamber preflight, and optional-driver status.
+- Confirm `vimba / modbus / ads / elog` against the Ch-MBE record.
+- Confirm the Ch-MBE direct-exposure request, Full-access requirement when writing, and reported readback. Do not borrow O-MBE's exposure.
+- Confirm an advancing RHEED capture sequence and current frame, valid instrument states, data age, and intended log directory.
+- ARM only under the Ch-MBE SOP and authorized operator.
 
-### Shared offline and handoff checklist
+### Shared offline checklist
 
-- [ ] Preserve a read-only source ZIP and its SHA-256.
-- [ ] Confirm session metadata names the intended chamber; never repair provenance by editing the archive.
-- [ ] Open the offline labeler with the dedicated launcher.
-- [ ] Pair every prediction CSV with the correct model-spec JSON.
-- [ ] Use a new or empty output directory outside Git.
-- [ ] Review boundaries frame by frame; allow no overlaps.
-- [ ] Export JSON and validate it against the original report.
-- [ ] Record branch, commit, environment, manifest, and export hashes.
-- [ ] Handoff the complete report and declare model-assisted, not blind-gold.
-
-> **Stop condition:** Stop and contact the maintainer when instrument state, stale data, version identity, provenance, or validation cannot be explained.
-
----
-
-Application screenshots were captured from the actual O-MBE, Ch-MBE, and offline-labeler software using generated demo inputs. They contain no experimental data and are not production configuration references for either chamber.
+- Confirm session metadata names the intended chamber.
+- Preserve the source ZIP and SHA-256.
+- Open through the desktop labeler when Equalizer or Complete is required.
+- Resolve every item in Unfinished or dismiss it with a documented reason.
+- Confirm every Complete event has comment, reviewer, exact-frame Equalizer, and revision history.
+- Export JSON, validate it against the original report, and hand off the complete directory.

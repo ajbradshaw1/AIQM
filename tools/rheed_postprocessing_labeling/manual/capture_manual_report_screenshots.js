@@ -171,10 +171,10 @@ async function startLocalServer(reportPath) {
 }
 
 async function waitForEditor(page) {
-  await page.waitForSelector('#arp-annotation-track-host .arp-annotation-track', { timeout: 20000 });
-  await page.waitForSelector('#arp-frame-scrubber', { timeout: 20000 });
+  await page.waitForSelector('#arp-point-track-host .arp-point-track', { timeout: 20000 });
+  await page.waitForSelector('#arp-frame-scrubber-point', { timeout: 20000 });
   await page.waitForFunction(() => {
-    const scrubber = document.getElementById('arp-frame-scrubber');
+    const scrubber = document.getElementById('arp-frame-scrubber-point');
     return scrubber && Number(scrubber.max) >= 0;
   });
 }
@@ -186,24 +186,22 @@ async function setRangeValue(page, selector, value) {
   await page.waitForTimeout(35);
 }
 
-async function addSegment(page, segment, expectedCount) {
-  if (expectedCount > 1) await page.locator('#arp-annotation-new').click();
-  await setRangeValue(page, '#arp-frame-scrubber', segment.start);
-  await page.locator('#arp-mark-in').click();
-  await setRangeValue(page, '#arp-frame-scrubber', segment.end);
-  await page.locator('#arp-mark-out').click();
-  await page.locator('#arp-annotation-label').selectOption(segment.label);
-  await page.locator('#arp-annotation-notes').fill(segment.notes);
-  await page.locator('#arp-annotation-apply').click();
+async function addPointEvent(page, point, expectedCount) {
+  await setRangeValue(page, '#arp-frame-scrubber-point', point.frame);
+  await page.locator('#arp-point-add').click();
+  await page.locator('#arp-point-reviewer').fill('Manual Demo');
+  await page.locator('#arp-point-comment').fill(point.comment);
+  await page.locator('#arp-point-reconstruction').selectOption(point.label);
+  await page.locator('#arp-point-save').click();
   await page.waitForFunction(count => (
-    document.querySelectorAll('#arp-annotation-track-host [data-segment-id]').length === count
+    document.querySelectorAll('#arp-point-unfinished [data-point-event-list-id]').length === count
   ), expectedCount);
 }
 
 async function editorClip(page) {
   return page.evaluate(() => {
     const section = document.getElementById('anneal-model-timeline');
-    const editor = section && section.querySelector('.arp-annotation-editor');
+    const editor = section && section.querySelector('.arp-point-editor');
     const detail = section && section.querySelector('.arp-detail');
     if (!section || !editor || !detail) throw new Error('Cannot locate the report editor regions');
 
@@ -286,28 +284,49 @@ async function main() {
     await page.reload({ waitUntil: 'load' });
     await waitForEditor(page);
 
-    const bounds = await page.locator('#arp-frame-scrubber').evaluate(input => ({
+    const bounds = await page.locator('#arp-frame-scrubber-point').evaluate(input => ({
       min: Number(input.min),
       max: Number(input.max),
     }));
     assert(bounds.min === 0 && bounds.max === 59, 'Documentation fixture must contain exactly 60 frames', bounds);
-    await page.locator('#arp-annotation-labeler').fill('Manual Demo');
 
-    const segments = [
-      { start: 0, end: 14, label: 'none_weak', notes: 'Initial 1x1-like interval' },
-      { start: 15, end: 29, label: 'twinned_2x1', notes: 'First reconstructed interval' },
-      { start: 30, end: 44, label: 'c_6x2', notes: 'Middle reconstructed interval' },
-      { start: 45, end: 59, label: 'rt13', notes: 'Final reconstructed interval' },
+    const points = [
+      { frame: 6, label: 'none_weak', comment: 'Initial reference event' },
+      { frame: 21, label: 'twinned_2x1', comment: 'First visible reconstruction change' },
+      { frame: 36, label: 'c_6x2', comment: 'Second visible reconstruction change' },
+      { frame: 51, label: 'rt13', comment: 'Late-run reconstruction event' },
     ];
-    for (let index = 0; index < segments.length; index += 1) {
-      await addSegment(page, segments[index], index + 1);
+    for (let index = 0; index < points.length; index += 1) {
+      await addPointEvent(page, points[index], index + 1);
     }
     assert(
-      await page.locator('#arp-annotation-track-host [data-segment-id]').count() === 4,
-      'Expected four saved annotation segments',
+      await page.locator('#arp-point-unfinished [data-point-event-list-id]').count() === 4,
+      'Expected four unfinished point events',
     );
+    for (const selector of [
+      '#arp-point-add', '#arp-point-save', '#arp-point-move',
+      '#arp-point-equalizer-run', '#arp-point-complete', '#arp-point-reopen',
+    ]) {
+      assert(await page.locator(selector).isVisible(), `Point-event control is not visible: ${selector}`);
+    }
+    assert(!await page.locator('#arp-legacy-segment-editor').isVisible(), 'Legacy segment editor is visible');
+    for (const selector of ['#arp-mark-in', '#arp-mark-out', '#arp-annotation-apply']) {
+      assert(!await page.locator(selector).isVisible(), `Legacy segment control is visible: ${selector}`);
+    }
 
-    await setRangeValue(page, '#arp-frame-scrubber', 49);
+    const sensorContext = await page.locator('#arp-point-context').evaluate(host => {
+      const terms = [...host.querySelectorAll('dt')];
+      return Object.fromEntries(terms.map(term => [term.textContent.trim(), term.nextElementSibling?.textContent.trim()]));
+    });
+    for (const field of [
+      'Temperature', 'Voltage', 'Current', 'Pyrometer data age', 'MISTRAL data age',
+      'EvapControl data age', 'RHEED data age', 'Maximum data age (oldest source)',
+    ]) {
+      assert(sensorContext[field] && sensorContext[field] !== 'N/A',
+        `Production sensor context is missing: ${field}`, sensorContext);
+    }
+
+    await setRangeValue(page, '#arp-frame-scrubber-point', 49);
     await page.locator('#arp-brightness').fill('110');
     await page.locator('#arp-brightness').dispatchEvent('input');
     await page.locator('#arp-contrast').fill('125');
@@ -317,6 +336,26 @@ async function main() {
     const editorPath = path.join(outputDir, 'rheed_timeline_editor.png');
     const clip = await editorClip(page);
     assert(clip.width > 800 && clip.height > 400, 'Editor screenshot bounds are implausible', clip);
+    const captureCoverage = await page.evaluate(capture => {
+      const selectors = [
+        '#arp-point-context', '#arp-point-save', '#arp-point-move', '#arp-point-equalizer-run',
+        '#arp-point-complete', '#arp-point-reopen', '#arp-point-add',
+      ];
+      return Object.fromEntries(selectors.map(selector => {
+        const rect = document.querySelector(selector).getBoundingClientRect();
+        const absolute = {
+          left: rect.left + window.scrollX, right: rect.right + window.scrollX,
+          top: rect.top + window.scrollY, bottom: rect.bottom + window.scrollY,
+        };
+        return [selector, {
+          ...absolute,
+          inside: absolute.left >= capture.x && absolute.right <= capture.x + capture.width &&
+            absolute.top >= capture.y && absolute.bottom <= capture.y + capture.height,
+        }];
+      }));
+    }, clip);
+    assert(Object.values(captureCoverage).every(item => item.inside),
+      'Editor screenshot does not include point controls and sensor context', { clip, captureCoverage });
     await page.screenshot({
       path: editorPath,
       clip,
@@ -349,7 +388,7 @@ async function main() {
       editorScreenshot: editorPath,
       frameCount: 60,
       playwrightModule: moduleName,
-      segmentCount: 4,
+      pointEventCount: 4,
       zoomScreenshot: zoomPath,
     }, null, 2)}\n`);
   } finally {

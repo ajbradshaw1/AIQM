@@ -12,11 +12,12 @@ import sys
 import time
 from copy import copy
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMainWindow
+from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMainWindow
 from PyQt6.QtCore import QEvent, pyqtSlot, Qt, QTimer
 
 log = logging.getLogger(__name__)
@@ -667,6 +668,7 @@ class GrowthApp(QMainWindow):
                 poll_interval=0.5,
                 port=exactus_port,
                 baudrate=exactus_baud,
+                device_id=self._chamber_config.pyrometer_device_id,
                 rts=self._chamber_config.pyrometer_rts,
                 modbus_backend=self._chamber_config.pyrometer_modbus_backend,
             )
@@ -1157,6 +1159,29 @@ class GrowthApp(QMainWindow):
             )
         return metadata
 
+    def _current_heartbeat_metadata(self, frame: np.ndarray) -> dict:
+        """Bind one saved heartbeat to frame geometry and accepted alignment.
+
+        The app-owned calibration is the only accepted live calibration.  A
+        merely open Equalizer candidate is intentionally excluded.  When no
+        calibration has been accepted yet, the currently loaded basis bundle
+        is still useful provenance for a later retrospective calibration.
+        """
+        metadata = self.monitor.get_current_capture_metadata()
+        metadata["frame_width"] = int(frame.shape[1])
+        metadata["frame_height"] = int(frame.shape[0])
+        calibration = self._equalizer_calibration
+        if calibration is not None:
+            metadata["calibration_id"] = calibration.calibration_id
+            metadata["basis_bundle_id"] = calibration.basis_bundle_id
+        else:
+            basis_bundle_id = (
+                self.monitor.live_equalizer_tab.get_basis_bundle_id()
+            )
+            if basis_bundle_id:
+                metadata["basis_bundle_id"] = basis_bundle_id
+        return metadata
+
     def _invalidate_equalizer_calibration(self, reason: str) -> bool:
         """Invalidate the app-owned record and append its lifecycle event."""
         calibration = self._equalizer_calibration
@@ -1585,7 +1610,7 @@ class GrowthApp(QMainWindow):
         if stale or not snapshot.gun_aligned or snapshot.realignment_active:
             self._fail_retrospective_calibration_acceptance(
                 request_token,
-                reason or "historical frame lacks stable RHEED QC provenance",
+                reason or "historical frame lacks stable image-acquisition state provenance",
             )
             return
 
@@ -1768,7 +1793,7 @@ class GrowthApp(QMainWindow):
         """Record a lightweight RHEED adjustment or explicit QC label."""
         if not self.growth_log.active or not self._rheed_qc_state.session_active:
             self.statusBar().showMessage(
-                "Start a session before recording RHEED QC.", 3000,
+                "Start a session before recording image usability.", 3000,
             )
             return
 
@@ -1796,7 +1821,7 @@ class GrowthApp(QMainWindow):
             frame_role = event_type
         elif capture_token is None:
             self.statusBar().showMessage(
-                "A fresh connected RHEED frame is required for this QC label.",
+                "A fresh connected RHEED frame is required for this image-usability label.",
                 4000,
             )
             return
@@ -1809,7 +1834,7 @@ class GrowthApp(QMainWindow):
             qc_reason = note or "operator_reject"
         else:
             self.statusBar().showMessage(
-                f"Unsupported RHEED QC event: {event_type}", 3000,
+                f"Unsupported RHEED image-usability event: {event_type}", 3000,
             )
             return
 
@@ -1846,6 +1871,7 @@ class GrowthApp(QMainWindow):
         capture_metadata = self.monitor.get_current_capture_metadata()
         write_started_ns = time.perf_counter_ns()
         event_index = self.growth_log.record_manual_event(
+            event_at_utc=payload.get("event_at_utc", ""),
             elapsed_s=payload.get("elapsed_s", 0.0),
             pyro_temp=payload.get("pyro_temp"),
             voltage_V=payload.get("voltage_V"),
@@ -1863,6 +1889,7 @@ class GrowthApp(QMainWindow):
             "manual_event",
             details={
                 "event_index": event_index,
+                "point_event_id": self.growth_log.last_point_event_id,
                 "capture_sequence": capture_metadata.get("capture_sequence"),
                 "write_duration_ms": (
                     write_completed_ns - write_started_ns
@@ -1873,9 +1900,105 @@ class GrowthApp(QMainWindow):
                 ),
             },
         )
-        self.statusBar().showMessage("Event marked", 2000)
+        self.statusBar().showMessage(
+            "Event marked — Draft saved for post-run review", 3000,
+        )
 
     # --- LIVE EQUALIZER save (Jul 10 2026 workstream #4) -------------------
+
+    def _select_live_equalizer_point_event(
+        self,
+        *,
+        snapshot: RheedFrameSnapshot,
+        actor: str,
+        pyro_temp: Optional[float],
+        voltage_v: Optional[float],
+        current_a: Optional[float],
+        psu_source: str,
+    ) -> Optional[str]:
+        """Require an explicit event choice before saving Equalizer output.
+
+        The newest unfinished manual mark is the first choice, but it is never
+        selected silently.  This method returns ``None`` when the grower
+        cancels and ``""`` only for older test/compatibility loggers that have
+        no point-event API.
+        """
+        get_events = getattr(self.growth_log, "unfinished_point_events", None)
+        if get_events is None:
+            return ""
+        events = list(get_events())
+        labels: list[str] = []
+        ids: list[str] = []
+        for event in events:
+            source = event.get("source", {})
+            kind = str(source.get("kind") or "event")
+            elapsed = source.get("original_elapsed_s")
+            elapsed_text = "time unavailable"
+            try:
+                if elapsed is not None:
+                    elapsed_text = f"{float(elapsed):.1f} s"
+            except (TypeError, ValueError):
+                pass
+            comment = str(event.get("review", {}).get("comment") or "").strip()
+            summary = comment[:45] if comment else "unfinished - no comment"
+            labels.append(
+                f"{kind} at {elapsed_text} - {summary} "
+                f"[{str(event.get('event_id'))[:8]}]"
+            )
+            ids.append(str(event.get("event_id") or ""))
+        create_label = "Create a new event from the current frozen frame"
+        labels.append(create_label)
+        ids.append("__create__")
+        selected, accepted = QInputDialog.getItem(
+            self,
+            "Bind Equalizer to an event",
+            "Choose the event that this exact Equalizer frame belongs to. "
+            "The first item is only a suggested default:",
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return None
+        try:
+            event_id = ids[labels.index(selected)]
+        except (ValueError, IndexError):
+            return None
+        if event_id != "__create__":
+            return event_id
+
+        capture_metadata = {
+            "capture_backend": snapshot.capture_backend,
+            "captured_at_utc": snapshot.captured_at_utc,
+            "captured_monotonic_ns": snapshot.received_monotonic_ns,
+            "capture_sequence": snapshot.capture_sequence,
+            "frame_age_ms": snapshot.age_ms(),
+            "source_hwnd": snapshot.source_hwnd,
+            "capture_geometry_id": snapshot.capture_geometry_id,
+            "camera_width": snapshot.camera_width,
+            "camera_height": snapshot.camera_height,
+            "view_segment_id": snapshot.view_segment_id,
+            "visual_history_generation": snapshot.visual_history_generation,
+            "gun_aligned": snapshot.gun_aligned,
+            "realignment_active": snapshot.realignment_active,
+        }
+        index = self.growth_log.record_manual_event(
+            event_at_utc=datetime.now(timezone.utc).isoformat(),
+            elapsed_s=self.monitor.get_elapsed_seconds(),
+            pyro_temp=pyro_temp,
+            voltage_V=voltage_v,
+            current_A=current_a,
+            psu_source=psu_source,
+            frame=snapshot.rgb,
+            note="",
+            capture_metadata=capture_metadata,
+        )
+        if index <= 0 or not self.growth_log.last_point_event_id:
+            self.statusBar().showMessage(
+                "Could not create the event; Equalizer was not saved.", 5000,
+            )
+            return None
+        return self.growth_log.last_point_event_id
 
     @pyqtSlot(dict)
     def _on_live_label_save(self, payload: dict):
@@ -1965,6 +2088,27 @@ class GrowthApp(QMainWindow):
         if pyro is not None and pyro.has_valid_reading:
             pyro_temp = pyro.temperature
 
+        actor = self.monitor.grower_input.text().strip()
+        if not actor:
+            self.statusBar().showMessage(
+                "Enter the grower/reviewer before saving Equalizer output.", 4000,
+            )
+            return
+        event_id = GrowthApp._select_live_equalizer_point_event(
+            self,
+            snapshot=snapshot,
+            actor=actor,
+            pyro_temp=pyro_temp,
+            voltage_v=voltage_v,
+            current_a=current_a,
+            psu_source=psu_source,
+        )
+        if event_id is None:
+            self.statusBar().showMessage(
+                "Equalizer save cancelled; no event was changed.", 3000,
+            )
+            return
+
         write_started_ns = time.perf_counter_ns()
         try:
             idx = self.growth_log.record_live_label(
@@ -1977,7 +2121,7 @@ class GrowthApp(QMainWindow):
                 current_A=current_a,
                 psu_source=psu_source,
                 equalizer_payload=payload,
-                labeler=self.monitor.grower_input.text().strip(),
+                labeler=actor,
             )
         except (TypeError, ValueError, OSError) as exc:
             log.warning("Live Equalizer label rejected: %s", exc)
@@ -1986,6 +2130,23 @@ class GrowthApp(QMainWindow):
             )
             return
         if idx > 0:
+            point_event_bound = False
+            if event_id:
+                try:
+                    self.growth_log.attach_live_equalizer_to_point_event(
+                        event_id,
+                        live_label_index=idx,
+                        actor=actor,
+                        calibration=calibration,
+                        snapshot=snapshot,
+                        equalizer_payload=payload,
+                    )
+                    point_event_bound = True
+                except (OSError, TypeError, ValueError) as exc:
+                    log.error(
+                        "Live Equalizer label saved but point-event binding failed: %s",
+                        exc,
+                    )
             write_completed_ns = time.perf_counter_ns()
             GrowthApp._trace_temporal(self,
                 "equalizer_label_saved", "equalizer",
@@ -1993,6 +2154,8 @@ class GrowthApp(QMainWindow):
                     "label_index": idx,
                     "capture_sequence": snapshot.capture_sequence,
                     "calibration_id": calibration.calibration_id,
+                    "point_event_id": event_id or None,
+                    "point_event_bound": point_event_bound,
                     "frame_age_at_request_ms": frame_age_ms,
                     "source_age_at_save_ms": snapshot.age_ms(
                         write_completed_ns,
@@ -2002,9 +2165,17 @@ class GrowthApp(QMainWindow):
                     ) / 1_000_000.0,
                 },
             )
-            self.statusBar().showMessage(
-                f"Live label #{idx} saved", 3000,
-            )
+            if event_id and not point_event_bound:
+                self.statusBar().showMessage(
+                    f"Live label #{idx} saved, but event binding needs review.",
+                    6000,
+                )
+            elif point_event_bound:
+                self.statusBar().showMessage(
+                    f"Equalizer saved to Draft event {event_id[:8]}.", 4000,
+                )
+            else:
+                self.statusBar().showMessage(f"Live label #{idx} saved", 3000)
         else:
             self.statusBar().showMessage(
                 "Live label save failed — no session data.", 3000,
@@ -2622,7 +2793,7 @@ class GrowthApp(QMainWindow):
         frame = self.monitor.get_current_frame()
         if frame is None:
             return
-        capture_metadata = self.monitor.get_current_capture_metadata()
+        capture_metadata = self._current_heartbeat_metadata(frame)
         try:
             capture_sequence = int(
                 capture_metadata.get("capture_sequence") or 0

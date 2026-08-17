@@ -18,7 +18,7 @@ def _fail(message: str) -> None:
     raise AnnotationValidationError(message)
 
 
-def validate_annotation_document(document: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _validate_segment_annotation_document(document: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(document, dict) or document.get("schema_version") != "rheed-temporal-segments-v1" or document.get("document_type") != "ai4mbe_rheed_segment_annotations":
         _fail("Unsupported annotation document schema")
     try:
@@ -79,3 +79,18 @@ def validate_annotation_document(document: dict[str, Any], payload: dict[str, An
     if any(previous[1] > current[0] for previous, current in zip(intervals, intervals[1:])):
         _fail("Segments overlap")
     return copy.deepcopy(document)
+
+
+def validate_annotation_document(
+    document: dict[str, Any], payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the current point-event schema or legacy read-only segments."""
+
+    if isinstance(document, dict) and document.get("schema_version") == "rheed-point-events-v1":
+        from .point_events import PointEventValidationError, validate_point_event_document
+
+        try:
+            return validate_point_event_document(document, payload)
+        except PointEventValidationError as exc:
+            raise AnnotationValidationError(str(exc)) from exc
+    return _validate_segment_annotation_document(document, payload)

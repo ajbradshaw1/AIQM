@@ -134,6 +134,10 @@ class TestOmbConfig(unittest.TestCase):
     def test_evap_mode_default(self):
         self.assertEqual(OXIDE_MBE.evap_mode_default, "elog")
 
+    def test_ombe_evap_log_dir_is_explicit(self):
+        self.assertTrue(OXIDE_MBE.evap_log_dir)
+        self.assertIn("1.2.0.51", OXIDE_MBE.evap_log_dir)
+
     def test_five_cells(self):
         self.assertEqual(len(OXIDE_MBE.cell_display), 5)
 
@@ -191,6 +195,7 @@ class TestChMbeConfig(unittest.TestCase):
 
     def test_evap_log_dir_set(self):
         self.assertTrue(CHALCOGENIDE_MBE.evap_log_dir)
+        self.assertIn("1.2.0.48", CHALCOGENIDE_MBE.evap_log_dir)
 
     def test_cell_labels_not_empty(self):
         for cell in CHALCOGENIDE_MBE.cell_display:

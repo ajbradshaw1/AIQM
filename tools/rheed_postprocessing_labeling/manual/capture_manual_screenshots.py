@@ -128,6 +128,7 @@ def _create_fixture(root: Path) -> tuple[Path, tuple[Path, ...], tuple[Path, ...
     root.mkdir(parents=True, exist_ok=True)
     archive_path = root / "synthetic_rheed_session.zip"
     heartbeat_rows: list[dict[str, object]] = []
+    sensor_rows: list[dict[str, object]] = []
     provenance_rows: list[dict[str, object]] = []
     frame_payloads: list[tuple[str, bytes]] = []
     start = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
@@ -161,6 +162,20 @@ def _create_fixture(root: Path) -> tuple[Path, tuple[Path, ...], tuple[Path, ...
                 "capture_backend": "synthetic_manual_fixture",
             }
         )
+        sensor_rows.append(
+            {
+                "timestamp": captured_text,
+                "snapshot_at_utc": captured_text,
+                "elapsed_s": provenance["elapsed_s"],
+                "pyrometer_temp_C": round(410.0 + 2.0 * index, 1),
+                "mistral_v_actual_V": round(3.2 + 0.006 * index, 3),
+                "mistral_i_actual_A": round(0.118 + 0.0004 * index, 4),
+                "pyrometer_age_ms": 34 + index % 5,
+                "mistral_age_ms": 76 + index % 7,
+                "evap_age_ms": 128 + index % 11,
+                "rheed_age_ms": 18 + index % 3,
+            }
+        )
 
     heartbeat_buffer = io.StringIO(newline="")
     heartbeat_writer = csv.DictWriter(
@@ -170,6 +185,14 @@ def _create_fixture(root: Path) -> tuple[Path, tuple[Path, ...], tuple[Path, ...
     )
     heartbeat_writer.writeheader()
     heartbeat_writer.writerows(heartbeat_rows)
+    sensor_buffer = io.StringIO(newline="")
+    sensor_writer = csv.DictWriter(
+        sensor_buffer,
+        fieldnames=list(sensor_rows[0]),
+        lineterminator="\n",
+    )
+    sensor_writer.writeheader()
+    sensor_writer.writerows(sensor_rows)
     metadata = {
         "session_id": "synthetic-manual-screenshot-session",
         "chamber_id": "DEMO-MBE",
@@ -186,6 +209,10 @@ def _create_fixture(root: Path) -> tuple[Path, tuple[Path, ...], tuple[Path, ...
         archive.writestr(
             "synthetic_session/heartbeat_log.csv",
             heartbeat_buffer.getvalue(),
+        )
+        archive.writestr(
+            "synthetic_session/sensor_log.csv",
+            sensor_buffer.getvalue(),
         )
         for name, payload in frame_payloads:
             archive.writestr(f"synthetic_session/frames/{name}", payload)

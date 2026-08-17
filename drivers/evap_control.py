@@ -266,6 +266,11 @@ class ElogReader:
         self._schema_log_path: Optional[Path] = None
         self._last_source_at_utc: Optional[str] = None
 
+    @property
+    def source_path(self) -> str:
+        """Return the concrete .elo source, blank until one is resolved."""
+        return str(self._last_log_path) if self._last_log_path is not None else ""
+
     def connect(self) -> None:
         # Resolve once at connect to fail fast — re-resolves at each read
         # to handle midnight rotation. Failure here means EvapControl

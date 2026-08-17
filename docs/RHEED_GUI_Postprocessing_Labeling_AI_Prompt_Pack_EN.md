@@ -1,36 +1,36 @@
-# AI Prompt Pack for the O-MBE and Ch-MBE GUI and Offline Labeler Manual
+# AI Prompt Pack for the O-MBE and Ch-MBE Point-event Manual
 
-- Prompt-pack version: **v1.6**
-- Companion manual: [O-MBE and Ch-MBE GUI and RHEED Post-processing Labeling](RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md)
-
-## How to use this prompt pack
-
-1. Supply the complete English manual to the AI. Do not provide selected pages when another chapter could affect the answer.
-2. Copy the **Required base prompt** below and replace its bracketed fields.
-3. Immediately append exactly one task prompt from Sections 1-8 and replace its bracketed fields.
-4. Review the result against the manual and the applicable chamber SOP before relying on it.
-
-Do not supply session archives, raw RHEED images, credentials, unpublished results, or other sensitive files to a public AI service. Chamber-owner entries are user-provided data to organize or audit; they are never operating authorization.
+Use this only with the complete English manual. Do not upload experimental archives, raw images, credentials, unpublished results, or instrument identifiers to a public AI service.
 
 ## Required base prompt
 
-Every task prompt in this file is incomplete without this base prompt.
-
 ```text
-You are reading the supplied unified O-MBE and Ch-MBE GUI and RHEED post-processing labeling manual.
+You are reading the supplied unified O-MBE and Ch-MBE GUI and RHEED point-event review manual.
 
 Target chamber: [Ch-MBE / O-MBE / neither / unknown]
 Task context: [INSERT A NON-SENSITIVE SUMMARY]
 
 Use the complete supplied manual as the sole procedural and scientific authority. Cite the chapter number and exact heading or subheading for every substantive statement. Organize the answer into Manual facts, Reasoned inference, Missing information, and Safe next step. Clearly label inference and never present it as a manual fact. If the manual does not answer a question, say so.
 
-For a chamber-specific task, the target chamber must be exactly Ch-MBE or O-MBE. If it is unknown, stop and request the chamber identity. Use only that chamber's launch route, startup-default record, troubleshooting route, and startup checklist. Never transfer a value, assumption, schema, or approval between chambers.
+For chamber-specific work, require an exact Ch-MBE or O-MBE identity. Never transfer a value, assumption, schema, or approval between chambers. Treat Chapter 3 reader modes as software startup selections, not setpoints or authority. Never invent any other operating default from source code, a screenshot, a current GUI value, or the other chamber.
 
-Treat the four reader-mode startup defaults in Chapter 3 as software selections, not setpoints or permission to ARM. Never invent any other operating default or infer it from source code, a current GUI selection, a demo screenshot, or the other chamber. Distinguish documented startup selection, owner-controlled operating value, and missing information.
+The Windows shortcut installer creates five shortcuts. The O-MBE, Ch-MBE, and Labeler application shortcuts share launch_ai4mbe.ps1 and the bundled Yang Lab icon. An icon is never evidence of chamber, repository, commit, or Python identity. For live work, verify the exact title, forced chamber, repository, commit, interpreter, and chamber preflight from the launcher evidence.
 
-Do not authorize ARM, instrument operation, a connection change, or any setpoint change. Only the applicable SOP and an authorized operator can do so. Preserve evidence and prefer fail-closed actions. Do not recommend bypassing validation, editing inputs to match predictions, deleting environments, force-resetting Git, or making ad hoc global environment changes.
+Distinguish a blocking runtime or chamber-preflight failure from an optional live-driver warning. An optional-driver warning does not prove the whole GUI is unusable, but it is a stop condition for a production mode that needs that driver. Do not recommend installing packages during an operating run or switching modes without chamber-owner and SOP authority.
 
-Keep surface reconstruction, acquisition-quality QC, and FeSe film quality distinct. The current classifier concerns the bare STO surface before growth. Labels created while model outputs are visible are model-assisted and are not blind-gold labels. The offline labeler never controls instruments. Demo screenshots are not evidence of startup selections or operating values.
+Do not authorize ARM, instrument operation, connection changes, or setpoint changes. Preserve evidence and fail closed. Do not recommend editing source ZIPs or CSV evidence, bypassing provenance checks, deleting environments, force-resetting Git, or creating ad hoc global environment variables.
+
+For direct Vimba acquisition, a nonzero exposure request is a volatile ARM-time write that requires Full camera access, ExposureAuto=Off, and a matching readback. Keep current performs no write but may still record a readback. Never transfer the O-MBE and Ch-MBE exposure requests, bypass range or trigger-headroom checks, treat a request as a confirmed value, or ignore a failed restoration. The application never saves a camera user set. A cached or stalled frame is not a new acquisition; require an advancing capture sequence and a current live frame before START.
+
+Keep surface reconstruction, acquisition-quality QC, and FeSe film quality distinct. In older files, QC means only image acquisition quality: whether a frame can be analyzed. It never means poor surface or film quality. The current classifier concerns bare STO before growth.
+
+The labelable event sources are manual, auto_capture, and posthoc. Direction/current/energy adjustments, image-unusable records, and sensor logs are read-only references. Temperature, voltage, current, pressure, and data age are logs, not editable label fields.
+
+Never change immutable source evidence or the original event point. A moved review anchor must snap to a saved frame and invalidates the previous Equalizer result. Complete requires a nonempty comment, reviewer, valid exact-frame Equalizer result, and explicit Complete action. Editing a Complete event returns it to Draft.
+
+Equalizer is an independent four-basis visual fit. It is not a model probability, area fraction, or human reconstruction label; HTR must remain null. It must never populate or overwrite human reconstruction fields. Model-visible review is model-assisted and not blind-gold.
+
+A directly opened static HTML cannot run Equalizer or Complete. Those actions require the desktop labeler's random-token service bound only to 127.0.0.1 and the original BMP/PNG from the read-only ZIP.
 ```
 
 ## 1. Strict manual question and answer
@@ -40,7 +40,7 @@ Append this after the required base prompt:
 ```text
 Question: [INSERT QUESTION]
 
-Answer only from the supplied manual. If the question crosses live acquisition and offline labeling, separate the two paths. Include the exact matching chamber cross-references when the question is chamber-specific.
+Answer only from the supplied manual. Separate live acquisition, immutable evidence, offline review, Equalizer measurement, and human interpretation when more than one is involved.
 ```
 
 ## 2. Quick operator checklist
@@ -51,7 +51,7 @@ Append this after the required base prompt:
 Manual-defined task: [INSERT TASK]
 Known operator inputs: [INSERT OR NONE]
 
-Start with a three-line summary. Then provide a short ordered checklist containing only manual-supported actions, required evidence, matching chamber cross-references, and explicit stop conditions. Do not hide missing values inside the checklist.
+Start with a three-line summary. Then provide a short ordered checklist containing only manual-supported actions, required evidence, chamber-specific cross-references, and explicit stop conditions. Do not hide missing values.
 ```
 
 ## 3. Troubleshooting assistant
@@ -63,61 +63,60 @@ Symptom and exact error: [INSERT]
 Occurrence time: [INSERT]
 Physical chamber or offline labeler: [Ch-MBE / O-MBE / offline labeler]
 Launcher and exact window title: [INSERT OR UNKNOWN]
-Displayed chamber identity: [INSERT OR UNKNOWN]
-Branch and commit: [INSERT OR UNKNOWN]
-Environment and selected paths: [INSERT OR UNKNOWN]
-Relevant launcher-log summary: [INSERT OR UNKNOWN]
+Branch, commit, environment, and paths: [INSERT OR UNKNOWN]
+Launcher preflight, optional-driver status, and shortcut/icon path: [INSERT OR UNKNOWN]
+For Vimba: requested/readback exposure, access mode, capture sequence, and frame age: [INSERT OR UNKNOWN]
+Event ID, source, status, and revision ID: [INSERT OR UNKNOWN]
 
-Rank possible causes without pretending certainty. Then give evidence-preserving diagnostic actions and stop or escalation conditions. For a live issue, route only through the matching chamber launch, default, troubleshooting, and checklist sections. For an offline issue, do not introduce live-instrument actions.
+Rank possible causes without pretending certainty. Give evidence-preserving diagnostics and stop conditions. Never suggest hand-editing source CSV, JSONL, a pending transaction marker, or archive content.
 ```
 
-## 4. Audit one chamber configuration record
-
-This single prompt applies to either chamber and replaces separate duplicated templates.
+## 4. Audit one chamber configuration
 
 Append this after the required base prompt:
 
 ```text
 Record to audit: [Ch-MBE / O-MBE]
-Chamber-owner-provided entries: [PASTE ENTRIES]
-Approver, revision, and date: [PASTE OR STATE MISSING]
+Observed reader selections: [PASTE]
+Approval or SOP evidence: [PASTE OR MISSING]
 
-Audit only the matching chamber record in Chapter 3, "Understand Configuration modes and chamber defaults." Treat the four reader modes as documented software startup selections, not as instructions or authorization. Return Confirmed startup selections, Conflicts or ambiguities, Owner-controlled values still missing, Missing approval evidence, and Questions for the named chamber owner. Do not silently normalize an unclear value. Reject or isolate any entry belonging to the other chamber. Do not declare an operating value approved without explicit approval evidence.
+Compare only with the matching Chapter 3 startup record. Return Confirmed startup selections, Conflicts, Owner-controlled values, Missing approval evidence, and Questions. Do not copy a value from the other chamber.
 ```
 
-## 5. Compare proposed chamber records without transfer
+## 5. Review an Unfinished event
 
-Append this after the required base prompt. Set the base-prompt target chamber to `neither` because this is an audit of both records, not an operating task.
+Append this after the required base prompt:
 
 ```text
-Proposed Ch-MBE record: [PASTE]
-Proposed O-MBE record: [PASTE]
+Event source: [manual / auto_capture / posthoc]
+Immutable original evidence: [NON-SENSITIVE SUMMARY]
+Current saved-frame review anchor: [SUMMARY]
+Draft fields and Equalizer status: [SUMMARY]
 
-Build a side-by-side audit table with separate Ch-MBE and O-MBE columns. For each item, label it Confirmed input, Conflict, Pending, Not applicable with approval, or Missing approval evidence. Treat matching proposed values as neither transfer permission nor proof that either value is approved. Identify cross-chamber contamination explicitly, but never suggest copying one value to resolve it.
+List what is still required before Complete. Distinguish original point from review point. If a move is proposed, require a saved frame and state that the old Equalizer becomes invalid. Do not propose an automatic reconstruction label.
 ```
 
 ## 6. Offline labeler workflow
 
-Append this after the required base prompt. Set the base-prompt target chamber to `neither` unless the archived session identity is itself under audit.
+Append this after the required base prompt:
 
 ```text
-Offline task: [BUILD / OPEN / LABEL / EXPORT / IMPORT / VALIDATE]
-Available inputs and paths: [INSERT NON-SENSITIVE PLACEHOLDERS]
-Current message or state: [INSERT]
+Offline task: [BUILD / OPEN / EDIT DRAFT / RUN EQUALIZER / COMPLETE / EXPORT / VALIDATE]
+Inputs and current state: [INSERT NON-SENSITIVE SUMMARY]
 
-Begin with a brief route. Then provide ordered actions, required inputs, provenance checks, expected success evidence, and fail-closed stop conditions. Do not suggest editing inputs to bypass validation, copying only the HTML, or contacting instruments. Preserve the entire report directory and the canonical JSON according to the manual.
+Provide ordered actions, required provenance, expected evidence, and fail-closed conditions. State whether the desktop loopback service is required. Never contact instruments or use a lossy report preview for Equalizer.
 ```
 
-## 7. Annotation and provenance validation
+## 7. Point-event and revision validation
 
-Append this after the required base prompt. Set the base-prompt target chamber to `neither` unless chamber identity is part of the evidence being audited.
+Append this after the required base prompt:
 
 ```text
-Report or manifest evidence: [PASTE NON-SENSITIVE SUMMARY]
-Annotation JSON evidence: [PASTE NON-SENSITIVE SUMMARY]
+Report manifest evidence: [PASTE NON-SENSITIVE SUMMARY]
+Point-event JSON evidence: [PASTE NON-SENSITIVE SUMMARY]
 Validator output: [PASTE]
 
-Check source-archive identity, ordered frames and hashes, model-context fingerprint, endpoint provenance, segment overlap, model-output visibility, and gold eligibility. Return Verified evidence, Validation blockers, Missing evidence, and Safe next action. A missing or mismatched binding must fail closed. Require model-visible annotations to retain eligible_for_gold=false.
+Audit dataset identity, ordered frame hashes, stable event IDs, immutable source evidence, saved-frame review anchors, revision base chain, actor and UTC, Complete requirements, Equalizer frame binding, HTR null, and model-assisted status. A mismatch must fail closed.
 ```
 
 ## 8. Handoff and release audit
@@ -127,8 +126,8 @@ Append this after the required base prompt:
 ```text
 Package inventory: [PASTE]
 Branch, commit, environment, and versions: [PASTE]
-Recorded SHA-256 values: [PASTE]
+Source ZIP, report, journal, and export SHA-256 values: [PASTE]
 Destination and intended use: [INSERT]
 
-Return a concise status summary followed by Present evidence, Missing evidence, Safety or provenance blockers, Items that must remain outside Git, Required validation, and a final Ready or Not ready result. Do not mark Ready when a required artifact, hash, validation result, version, chamber identity, or chamber-specific approval is missing. Require the complete report directory plus canonical JSON rather than HTML alone.
+Return Present evidence, Missing evidence, Safety or provenance blockers, Items outside Git, Required validation, and Ready or Not ready. Require the complete report directory, canonical JSON, revision journal, and immutable source identity.
 ```

@@ -6,6 +6,8 @@ import json
 import os
 import re
 import sys
+import base64
+import struct
 from pathlib import Path
 
 import pytest
@@ -108,7 +110,7 @@ def test_english_manual_explains_modes_and_keeps_defaults_separate() -> None:
             assert rf"\texttt{{{mode}}}" in block
     assert r"\texttt{elog}" in o_block
     assert r"\texttt{elog}" in ch_block
-    assert "variables absent from that chamber's schema remain blank" in source
+    assert "variables absent from that chamber's schema remain blank" in source.lower()
     for mode in (
         "dummy", "dummy\\_c6x2", "dummy\\_tw", "dummy\\_rt13\\_tilted",
         "screengrab", "screengrab\\_mss", "vimba", "exactus", "modbus",
@@ -167,7 +169,7 @@ def test_markdown_manual_and_ai_prompt_pack_are_complete() -> None:
             assert mode in block
     assert "`elog`" in ch_defaults
     assert "`elog`" in o_defaults
-    assert "variables absent from that chamber's schema remain blank" in manual
+    assert "variables absent from that chamber's schema remain blank" in manual.lower()
     for option in (
         "`dummy`", "`dummy_c6x2`", "`dummy_tw`", "`dummy_rt13_tilted`",
         "`screengrab`", "`screengrab_mss`", "`vimba`", "`exactus`",
@@ -175,8 +177,8 @@ def test_markdown_manual_and_ai_prompt_pack_are_complete() -> None:
     ):
         assert option in manual
     assert "Read `chamber_id` from the session metadata" in manual
-    assert "recorded endpoint, ports, and cell count" in manual
-    assert "never edit an archive to make it resemble the other chamber" in manual
+    assert "for ads sessions, preserve endpoint, ports, and cell count" in manual.lower()
+    assert "never edit an archive to make it resemble the other chamber" in manual.lower()
     assert manual.count("the intended repository, branch, commit, Python interpreter") == 2
     assert manual.count("instrument states, data age, and intended log directory") == 2
     assert "Confirm session metadata names the intended chamber" in manual
@@ -451,6 +453,12 @@ def test_build_arguments_preserve_model_pair_order_and_spaces(tmp_path: Path) ->
         '{"valid":true,"dataset_id":"run","segment_count":true}',
         '{"valid":true,"dataset_id":"run","segment_count":-1}',
         '{"valid":true,"dataset_id":"run","segment_count":1,"extra":0}',
+        '{"valid":true,"dataset_id":"run","event_count":true}',
+        '{"valid":true,"dataset_id":"run","event_count":-1}',
+        '{"valid":true,"dataset_id":"run","event_count":1,"segment_count":1}',
+        '{"valid":true,"dataset_id":"run","event_count":1,"extra":0}',
+        '{"valid":true,"dataset_id":"run","event_count":1}',
+        '{"valid":true,"dataset_id":"run","schema_version":"rheed-temporal-segments-v1","event_count":1}',
     ],
 )
 def test_validation_response_is_strict(payload: str) -> None:
@@ -459,11 +467,20 @@ def test_validation_response_is_strict(payload: str) -> None:
 
 
 def test_validation_response_accepts_only_exact_success_schema() -> None:
-    result = parse_validation_response(
+    segment_result = parse_validation_response(
         '{"valid":true,"dataset_id":" run-123 ","segment_count":4}'
     )
-    assert result.dataset_id == "run-123"
-    assert result.segment_count == 4
+    assert segment_result.dataset_id == "run-123"
+    assert segment_result.segment_count == 4
+    assert segment_result.item_kind == "segment"
+
+    event_result = parse_validation_response(
+        '{"valid":true,"dataset_id":" run-456 ",'
+        '"schema_version":"rheed-point-events-v1","event_count":5}'
+    )
+    assert event_result.dataset_id == "run-456"
+    assert event_result.event_count == 5
+    assert event_result.item_kind == "event"
 
 
 def test_model_pairs_move_together_and_remain_ordered(
@@ -566,6 +583,11 @@ def test_report_and_manual_opening_check_desktop_service_return(
     assert launcher.critical == []
     launcher.deleteLater()
 
+
+def test_manual_opening_failures_are_reported(
+    tmp_path: Path,
+    qt_app: QApplication,
+) -> None:
     rejected = _launcher(tmp_path / "rejected", qt_app, opener=lambda _url: False)
     rejected_manual = tmp_path / "rejected-manual.pdf"
     rejected_manual.write_bytes(b"%PDF-test")
@@ -578,6 +600,42 @@ def test_report_and_manual_opening_check_desktop_service_return(
     missing._open_manual()
     assert missing.warnings[-1][0] == "File not found"
     missing.deleteLater()
+
+
+def test_legacy_segment_report_is_refused_by_point_event_desktop(
+    tmp_path: Path, qt_app: QApplication,
+) -> None:
+    opened: list[str] = []
+    launcher = _launcher(
+        tmp_path, qt_app, opener=lambda url: opened.append(url.toString()) is None,
+    )
+    encode = lambda payload: base64.b64encode(payload).decode("ascii")
+    config = {
+        "annotation_schema": "rheed-temporal-segments-v1", "count": 1,
+        "start_capture_utc": "2026-08-06T00:00:00.000Z",
+    }
+    report = tmp_path / "interactive_report.html"
+    report.write_text(
+        "const config = " + json.dumps(config) + "; root.querySelector('x');\n"
+        + f"const times = decode('{encode(struct.pack('<f', 0.0))}', Float32Array);\n"
+        + f"const heartbeatIndices = decode('{encode(struct.pack('<I', 1))}', Uint32Array);\n"
+        + f"const captureSequences = decode('{encode(struct.pack('<I', 1))}', Uint32Array);\n"
+        + f"const temperatures = decode('{encode(struct.pack('<h', 0))}', Int16Array);\n"
+        + f"const captureOffsets = decode('{encode(struct.pack('<f', 0.0))}', Float32Array);\n"
+        + f"const probabilities = decode('{encode(struct.pack('<H', 0))}', Uint16Array);\n"
+        + f"const qualityValues = decode('{encode(struct.pack('<H', 0))}', Uint16Array);\n"
+        + f"const frameHashBytes = decode('{encode(bytes(32))}', Uint8Array);\n",
+        encoding="utf-8",
+    )
+    session = tmp_path / "session.zip"
+    session.write_bytes(b"not-read-because-legacy-is-refused")
+    launcher.report_edit.setText(str(report))
+    launcher.session_edit.setText(str(session))
+    assert launcher._open_report_with_desktop_controls(report) is False
+    assert launcher.information[-1][0] == "Legacy report is read-only"
+    assert opened == []
+    assert launcher.critical == []
+    launcher.deleteLater()
 
 
 def test_successful_build_auto_opens_expected_report(
@@ -628,6 +686,19 @@ def test_build_and_validation_results_fail_closed(
     launcher._completion_handled = False
     launcher._process_finished(0, QProcess.ExitStatus.NormalExit)
     assert launcher.validation_result.text() == "Valid - 3 segment(s) - dataset run-a"
+
+    launcher._pending_action = "validate"
+    launcher._stdout_buffer = [
+        json.dumps({
+            "valid": True,
+            "dataset_id": "run-b",
+            "schema_version": "rheed-point-events-v1",
+            "event_count": 2,
+        })
+    ]
+    launcher._completion_handled = False
+    launcher._process_finished(0, QProcess.ExitStatus.NormalExit)
+    assert launcher.validation_result.text() == "Valid - 2 event(s) - dataset run-b"
 
     launcher._pending_action = "validate"
     launcher._stdout_buffer = ["warning before JSON\n{}"]

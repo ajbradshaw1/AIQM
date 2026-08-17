@@ -47,6 +47,17 @@ class SessionArchive:
     metadata_member: str
     metadata: dict[str, object]
     frames: tuple[FrameRecord, ...]
+    root_member: str = ""
+    members: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CsvMember:
+    """A CSV inside the immutable source archive plus tamper evidence."""
+
+    member: str
+    sha256: str
+    rows: tuple[dict[str, str], ...]
 
 
 def sha256_file(path: Path) -> str:
@@ -62,6 +73,79 @@ def _member(archive: zipfile.ZipFile, suffix: str) -> str:
     if len(matches) != 1:
         raise ValueError(f"Expected one ZIP member ending in {suffix!r}; found {len(matches)}")
     return matches[0]
+
+
+def optional_member(session: SessionArchive, suffix: str) -> str | None:
+    """Return the unique member ending in *suffix*, or ``None`` when absent."""
+
+    normalized = suffix.replace("\\", "/")
+    matches = [name for name in session.members if name.replace("\\", "/").endswith(normalized)]
+    if len(matches) > 1:
+        raise ValueError(f"Expected at most one ZIP member ending in {suffix!r}; found {len(matches)}")
+    return matches[0] if matches else None
+
+
+def read_csv_member(session: SessionArchive, suffix: str) -> CsvMember | None:
+    """Read an optional archived CSV without changing the source archive."""
+
+    member = optional_member(session, suffix)
+    if member is None:
+        return None
+    with zipfile.ZipFile(session.path) as archive:
+        payload = archive.read(member)
+    try:
+        text = payload.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Archived CSV is not UTF-8: {member}") from exc
+    rows = tuple(
+        {str(key): "" if value is None else str(value) for key, value in row.items()}
+        for row in csv.DictReader(io.StringIO(text, newline=""))
+    )
+    return CsvMember(member, hashlib.sha256(payload).hexdigest(), rows)
+
+
+def resolve_archived_path(session: SessionArchive, value: str) -> str | None:
+    """Resolve a logged Windows/relative path to one unambiguous ZIP member."""
+
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return None
+    lowered = raw.lower()
+    exact = [name for name in session.members if name.replace("\\", "/").lower() == lowered]
+    if len(exact) == 1:
+        return exact[0]
+    # Session logs commonly contain an absolute workstation path.  Match the
+    # longest available suffix first, then fall back to the basename only when
+    # it is unique.  Ambiguity fails closed instead of choosing a frame.
+    parts = PurePosixPath(raw).parts
+    for width in range(min(len(parts), 5), 0, -1):
+        suffix = "/".join(parts[-width:]).lower()
+        matches = [
+            name for name in session.members
+            if name.replace("\\", "/").lower().endswith(suffix)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1 and width == 1:
+            return None
+    return None
+
+
+def read_archived_bytes(session: SessionArchive, member: str) -> bytes:
+    """Read an exact raw ZIP member for provenance-sensitive processing."""
+
+    if member not in session.members:
+        raise ValueError(f"Unknown ZIP member: {member}")
+    with zipfile.ZipFile(session.path) as archive:
+        return archive.read(member)
+
+
+def read_raw_frame(session: SessionArchive, frame_index: int) -> bytes:
+    """Return the original BMP/PNG bytes for a zero-based saved-frame index."""
+
+    if frame_index < 0 or frame_index >= len(session.frames):
+        raise IndexError("frame index is outside the saved-frame sequence")
+    return read_archived_bytes(session, session.frames[frame_index].member)
 
 
 def load_session_archive(path: str | Path) -> SessionArchive:
@@ -132,7 +216,11 @@ def load_session_archive(path: str | Path) -> SessionArchive:
     ]
     if any(b <= a for a, b in zip(capture_times, capture_times[1:])):
         raise ValueError("Saved-frame captured_at_utc must be strictly increasing")
-    return SessionArchive(source, archive_sha, heartbeat_member, metadata_member, metadata, tuple(frames))
+    root_member = str(PurePosixPath(heartbeat_member.replace("\\", "/")).parent)
+    return SessionArchive(
+        source, archive_sha, heartbeat_member, metadata_member, metadata,
+        tuple(frames), root_member, tuple(sorted(names)),
+    )
 
 
 def hash_frame_payloads(session: SessionArchive) -> SessionArchive:

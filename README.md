@@ -47,7 +47,7 @@ download.
 
 ### Developer/live-driver installation
 
-For Bulbasaur's live Windows acquisition environment:
+For either live Windows acquisition environment:
 
 ```powershell
 python -m pip install -r requirements-windows-live.txt
@@ -66,17 +66,26 @@ For a developer clone, double-click
   fixed to O-MBE and prevents a second competing O-MBE instance.
 - **Ch-MBE Growth Monitor** starts the live acquisition GUI with the chamber
   fixed to Ch-MBE and prevents a second competing Ch-MBE instance.
-- **RHEED Post-processing Labeler** opens a file-selection window for building,
-  reviewing, and validating offline temporal labels.
+- **RHEED Post-processing Labeler** builds, opens, reviews, and validates
+  offline RHEED point events and runs exact-frame Equalizer fits.
 - **AI4MBE Operator Manual** opens the English PDF guide.
 - **Uninstall AI4MBE Growth Monitor** removes program files and shortcuts while
   preserving experiment sessions and launcher logs.
 
-The launcher discovers the existing `ai4mbe-gui` interpreter, starts from the
-repository root, and writes diagnostics under
+The shared launcher discovers the existing `ai4mbe-gui` interpreter,
+preflights the required runtime, reports optional live-driver availability,
+starts from the repository root, and writes diagnostics under
 `%LOCALAPPDATA%\AI4MBE\LauncherLogs`. It never installs packages or changes
-instrument settings. The two root-level `Start *.cmd` files can also be
-double-clicked directly. See
+instrument settings. Each growth-monitor shortcut forces and preflights its
+own chamber profile. Before ARM/START, the operator must still verify every
+live mode and the save folder. If interpreter discovery fails, set
+`AI4MBE_GUI_PYTHON` to the full path of the validated `ai4mbe-gui` Python and
+start it again.
+
+The three application shortcuts use the bundled
+`assets/ai4mbe_app_icon.ico` and route through
+`scripts/windows/launch_ai4mbe.ps1`. The three root-level `Start *.cmd` files
+use the same launcher and can also be double-clicked directly. See
 [`docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf`](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf)
 for the English operator workflow and troubleshooting guide. A searchable
 [Markdown edition](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md)
@@ -92,8 +101,8 @@ remains available.
 
 | Product | Launch | Window title | Tabs |
 |---|---|---|---|
-| **O-MBE Growth Monitor** (primary product) | double-click `Start O-MBE Growth Monitor.cmd` | "Oxide MBE Growth Monitor" | Monitor / Events / Session |
-| **Ch-MBE Growth Monitor** | double-click `Start Ch-MBE Growth Monitor.cmd` | "Chalcogenide MBE Growth Monitor" | Monitor / Events / Session |
+| **O-MBE Growth Monitor** (primary product) | double-click `Start O-MBE Growth Monitor.cmd` | "Oxide MBE Growth Monitor" | Monitor / Direct-read / Events / Scrubber / Live Equalizer / Session |
+| **Ch-MBE Growth Monitor** | double-click `Start Ch-MBE Growth Monitor.cmd` | "Chalcogenide MBE Growth Monitor" | Monitor / Direct-read / Events / Scrubber / Live Equalizer / Session |
 | **Hardware Control Dashboard** (dummy-loop heater control) | `python gui.py` | "Hardware Control Dashboard" | RHEED / Pyrometer / PSU / Thermocouple / Dashboard / Visuals / Config / PID / Action Log |
 
 The two apps share only `gui/state.py`, `gui/widgets.py`, and
@@ -114,8 +123,9 @@ Automates the growth-log workflow during an MBE growth session:
   buffers around detected reconstruction transitions.
 - **Commit log** — timestamped grower notes via the LOG ENTRY button
   capture the moment with the current sensor snapshot.
-- **RHEED view/QC log** — explicit gun-alignment boundaries, camera-history
-  resets, and one-frame acquisition-QC labels without deleting frames.
+- **RHEED view and image-usability log** — explicit gun-alignment boundaries,
+  camera-history resets, and one-frame records of whether an acquired image
+  can be analyzed. These records do not describe surface or film quality.
 - **Growth-log export** — auto-generated `growth_log.xlsx` at session
   end.
 
@@ -127,9 +137,15 @@ Configure in the Session tab → Config form before ARM/START:
 | Channel | Modes |
 |---|---|
 | RHEED camera | `vimba` (vmbpy SDK, bypasses kSA) / `screengrab` (WGC reads detached kSA Live Video by HWND) / `screengrab_mss` (legacy diagnostic) / `dummy` |
-| Pyrometer | `modbus` (Modbus RTU — O-MBE COM4, Ch-MBE COM3; the port comes from the chamber config, not a fixed default) / `exactus` (binary serial alternative) / `screengrab` (TemperaSure UI) / `dummy` |
+| Pyrometer | `modbus` (chamber-specific COM/baud/RTS/device/backend; O-MBE COM4, Ch-MBE COM3) / `exactus` (binary serial alternative) / `screengrab` (TemperaSure UI) / `dummy` |
 | EvapControl | `elog` (parses EvapControl's own `.elo` binary log directly) / `screengrab` (OCR) / `dummy` |
-| MISTRAL | `screengrab` (OCR) / `dummy` — no direct-read driver yet |
+| MISTRAL | `ads` (read-only chamber-specific TwinCAT endpoint) / `screengrab` (OCR) / `jsonrpc` (experimental, may return no values) / `dummy` |
+
+Both chamber profiles start on `vimba / modbus / ads / elog`. O-MBE uses COM4
+with the `pymodbus` backend and a 6-cell ADS profile. Ch-MBE uses COM3 with the
+`raw_serial` backend and a 7-cell ADS profile. Both verified adapters require
+RTS de-asserted. The GUI passes a chamber-specific EvapControl log directory;
+it does not use cross-chamber path auto-detection during production startup.
 
 WGC RHEED capture is independent of desktop z-order, so covering or moving
 the detached Live Video window does not contaminate the image. It fails closed
@@ -150,9 +166,14 @@ Each session creates a directory containing:
 - `sensor_log.csv` — 1 Hz sensor readings
 - `commit_log.csv` — grower LOG ENTRY records with attached frame paths
 - `auto_capture_events.csv` — detector-flagged events with buffer dumps
-- `heartbeat_log.csv` — periodic-capture index
+- `manual_events.csv` — one-click grower event marks
+- `heartbeat_log.csv` — periodic captures with camera, timing, geometry,
+  view-state, and accepted Equalizer calibration provenance when available
 - `rheed_view_events.csv` — alignment, visual generation, history, and
-  explicit `qc_pass`/`qc_reject` events
+  explicit `qc_pass`/`qc_reject` image-usability event names retained for
+  file compatibility
+- `rheed_event_revisions.jsonl` — append-only point-event review history
+- `rheed_point_events.json` — rebuildable current point-event state
 - `frames/` — RHEED frame PNGs (heartbeat + per-event buffers)
 - `session_metadata.json`
 - `growth_log.xlsx` (auto-generated on STOP)
@@ -169,7 +190,7 @@ gui/                          OMBE Growth Monitor UI + workers
   growth_app.py               Top-level orchestrator
   growth_monitor.py           Monitor / Events / Session tab widget
   growth_logger.py            Session CSV/PNG writers
-  events_tab.py               Auto-capture event banner + labeling UI
+  events_tab.py               Auto-capture event banner + review UI
   auto_capture.py             Change-detection engine
   classifier_bridge.py        Classifier2 model integration
   workers.py                  Background threads per channel
@@ -198,8 +219,15 @@ scripts/                      CLI utilities, smoke tests, validation reports
   equalizer_*.py              Hybrid-basis labeling-game prototype
   ...
 
-tools/
-  rheed_postprocessing_labeling/  Offline model timelines + temporal segment annotation
+tools/rheed_postprocessing_labeling/
+  README.md                   Offline point-event workflow and safety boundary
+  desktop_launcher.py         Windows build/open/validate application
+  point_events.py             Point-event import, revision, and validation
+  loopback_service.py         Token-protected 127.0.0.1 report service
+  offline_equalizer.py        Exact-frame four-basis Equalizer fit
+  performance_probe.py        Large-session report performance probe
+  templates/timeline.html     Interactive timeline and Unfinished queue
+  tests/                      Synthetic offline unit and browser tests
 
 reference/                    Schema dumps, manuals, instrument datasheets
 docs/                         Methods writeups, schema proposals, deck artifacts
@@ -237,7 +265,14 @@ diagnostic charts and reports after the fact — no lab PC required.
 | `scripts/plot_temperature.py` | Single T-vs-t PNG | Quick temperature-trace view of one session |
 | `scripts/growth_profile_explorer.py` | 5 PNGs + self-contained HTML report in `<session>/analysis/` | Full session review: T + std band + event overlays + classifier trajectory + auto-capture score distribution + grower-vs-classifier agreement scatter. HTML wraps all 5 with base64-embedded PNGs and a session metadata header — emailable, no external dependencies |
 | `scripts/validate_angle_robustness.py` | HTML report + CSV | Classifier sensitivity to camera-angle rotations against an archived session |
-| `python -m tools.rheed_postprocessing_labeling desktop` | Offline interactive HTML + JSON/CSV labels | Open the desktop report builder and validator; see `tools/rheed_postprocessing_labeling/README.md` |
+| `python -m tools.rheed_postprocessing_labeling desktop` | Interactive local report + JSON/CSV sidecar | Review `manual`, `auto_capture`, and `posthoc` RHEED point events; run exact-frame Equalizer through the desktop launcher; preserve legacy interval annotations as read-only; see `tools/rheed_postprocessing_labeling/README.md` |
+
+Equalizer is an independent four-basis visual fit, not model probabilities,
+area fractions, or a human reconstruction label; HTR remains logically null.
+Completing an event requires a reviewer, a nonblank comment, an exact saved
+frame, and a valid Equalizer result. Desktop write controls are served only on
+`127.0.0.1` and verify the original BMP or PNG; static HTML and legacy interval
+annotations remain read-only.
 
 ```bash
 # Five-chart + HTML report
@@ -261,13 +296,13 @@ python scripts/growth_profile_explorer.py \
     logs/growths/<session_dir>/ --no-html
 ```
 
-## Hardware (Bulbasaur lab PC)
+## Hardware (O-MBE / Bulbasaur lab PC)
 
 | Device | Connection | Notes |
 |---|---|---|
 | RHEED camera | Allied Vision Manta G-033B (GigE Vision) | Vimba SDK or screengrab kSA Live Video |
 | Pyrometer | BASF Exactus + IFD-5 | COM4 / 115200 / 8N1, slave ID 1 (Modbus) or 5-byte binary serial |
-| MISTRAL | Scienta Omicron — `MistralGui.exe` | No direct API; screengrab + OCR for now |
+| MISTRAL | Scienta Omicron / Beckhoff PLC | Read-only ADS profile at the O-MBE endpoint; OCR remains optional |
 | EvapControl | Scienta Omicron — `evap_control.exe` | Direct: `.elo` binary log at `C:\_Omicron_Software\EvapControl\...\log\` |
 | Chamber pressure gauge | Thyracont via Moxa NPort 5150 | Direct path scoped, not yet implemented |
 

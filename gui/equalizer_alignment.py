@@ -816,7 +816,9 @@ class CalibrationRecord:
             or not self.gun_aligned
             or self.realignment_active
         ):
-            raise ValueError("Accepted calibration lacks stable session/QC provenance")
+            raise ValueError(
+                "Accepted calibration lacks stable session and image-acquisition provenance"
+            )
 
     @classmethod
     def from_candidate(

@@ -20,6 +20,7 @@ import numpy as np
 from PIL import Image
 
 from .prediction_io import ModelSpec, PredictionTable, load_predictions
+from .point_events import SCHEMA_VERSION as POINT_EVENT_SCHEMA, import_point_events
 from .session_archive import (
     FrameRecord, hash_frame_payloads, load_session_archive,
     ordered_frame_fingerprint, sha256_file,
@@ -120,16 +121,17 @@ def validate_existing_report_destination(
         "vendor": "vendor/",
         "third_party_notices": "vendor/THIRD_PARTY_NOTICES.md",
     }
-    expected_policy = {
+    legacy_policy = {
         "annotation_mode": "model_assisted_review",
         "model_outputs_visible": True,
         "eligible_for_gold": False,
     }
+    point_policy = {**legacy_policy, "schema_version": POINT_EVENT_SCHEMA}
     if (
         not isinstance(manifest, dict)
         or manifest.get("schema_version") != 1
         or manifest.get("outputs") != expected_outputs
-        or manifest.get("annotation_policy") != expected_policy
+        or manifest.get("annotation_policy") not in (legacy_policy, point_policy)
     ):
         raise ValueError("Existing report manifest does not identify a compatible generated report")
     return destination
@@ -258,18 +260,23 @@ def _render(template: str, replacements: dict[str, str]) -> str:
     return output
 
 
-def _extract_review_images(archive_path: Path, frames: Sequence[FrameRecord], output: Path, quality: int = 78) -> tuple[int | None, int | None, bool]:
+def _extract_review_images(
+    archive_path: Path, frames: Sequence[FrameRecord], output: Path,
+    quality: int = 78,
+) -> tuple[int | None, int | None, bool, list[tuple[int, int]]]:
     output.mkdir(parents=True)
     sizes: set[tuple[int, int]] = set()
+    ordered_sizes: list[tuple[int, int]] = []
     with zipfile.ZipFile(archive_path) as archive:
         for index, frame in enumerate(frames, 1):
             from io import BytesIO
             with Image.open(BytesIO(archive.read(frame.member))) as source:
                 rgb = source.convert("RGB")
                 sizes.add(rgb.size)
+                ordered_sizes.append(rgb.size)
                 rgb.save(output / f"frame_{index:04d}.webp", "WEBP", quality=quality, method=3)
     width, height = next(iter(sizes)) if len(sizes) == 1 else (None, None)
-    return width, height, len(sizes) != 1
+    return width, height, len(sizes) != 1, ordered_sizes
 
 
 def build_report(
@@ -298,6 +305,7 @@ def build_report(
     if len({spec.key for spec in specs}) != len(specs):
         raise ValueError("Model keys must be unique")
     session = hash_frame_payloads(load_session_archive(session_zip))
+    imported_events = import_point_events(session)
     tables = [load_predictions(path, spec, session.frames) for path, spec in zip(predictions_paths, specs)]
     times = np.asarray([frame.elapsed_s for frame in session.frames], dtype=np.float64)
     captures = [_parse_utc(frame.captured_at_utc) for frame in session.frames]
@@ -306,9 +314,13 @@ def build_report(
     fingerprint = ordered_frame_fingerprint(session.frames)
     stage = Path(tempfile.mkdtemp(prefix=".rheed-labeling-", dir=destination.parent))
     try:
-        review_width, review_height, mixed_dimensions = _extract_review_images(
+        review_width, review_height, mixed_dimensions, frame_dimensions = _extract_review_images(
             session.path, session.frames, stage / "images", review_quality
         )
+        frame_contexts = [dict(item) for item in imported_events.frame_contexts]
+        for context, (width, height) in zip(frame_contexts, frame_dimensions, strict=True):
+            context["camera_width"] = context.get("camera_width") or width
+            context["camera_height"] = context.get("camera_height") or height
         (stage / "vendor").mkdir()
         shutil.copy2(PACKAGE / "static" / "d3.v7.9.0.min.js", stage / "vendor" / "d3.v7.9.0.min.js")
         shutil.copy2(
@@ -374,6 +386,19 @@ def build_report(
             "session": {"camera_backend": session.frames[0].capture_backend,
                         "geometry": session.frames[0].capture_geometry_id,
                         "first_frame": session.frames[0].frame_name, "last_frame": session.frames[-1].frame_name},
+            # Point-event data is imported from immutable source CSVs.  The
+            # browser edits a revision journal, not these acquisition rows.
+            "annotation_schema": POINT_EVENT_SCHEMA,
+            "point_events": list(imported_events.events),
+            "reference_events": list(imported_events.reference_events),
+            "unlinked_legacy_labels": list(imported_events.unlinked_legacy_labels),
+            "sensor_context": imported_events.sensor_context,
+            "source_event_revisions": list(imported_events.source_revisions),
+            "source_event_journal": imported_events.source_journal,
+            # Exact per-saved-frame provenance for the desktop Equalizer.
+            # Missing legacy fields stay null and are listed explicitly; the
+            # desktop path therefore fails closed instead of inventing state.
+            "frame_contexts": frame_contexts,
         }
         probabilities = np.concatenate([table.probabilities for table in tables], axis=1)
         quality = np.stack([table.quality for table in tables], axis=1)
@@ -412,8 +437,24 @@ def build_report(
                 "vendor": "vendor/",
                 "third_party_notices": "vendor/THIRD_PARTY_NOTICES.md",
             },
-            "annotation_policy": {"annotation_mode": "model_assisted_review",
-                                  "model_outputs_visible": True, "eligible_for_gold": False},
+            "annotation_policy": {
+                "annotation_mode": "model_assisted_review",
+                "model_outputs_visible": True,
+                "eligible_for_gold": False,
+                "schema_version": POINT_EVENT_SCHEMA,
+            },
+            "point_events": {
+                "labelable_count": len(imported_events.events),
+                "reference_count": len(imported_events.reference_events),
+                "unlinked_legacy_label_count": len(imported_events.unlinked_legacy_labels),
+                "source_revision_count": len(imported_events.source_revisions),
+                "source_journal": imported_events.source_journal,
+                "source_files": sorted({
+                    event["source"]["source_file"]
+                    for event in imported_events.events
+                    if event["source"].get("source_file")
+                }),
+            },
         }
         (stage / "run_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         _install_staged_report(stage, destination)

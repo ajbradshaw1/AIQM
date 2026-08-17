@@ -35,7 +35,9 @@ class MBESystemConfig:
 
     # Default driver mode selections for the Session config panel.
     # The GUI uses these as setCurrentText() seeds; the grower can still
-    # override them manually before arming.
+    # override them manually before arming.  Keep all four defaults explicit
+    # so adding a diagnostic option before them in a combo box can never make
+    # a live workstation start on generated data by accident.
     camera_mode_default: str = "vimba"
     pyrometer_mode_default: str = "modbus"
     mistral_mode_default: str = "screengrab"
@@ -142,7 +144,14 @@ OXIDE_MBE = MBESystemConfig(
     # screengrab still available as fallback via the sidebar dropdown.
     mistral_mode_default="ads",
     evap_mode_default="elog",
-    # evap_log_dir left empty — ElogReader auto-detects the Bulbasaur path
+    # Keep the production GUI chamber-bound.  ElogReader's generic
+    # auto-detection remains available to standalone diagnostics, but the GUI
+    # passes this explicit directory so a second chamber install (or a stale
+    # AIQM_EVAP_LOG_DIR) cannot redirect an O-MBE session.
+    evap_log_dir=(
+        r"C:\_Omicron_Software\EvapControl\evap_control_1.2.0.51"
+        r"\evap_control_1.2.0.51\log"
+    ),
     cell_display=[
         {"label": "HTEC2",       "state_field": "cell_HTEC2_pv_C"},
         {"label": "Y (Yttrium)", "state_field": "cell_Y_pv_C"},
@@ -198,9 +207,10 @@ CHALCOGENIDE_MBE = MBESystemConfig(
     name="Chalcogenide MBE",
     chamber_id="chmbe",
     mistral_mode_default="ads",
-    # Direct-read the chamber's own .elo file. Ch-MBE cell temperatures
-    # continue to come from ADS; ElogReader safely leaves schema fields that
-    # are absent from this chamber blank.
+    # Grower-approved startup choice: read the Ch-MBE EvapControl log
+    # directly.  The numbered cell temperatures continue to come from ADS;
+    # selecting elog here does not copy O-MBE's material-name mapping, and
+    # ElogReader safely leaves fields absent from this chamber blank.
     evap_mode_default="elog",
     evap_log_dir=r"C:\evap_control_1.2.0.48\log",
     # Cell1 = manipulator (substrate heater — confirmed Jul 22 2026).

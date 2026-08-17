@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -39,6 +40,7 @@ from .report_builder import (
     validate_existing_report_destination,
     validate_output_destination,
 )
+from .loopback_service import LoopbackReportService
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -66,7 +68,18 @@ class BuildRequest:
 @dataclass(frozen=True)
 class ValidationResult:
     dataset_id: str
-    segment_count: int
+    item_count: int
+    item_kind: str
+
+    @property
+    def segment_count(self) -> int:
+        """Compatibility alias for callers that validate legacy v1 reports."""
+
+        return self.item_count
+
+    @property
+    def event_count(self) -> int:
+        return self.item_count
 
 
 def _resolved(path: Path) -> Path:
@@ -164,15 +177,29 @@ def parse_validation_response(payload: str) -> ValidationResult:
         value = json.loads(payload)
     except json.JSONDecodeError as exc:
         raise ValueError("Validation worker returned malformed JSON") from exc
-    if not isinstance(value, dict) or set(value) != {"valid", "dataset_id", "segment_count"}:
+    if not isinstance(value, dict) or value.get("valid") is not True:
         raise ValueError("Validation worker returned an unexpected response schema")
-    if value["valid"] is not True:
-        raise ValueError("Validation worker did not affirm validity")
-    if not isinstance(value["dataset_id"], str) or not value["dataset_id"].strip():
+    if not isinstance(value.get("dataset_id"), str) or not value["dataset_id"].strip():
         raise ValueError("Validation worker returned an invalid dataset ID")
-    if type(value["segment_count"]) is not int or value["segment_count"] < 0:
-        raise ValueError("Validation worker returned an invalid segment count")
-    return ValidationResult(value["dataset_id"].strip(), value["segment_count"])
+    count_keys = [key for key in ("event_count", "segment_count") if key in value]
+    if len(count_keys) != 1:
+        raise ValueError("Validation worker returned no unambiguous item count")
+    count_key = count_keys[0]
+    allowed_keys = {"valid", "dataset_id", count_key, "schema_version"}
+    if not set(value).issubset(allowed_keys):
+        raise ValueError("Validation worker returned an unexpected response schema")
+    if type(value[count_key]) is not int or value[count_key] < 0:
+        raise ValueError("Validation worker returned an invalid item count")
+    if (
+        count_key == "event_count"
+        and value.get("schema_version") != "rheed-point-events-v1"
+    ):
+        raise ValueError("Validation worker returned an invalid point-event schema")
+    return ValidationResult(
+        value["dataset_id"].strip(),
+        value[count_key],
+        "event" if count_key == "event_count" else "segment",
+    )
 
 
 class LabelingDesktopLauncher(QMainWindow):
@@ -210,6 +237,8 @@ class LabelingDesktopLauncher(QMainWindow):
         self._stdout_buffer: list[str] = []
         self._stderr_buffer: list[str] = []
         self._completion_handled = False
+        self._loopback_service: LoopbackReportService | None = None
+        self._equalizer_coordinator = None
 
         self.setWindowTitle("RHEED Post-processing and Temporal Labeling")
         self.resize(980, 760)
@@ -639,7 +668,7 @@ class LabelingDesktopLauncher(QMainWindow):
                 self.status_label.setText(f"Report created: {expected_report}")
                 self.tabs.setCurrentWidget(self._review_tab)
                 self._save_settings()
-                if not self._open_local_file(expected_report, "report"):
+                if not self._open_report_with_desktop_controls(expected_report):
                     self.status_label.setText(
                         f"Report created, but Windows did not open it: {expected_report}"
                     )
@@ -652,7 +681,7 @@ class LabelingDesktopLauncher(QMainWindow):
             else:
                 self.status_label.setText("Annotation JSON is valid for this report")
                 self.validation_result.setText(
-                    f"Valid - {result.segment_count} segment(s) - dataset {result.dataset_id}"
+                    f"Valid - {result.item_count} {result.item_kind}(s) - dataset {result.dataset_id}"
                 )
         else:
             self.status_label.setText("Worker returned for an unknown task")
@@ -684,7 +713,170 @@ class LabelingDesktopLauncher(QMainWindow):
         return next((line.strip() for line in reversed(text.splitlines()) if line.strip()), "")
 
     def _open_report(self) -> None:
-        self._open_local_file(Path(self.report_edit.text().strip()), "report")
+        self._open_report_with_desktop_controls(
+            Path(self.report_edit.text().strip())
+        )
+
+    def _stop_report_service(self) -> None:
+        coordinator = self._equalizer_coordinator
+        self._equalizer_coordinator = None
+        if coordinator is not None:
+            try:
+                coordinator.close()
+            except (AttributeError, RuntimeError):
+                pass
+        service = self._loopback_service
+        self._loopback_service = None
+        if service is not None:
+            service.stop()
+
+    def _open_report_with_desktop_controls(self, path: Path) -> bool:
+        """Open through an authenticated loopback service when ZIP is present.
+
+        Without the source archive, the static report still supports Draft
+        review and export.  Equalizer and Complete remain unavailable because
+        their exact raw-frame provenance cannot be checked.
+        """
+        if not path.is_file():
+            self._warning("File not found", "Choose an existing report file.")
+            return False
+        session_path = Path(self.session_edit.text().strip())
+        report_payload = None
+        report_error: Exception | None = None
+        try:
+            from .point_events import SCHEMA_VERSION as POINT_EVENT_SCHEMA
+            from .report_builder import load_report_payload
+
+            report_payload = load_report_payload(path)
+        except (OSError, TypeError, ValueError) as exc:
+            report_error = exc
+        if (
+            report_payload is not None
+            and report_payload.get("config", {}).get("annotation_schema")
+                != POINT_EVENT_SCHEMA
+        ):
+            self._information(
+                "Legacy report is read-only",
+                "This rheed-temporal-segments-v1 report cannot be edited through "
+                "the point-event desktop Labeler. It remains available only to "
+                "the legacy validator; rebuild the report to create point events.",
+            )
+            return False
+        if not session_path.is_file() or session_path.suffix.lower() != ".zip":
+            self._information(
+                "Draft review only",
+                "Choose the matching source session ZIP in the Build tab before "
+                "opening this report if you need Run Equalizer or Complete. "
+                "The report will open as static Draft-only review.",
+            )
+            return self._open_local_file(path, "report")
+        if report_error is not None:
+            self._warning("Unreadable report", str(report_error))
+            return False
+
+        self._stop_report_service()
+        coordinator_holder: dict[str, object] = {}
+        sidecar_holder: dict[str, object] = {}
+        sidecar_lock = threading.Lock()
+
+        def sidecar_store():
+            """Lazily verify the large source archive off the Qt thread."""
+
+            with sidecar_lock:
+                store = sidecar_holder.get("store")
+                if store is None:
+                    from .point_events import PointEventSidecarStore
+
+                    store = PointEventSidecarStore(path, session_path)
+                    sidecar_holder["store"] = store
+                return store
+
+        def persist_revision(command):
+            return sidecar_store().apply_revision(command)
+
+        def persist_equalizer_revision(command, measurement):
+            return sidecar_store().apply_equalizer_revision(command, measurement)
+
+        def import_draft_document(document):
+            return sidecar_store().import_document(document)
+
+        def sidecar_event_ids() -> set[str]:
+            return set(sidecar_store().event_ids)
+
+        def durable_event_state():
+            store = sidecar_store()
+            snapshot = store.atomic_state_snapshot()
+            events = snapshot["events"]
+            return {
+                "ok": True,
+                "events": events,
+                "revisions": snapshot["revisions"],
+                "annotation_set": snapshot["annotation_set"],
+                "unfinished_count": sum(
+                    event.get("status") != "Complete"
+                    and event.get("review", {}).get("disposition") == "active"
+                    for event in events
+                ),
+            }
+
+        def enqueue(request) -> None:
+            coordinator = coordinator_holder.get("coordinator")
+            if coordinator is None:
+                raise RuntimeError("Equalizer controller is not ready")
+            coordinator.enqueue_from_http(request)
+
+        try:
+            # Import lazily so ordinary report build/validation and headless
+            # CLI use never initialize the Equalizer or its Qt graphics code.
+            from .offline_equalizer import OfflineEqualizerCoordinator
+
+            service = LoopbackReportService(
+                path,
+                equalizer_callback=enqueue,
+                revision_callback=persist_revision,
+                equalizer_revision_callback=persist_equalizer_revision,
+                import_callback=import_draft_document,
+                state_callback=durable_event_state,
+            )
+            coordinator = OfflineEqualizerCoordinator(
+                report_path=path,
+                session_path=session_path,
+                service=service,
+                additional_event_ids=sidecar_event_ids,
+                session_loader=lambda: sidecar_store().ensure_session_verified(),
+                parent=self,
+            )
+            coordinator_holder["coordinator"] = coordinator
+            url = service.start()
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            self._critical(
+                "Could not start desktop report controls",
+                "The report was not opened because the provenance-controlled "
+                "desktop service could not start.",
+                str(exc),
+            )
+            return False
+        self._loopback_service = service
+        self._equalizer_coordinator = coordinator
+        try:
+            opened = bool(self._url_opener(QUrl(url)))
+        except Exception as exc:  # desktop integration boundary
+            opened = False
+            detail = str(exc)
+        else:
+            detail = url.split("?", 1)[0]
+        if not opened:
+            self._stop_report_service()
+            self._critical(
+                "Could not open report",
+                "Windows did not open the report through the desktop labeler.",
+                detail,
+            )
+            return False
+        self.status_label.setText(
+            "Opened report with desktop Equalizer controls on 127.0.0.1"
+        )
+        return True
 
     def _open_manual(self) -> None:
         self._open_local_file(self._manual_path, "English PDF manual")
@@ -773,6 +965,7 @@ class LabelingDesktopLauncher(QMainWindow):
             )
             event.ignore()
             return
+        self._stop_report_service()
         self._save_settings()
         super().closeEvent(event)
 

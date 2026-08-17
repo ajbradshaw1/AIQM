@@ -147,6 +147,144 @@
     #anneal-model-timeline .arp-annotation-status.text-destructive {
       color: var(--destructive);
     }
+    #anneal-model-timeline .arp-point-editor {
+      margin: 0 0 18px;
+    }
+    #anneal-model-timeline .arp-point-workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 0.72fr);
+      gap: 12px;
+      margin-top: 8px;
+    }
+    #anneal-model-timeline .arp-point-card,
+    #anneal-model-timeline .arp-point-queue {
+      border: 1px solid var(--border);
+      padding: 10px;
+      min-width: 0;
+    }
+    #anneal-model-timeline .arp-point-card h4,
+    #anneal-model-timeline .arp-point-queue h4 {
+      margin: 0 0 7px;
+      font-weight: 500;
+    }
+    #anneal-model-timeline .arp-point-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px 10px;
+    }
+    #anneal-model-timeline .arp-point-grid .arp-point-wide {
+      grid-column: 1 / -1;
+    }
+    #anneal-model-timeline .arp-point-field {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+    #anneal-model-timeline .arp-point-field input,
+    #anneal-model-timeline .arp-point-field select,
+    #anneal-model-timeline .arp-point-field textarea {
+      width: 100%;
+      min-width: 0;
+    }
+    #anneal-model-timeline .arp-point-evidence,
+    #anneal-model-timeline .arp-point-context,
+    #anneal-model-timeline .arp-point-equalizer {
+      border-top: 1px solid var(--border);
+      margin-top: 9px;
+      padding-top: 8px;
+    }
+    #anneal-model-timeline .arp-point-evidence dl,
+    #anneal-model-timeline .arp-point-context dl,
+    #anneal-model-timeline .arp-point-equalizer dl {
+      display: grid;
+      grid-template-columns: minmax(120px, 0.45fr) minmax(0, 1fr);
+      gap: 3px 9px;
+      margin: 4px 0;
+    }
+    #anneal-model-timeline .arp-point-evidence dt,
+    #anneal-model-timeline .arp-point-context dt,
+    #anneal-model-timeline .arp-point-equalizer dt {
+      color: var(--muted-foreground);
+    }
+    #anneal-model-timeline .arp-point-evidence dd,
+    #anneal-model-timeline .arp-point-context dd,
+    #anneal-model-timeline .arp-point-equalizer dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+    #anneal-model-timeline .arp-point-actions,
+    #anneal-model-timeline .arp-point-export-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      align-items: end;
+      margin-top: 9px;
+    }
+    #anneal-model-timeline .arp-point-queue-list {
+      display: grid;
+      gap: 5px;
+      max-height: 370px;
+      overflow: auto;
+    }
+    #anneal-model-timeline .arp-point-queue-list .btn {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+      text-align: left;
+      min-width: 0;
+    }
+    #anneal-model-timeline .arp-point-status-pill {
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      padding: 0 6px;
+      white-space: nowrap;
+    }
+    #anneal-model-timeline .arp-point-track .point-original {
+      cursor: pointer;
+      stroke: var(--background);
+      stroke-width: 1.5px;
+    }
+    #anneal-model-timeline .arp-point-track .point-review {
+      cursor: pointer;
+      stroke-width: 2px;
+      fill: none;
+    }
+    #anneal-model-timeline .arp-point-track .point-link {
+      stroke: var(--muted-foreground);
+      stroke-dasharray: 3 2;
+      pointer-events: none;
+    }
+    #anneal-model-timeline .arp-point-track .point-selected {
+      stroke: var(--foreground);
+      stroke-width: 3px;
+    }
+    #anneal-model-timeline .arp-point-track .point-reference {
+      opacity: 0.45;
+    }
+    #anneal-model-timeline .arp-point-bridge-note {
+      border-left: 3px solid var(--accent);
+      padding-left: 8px;
+      margin: 7px 0;
+      color: var(--muted-foreground);
+    }
+    #anneal-model-timeline .arp-point-weight-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 5px;
+    }
+    #anneal-model-timeline .arp-point-weight-table th,
+    #anneal-model-timeline .arp-point-weight-table td {
+      border-bottom: 1px solid var(--border);
+      padding: 3px 5px;
+      text-align: right;
+    }
+    #anneal-model-timeline .arp-point-weight-table th:first-child,
+    #anneal-model-timeline .arp-point-weight-table td:first-child {
+      text-align: left;
+    }
+    #anneal-model-timeline .arp-point-weight-table input {
+      width: 78px;
+    }
     #anneal-model-timeline .arp-panel-head {
       display: flex;
       align-items: baseline;
@@ -456,6 +594,9 @@
       #anneal-model-timeline .arp-annotation-controls .arp-annotation-notes {
         grid-column: 1 / -1;
       }
+      #anneal-model-timeline .arp-point-workspace {
+        grid-template-columns: 1fr;
+      }
     }
     @media (max-width: 520px) {
       #anneal-model-timeline .arp-display-controls {
@@ -478,6 +619,12 @@
       #anneal-model-timeline .arp-annotation-controls .arp-annotation-field {
         grid-column: 1 / -1;
       }
+      #anneal-model-timeline .arp-point-grid {
+        grid-template-columns: 1fr;
+      }
+      #anneal-model-timeline .arp-point-grid .arp-point-wide {
+        grid-column: auto;
+      }
     }
   </style>
 
@@ -485,7 +632,109 @@
   <p class="arp-meta text-small" id="arp-report-meta"></p>
   <div class="arp-layout">
     <div class="arp-plots" id="arp-plots">
-      <section class="arp-annotation-editor" aria-labelledby="arp-annotation-title">
+      <section class="arp-point-editor" id="arp-point-editor" aria-labelledby="arp-point-title" hidden>
+        <div class="arp-annotation-head">
+          <h3 id="arp-point-title">RHEED point-event review</h3>
+          <output class="arp-annotation-summary text-small" id="arp-point-summary">0 events</output>
+        </div>
+        <p class="arp-annotation-note text-small">Original event evidence is immutable. The review point snaps to a saved frame. Equalizer is an auxiliary visual fit and never changes the grower’s reconstruction interpretation or represents a model probability.</p>
+        <div class="arp-annotation-transport">
+          <button type="button" class="btn" id="arp-frame-previous-point">← Previous frame</button>
+          <button type="button" class="btn" id="arp-frame-next-point">Next frame →</button>
+          <label class="arp-annotation-scrubber text-small" for="arp-frame-scrubber-point">
+            <span>Saved-frame playhead</span><output id="arp-frame-scrubber-output-point" for="arp-frame-scrubber-point"></output>
+            <input class="form-range" id="arp-frame-scrubber-point" type="range" min="0" max="0" step="1" value="0">
+          </label>
+        </div>
+        <div class="arp-annotation-track-host" id="arp-point-track-host"></div>
+        <div class="arp-point-workspace">
+          <div class="arp-point-card">
+            <h4 id="arp-point-editor-heading">Select an event or add one at the playhead</h4>
+            <div id="arp-point-empty" class="text-small text-muted">Manual marks and automatic image-change events appear here. RHEED adjustment and image-unusable records are shown on the track as read-only references.</div>
+            <div id="arp-point-form" hidden>
+              <div class="arp-point-grid">
+                <label class="arp-point-field arp-point-wide text-small" for="arp-point-comment">
+                  <span>Review comment (required to Complete)</span>
+                  <textarea class="form-control" id="arp-point-comment" rows="2" maxlength="1000"></textarea>
+                </label>
+                <label class="arp-point-field text-small" for="arp-point-reviewer">
+                  <span>Reviewer (required to Complete)</span>
+                  <input class="form-control" id="arp-point-reviewer" type="text" maxlength="120">
+                </label>
+                <label class="arp-point-field text-small" for="arp-point-confidence">
+                  <span>Review confidence</span>
+                  <input class="form-control" id="arp-point-confidence" type="number" min="0" max="1" step="0.05" placeholder="Optional, 0–1">
+                </label>
+                <label class="arp-point-field text-small" for="arp-point-reconstruction">
+                  <span>Optional human interpretation</span>
+                  <select class="form-select" id="arp-point-reconstruction">
+                    <option value="">Not stated</option>
+                    <option value="none_weak">1×1 / none-weak</option>
+                    <option value="twinned_2x1">Twinned (2×1)</option>
+                    <option value="c_6x2">c(6×2)</option>
+                    <option value="rt13">RT13</option>
+                    <option value="htr">HTR-like</option>
+                    <option value="unknown">Uncertain</option>
+                  </select>
+                </label>
+                <label class="arp-point-field text-small" for="arp-point-before">
+                  <span>Optional reconstruction before</span>
+                  <select class="form-select" id="arp-point-before"></select>
+                </label>
+                <label class="arp-point-field text-small" for="arp-point-after">
+                  <span>Optional reconstruction after</span>
+                  <select class="form-select" id="arp-point-after"></select>
+                </label>
+              </div>
+              <div class="arp-point-evidence text-small">
+                <strong>Immutable live-session evidence</strong>
+                <dl id="arp-point-evidence"></dl>
+              </div>
+              <div class="arp-point-context text-small">
+                <strong>Read-only instrument context at the original event time</strong>
+                <dl id="arp-point-context"></dl>
+              </div>
+              <div class="arp-point-equalizer text-small">
+                <strong>Equalizer auxiliary visual fit</strong>
+                <p class="arp-point-bridge-note" id="arp-point-bridge-note"></p>
+                <dl id="arp-point-equalizer-provenance"></dl>
+                <table class="arp-point-weight-table" aria-label="Equalizer weights">
+                  <thead><tr><th>Basis</th><th>Raw</th><th>Final</th><th>Normalized</th></tr></thead>
+                  <tbody id="arp-point-equalizer-weights"></tbody>
+                </table>
+                <p class="text-muted">Weights are an atomic measurement. To revise them, run the PyQt Equalizer again; individual stages are not editable in the browser.</p>
+                <p class="text-muted">HTR: N/A — no canonical basis; it is always stored as null.</p>
+              </div>
+              <div class="arp-point-actions">
+                <button type="button" class="btn btn-primary" id="arp-point-save">Save Draft</button>
+                <button type="button" class="btn" id="arp-point-move">Move review point to playhead</button>
+                <button type="button" class="btn" id="arp-point-equalizer-run">Run Equalizer</button>
+                <button type="button" class="btn" id="arp-point-complete">Complete</button>
+                <button type="button" class="btn" id="arp-point-reopen">Reopen</button>
+                <button type="button" class="btn" id="arp-point-dismiss">Mark not processed</button>
+                <button type="button" class="btn" id="arp-point-delete">Delete posthoc event</button>
+              </div>
+            </div>
+          </div>
+          <aside class="arp-point-queue">
+            <h4>Unfinished</h4>
+            <div class="arp-point-queue-list" id="arp-point-unfinished"></div>
+            <h4 style="margin-top:10px">All events</h4>
+            <div class="arp-point-queue-list" id="arp-point-all"></div>
+          </aside>
+        </div>
+        <div class="arp-point-actions">
+          <button type="button" class="btn btn-primary" id="arp-point-add">Add posthoc event at playhead</button>
+        </div>
+        <div class="arp-point-export-row">
+          <button type="button" class="btn" id="arp-point-export-json">Export point-event JSON</button>
+          <button type="button" class="btn" id="arp-point-export-csv">Export point-event CSV</button>
+          <label class="btn" for="arp-point-import">Import point-event JSON</label>
+          <input id="arp-point-import" type="file" accept=".json,application/json" hidden>
+        </div>
+        <div class="arp-annotation-status text-small" id="arp-point-status" role="status" aria-live="polite"></div>
+      </section>
+      <section class="arp-annotation-editor" id="arp-legacy-segment-editor" aria-labelledby="arp-annotation-title" hidden>
         <div class="arp-annotation-head">
           <h3 id="arp-annotation-title">Human reconstruction segments</h3>
           <output class="arp-annotation-summary text-small" id="arp-annotation-summary">0 segments · 0 frames labeled</output>
@@ -730,6 +979,27 @@
       const datasetIdentity = config.dataset;
       const annotationStorageKey =
         `ai4mbe.rheed.annotations.${annotationSchema}.${datasetIdentity.dataset_id}.${datasetIdentity.model_context_fingerprint}`;
+      const pointSchema = 'rheed-point-events-v1';
+      const isPointReport = config.annotation_schema === pointSchema || Array.isArray(config.point_events);
+      const legacySegmentEditingEnabled = false;
+      const pointEditor = root.querySelector('#arp-point-editor');
+      const legacyEditor = root.querySelector('#arp-legacy-segment-editor');
+      const pointStorageKey =
+        `ai4mbe.rheed.point-events.${pointSchema}.${datasetIdentity.dataset_id}.${datasetIdentity.model_context_fingerprint}`;
+      const pointBridge = config.event_bridge || config.desktop_bridge || {};
+      const pointBridgeToken = new URLSearchParams(location.search).get('bridge_token') || String(pointBridge.token || '');
+      const pointDesktopSession = location.protocol !== 'file:' && pointBridgeToken.length >= 16;
+      let pointBridgeAvailable = false;
+      let pointRevisionPersistenceAvailable = false;
+      let pointEvents = [];
+      let pointReferences = [];
+      let pointRevisions = [];
+      let pointHistory = [];
+      let selectedPointEventId = null;
+      let pointStorageAvailable = false;
+      let pointState = null;
+      let pointAnnotationSetId = '';
+      let pointRevisionPending = false;
 
       function valueAt(model, frameIndex, classIndex) {
         return probabilities[frameIndex * totalColumns + model.offset + classIndex] / 65535;
@@ -767,6 +1037,63 @@
 
       function cloneValue(value) {
         return JSON.parse(JSON.stringify(value));
+      }
+
+      function stableJson(value) {
+        if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+        if (value && typeof value === 'object') {
+          return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+        }
+        return JSON.stringify(value);
+      }
+
+      function sha256Hex(textValue) {
+        const constants = [
+          0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+          0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+          0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+          0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+          0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+          0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+          0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+          0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+        ];
+        const bytes = new TextEncoder().encode(textValue);
+        const paddedLength = Math.ceil((bytes.length + 9) / 64) * 64;
+        const padded = new Uint8Array(paddedLength);
+        padded.set(bytes);
+        padded[bytes.length] = 0x80;
+        const bitLength = BigInt(bytes.length) * 8n;
+        for (let index = 0; index < 8; index += 1) {
+          padded[paddedLength - 1 - index] = Number((bitLength >> BigInt(index * 8)) & 0xffn);
+        }
+        const hash = new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);
+        const words = new Uint32Array(64);
+        const rotate = (value, bits) => (value >>> bits) | (value << (32 - bits));
+        for (let offset = 0; offset < padded.length; offset += 64) {
+          for (let index = 0; index < 16; index += 1) {
+            const position = offset + index * 4;
+            words[index] = ((padded[position] << 24) | (padded[position + 1] << 16) |
+              (padded[position + 2] << 8) | padded[position + 3]) >>> 0;
+          }
+          for (let index = 16; index < 64; index += 1) {
+            const s0 = rotate(words[index - 15], 7) ^ rotate(words[index - 15], 18) ^ (words[index - 15] >>> 3);
+            const s1 = rotate(words[index - 2], 17) ^ rotate(words[index - 2], 19) ^ (words[index - 2] >>> 10);
+            words[index] = (words[index - 16] + s0 + words[index - 7] + s1) >>> 0;
+          }
+          let [a,b,c,d,e,f,g,h] = hash;
+          for (let index = 0; index < 64; index += 1) {
+            const sum1 = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25);
+            const choose = (e & f) ^ (~e & g);
+            const temp1 = (h + sum1 + choose + constants[index] + words[index]) >>> 0;
+            const sum0 = rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22);
+            const majority = (a & b) ^ (a & c) ^ (b & c);
+            const temp2 = (sum0 + majority) >>> 0;
+            h = g; g = f; f = e; e = (d + temp1) >>> 0; d = c; c = b; b = a; a = (temp1 + temp2) >>> 0;
+          }
+          [a,b,c,d,e,f,g,h].forEach((value, index) => { hash[index] = (hash[index] + value) >>> 0; });
+        }
+        return Array.from(hash).map(value => value.toString(16).padStart(8, '0')).join('');
       }
 
       function setAnnotationMessage(message, isError = false) {
@@ -1297,6 +1624,7 @@
       }
 
       function markAnnotationIn() {
+        if (!legacySegmentEditingEnabled) return;
         markInIndex = selectedIndex;
         if (markOutIndexExclusive !== null && markOutIndexExclusive <= markInIndex) {
           setAnnotationMessage('Out must be the same frame as, or later than, In.', true);
@@ -1307,6 +1635,7 @@
       }
 
       function markAnnotationOut() {
+        if (!legacySegmentEditingEnabled) return;
         markOutIndexExclusive = selectedIndex + 1;
         if (markInIndex !== null && markOutIndexExclusive <= markInIndex) {
           setAnnotationMessage('Out must be the same frame as, or later than, In.', true);
@@ -1317,6 +1646,7 @@
       }
 
       function applyAnnotationSegment() {
+        if (!legacySegmentEditingEnabled) return;
         const labeler = annotationLabeler.value.trim();
         const label = annotationLabel.value;
         if (!labeler) return setAnnotationMessage('Enter the labeler name before saving.', true);
@@ -1368,6 +1698,7 @@
       }
 
       function deleteSelectedAnnotation() {
+        if (!legacySegmentEditingEnabled) return;
         const segment = annotations.find(item => item.annotationId === selectedAnnotationId);
         if (!segment) return;
         if (!window.confirm(`Delete the ${annotationLabels[segment.label]} segment?`)) return;
@@ -1384,6 +1715,7 @@
       }
 
       function undoAnnotationMutation() {
+        if (!legacySegmentEditingEnabled) return;
         if (!annotationHistory.length) return;
         const current = cloneValue(annotations);
         const previous = annotationHistory.pop();
@@ -1402,6 +1734,7 @@
       }
 
       async function importAnnotations(event) {
+        if (!legacySegmentEditingEnabled) return;
         const input = event.currentTarget;
         const file = input.files && input.files[0];
         if (!file) return;
@@ -1426,6 +1759,1141 @@
         } finally {
           input.value = '';
         }
+      }
+
+      const equalizerBases = ['1x1', 'twinned_2x1', 'c_6x2', 'rt13'];
+      const equalizerBasisNames = {
+        '1x1': '1x1',
+        'twinned_2x1': 'Tw(2x1)',
+        'c_6x2': 'c(6x2)',
+        'rt13': 'RT13',
+      };
+
+      function pointUuid() {
+        if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+          return globalThis.crypto.randomUUID();
+        }
+        return `00000000-0000-4000-8000-${Math.random().toString(16).slice(2).padEnd(12, '0').slice(0, 12)}`;
+      }
+
+      function pointMessage(message, isError = false) {
+        const output = root.querySelector('#arp-point-status');
+        output.textContent = message;
+        output.classList.toggle('text-destructive', isError);
+      }
+
+      function pointFrameIndex(anchor, fallbackIndex = 0) {
+        const source = anchor || {};
+        const requestedIndex = Number(source.frame_index ?? source.frameIndex);
+        if (Number.isInteger(requestedIndex) && requestedIndex >= 1 && requestedIndex <= config.count) {
+          const index = requestedIndex - 1;
+          const digest = String(source.image_sha256 || source.frame_sha256 || source.frameSha256 || '');
+          if (!digest || digest.toLowerCase() === frameSha256(index).toLowerCase()) return index;
+        }
+        const digest = String(source.image_sha256 || source.frame_sha256 || source.frameSha256 || '').toLowerCase();
+        if (/^[0-9a-f]{64}$/.test(digest)) {
+          const matches = Array.from({ length: config.count }, (_, index) => index)
+            .filter(index => frameSha256(index).toLowerCase() === digest);
+          if (matches.length === 1) return matches[0];
+        }
+        const sequence = Number(source.capture_sequence ?? source.captureSequence);
+        if (Number.isFinite(sequence)) {
+          const matches = Array.from({ length: config.count }, (_, index) => index)
+            .filter(index => Number(sequences[index]) === sequence);
+          if (matches.length === 1) return matches[0];
+        }
+        const elapsed = Number(source.elapsed_s ?? source.elapsedS);
+        if (Number.isFinite(elapsed)) return nearestIndex(elapsed);
+        return Math.max(0, Math.min(config.count - 1, Number(fallbackIndex) || 0));
+      }
+
+      function normalizePointEqualizer(value, reviewIndex) {
+        if (!value || typeof value !== 'object') return null;
+        const measurement = cloneValue(value);
+        if ((measurement.schema_version === undefined || measurement.schema_version === 1) && measurement.valid === true &&
+            measurement.weights && measurement.weights.raw && measurement.weights.final &&
+            measurement.weights.normalized && Object.prototype.hasOwnProperty.call(measurement, 'HTR')) {
+          return measurement;
+        }
+        const weights = { raw: {}, final: {}, normalized: {} };
+        equalizerBases.forEach(basis => {
+          const canonical = equalizerBasisNames[basis];
+          ['raw', 'final', 'normalized'].forEach(stage => {
+            const stageWeights = measurement.weights?.[stage] || measurement[`${stage}_weights`] || {};
+            const legacy = measurement.weights?.[basis] || {};
+            weights[stage][canonical] = Number(stageWeights[canonical] ?? stageWeights[basis] ?? legacy[stage]);
+          });
+        });
+        weights.raw.HTR = null;
+        weights.final.HTR = null;
+        weights.normalized.HTR = null;
+        return {
+          schema_version: 1,
+          valid: measurement.valid === true || measurement.accepted === true,
+          calibration_id: String(measurement.calibration_id || ''),
+          basis_bundle_id: String(measurement.basis_bundle_id || measurement.basis_id || ''),
+          basis_hash: String(measurement.basis_hash || measurement.basis_bundle_sha256 || ''),
+          frame_sha256: String(measurement.frame_sha256 || measurement.review_frame_sha256 || frameSha256(reviewIndex)),
+          frame_sha256_algorithm: 'raw-file-bytes-v1',
+          capture_sequence: Number(measurement.capture_sequence ?? sequences[reviewIndex]),
+          view_segment_id: String(measurement.view_segment_id || ''),
+          capture_geometry_id: String(measurement.capture_geometry_id || datasetIdentity.capture_geometry_id || ''),
+          active_classes: ['1x1', 'Tw(2x1)', 'c(6x2)', 'RT13'],
+          fit_residual: Number(measurement.fit_residual ?? measurement.fit_residual_rms ?? measurement.residual),
+          valid_coverage: Number(measurement.valid_coverage ?? measurement.coverage),
+          weights,
+          HTR: null,
+          accepted_at_utc: String(measurement.accepted_at_utc || measurement.measured_at_utc || nowUtc()),
+          user_adjusted: measurement.user_adjusted === true,
+        };
+      }
+
+      function normalizePointEvent(raw, fallbackIndex = 0) {
+        const current = raw.current_state || raw.current || raw.review || raw.editable_review || {};
+        const evidence = raw.immutable_evidence || raw.evidence || raw.source_ref || {};
+        const sourceRecord = raw.source && typeof raw.source === 'object' ? raw.source : {};
+        const source = String(sourceRecord.kind || raw.source_kind ||
+          (typeof raw.source === 'string' ? raw.source : '') || evidence.source || 'posthoc');
+        const rawOriginal = sourceRecord.original_anchor || evidence.original_anchor || raw.original_anchor || raw.source_anchor || raw.anchor || {};
+        const originalIndex = pointFrameIndex(rawOriginal, fallbackIndex);
+        const reviewIndex = pointFrameIndex(current.anchor || current.review_anchor || raw.review_anchor || rawOriginal, originalIndex);
+        const originalElapsedRaw = sourceRecord.original_elapsed_s ?? evidence.original_elapsed_s ??
+          raw.original_elapsed_s ?? rawOriginal.elapsed_s;
+        const originalElapsed = originalElapsedRaw === null || originalElapsedRaw === undefined || originalElapsedRaw === ''
+          ? null : Number(originalElapsedRaw);
+        const immutableEvidence = {
+          source,
+          original_event_at_utc: String(
+            sourceRecord.original_at_utc || sourceRecord.original_event_at_utc || evidence.original_event_at_utc || raw.original_event_at_utc || raw.timestamp || rawOriginal.captured_at_utc || ''
+          ),
+          original_anchor: Object.keys(rawOriginal).length
+            ? cloneValue(rawOriginal) : pointAnchorForIndex(originalIndex),
+          original_elapsed_s: Number.isFinite(originalElapsed) ? originalElapsed : null,
+          original_comment: String(sourceRecord.original_note ?? sourceRecord.original_comment ?? evidence.original_comment ?? raw.original_comment ?? raw.note ?? ''),
+          source_file: String(sourceRecord.source_file || evidence.source_file || raw.source_file || ''),
+          source_sequence: sourceRecord.source_sequence ?? evidence.source_sequence ?? raw.source_sequence ?? raw.event_idx ?? null,
+          source_row_sha256: String(sourceRecord.source_row_sha256 || evidence.source_row_sha256 || raw.source_row_sha256 || ''),
+          image_sha256: String(rawOriginal.image_sha256 || rawOriginal.frame_sha256 || sourceRecord.image_sha256 ||
+            evidence.image_sha256 || raw.image_sha256 || ''),
+        };
+        const eventId = String(raw.event_id || raw.eventId || pointUuid());
+        const status = String(current.status || raw.status || 'Draft') === 'Complete' ? 'Complete' : 'Draft';
+        const disposition = String(current.disposition || raw.disposition || 'active');
+        return {
+          eventId,
+          source,
+          sourceRecord: Object.keys(sourceRecord).length ? cloneValue(sourceRecord) : {
+            kind: source,
+            original_at_utc: immutableEvidence.original_event_at_utc,
+            original_elapsed_s: immutableEvidence.original_elapsed_s,
+            original_anchor: pointAnchorForIndex(originalIndex),
+            original_note: immutableEvidence.original_comment,
+            source_file: immutableEvidence.source_file,
+            source_sequence: immutableEvidence.source_sequence,
+            source_row_sha256: immutableEvidence.source_row_sha256,
+            legacy_imports: [],
+          },
+          immutableEvidence,
+          reviewIndex,
+          reviewAnchor: current.anchor && typeof current.anchor === 'object'
+            ? cloneValue(current.anchor) : pointAnchorForIndex(reviewIndex),
+          comment: String(current.comment ?? raw.comment ?? ''),
+          reviewer: String(current.reviewer ?? raw.reviewer ?? ''),
+          confidence: current.confidence ?? raw.confidence ?? '',
+          reconstruction: String(current.reconstruction ?? current.human_reconstruction ?? raw.reconstruction ?? ''),
+          reconstructionBefore: String(current.change_from ?? current.reconstruction_before ?? raw.reconstruction_before ?? ''),
+          reconstructionAfter: String(current.change_to ?? current.reconstruction_after ?? raw.reconstruction_after ?? ''),
+          equalizer: normalizePointEqualizer(current.equalizer || raw.equalizer, reviewIndex),
+          status,
+          disposition: ['active', 'dismissed', 'deleted'].includes(disposition) ? disposition : 'active',
+          dispositionReason: String(current.disposition_reason || raw.disposition_reason || ''),
+          createdAt: String(raw.created_at_utc || current.created_at_utc || nowUtc()),
+          updatedAt: String(current.updated_at_utc || raw.updated_at_utc || nowUtc()),
+          context: cloneValue(raw.instrument_context || current.instrument_context || {}),
+          lastRevisionId: String(raw.revision_id || current.revision_id || raw.last_revision_id || ''),
+        };
+      }
+
+      function normalizePointReference(raw, fallbackIndex = 0) {
+        const anchor = raw.anchor || raw.original_anchor || raw;
+        const eventType = String(raw.event_type || raw.kind || raw.event_kind || raw.type || 'reference');
+        const descriptions = {
+          realign_start: 'RHEED direction adjustment started',
+          realign_end: 'RHEED direction adjustment ended',
+          alignment_confirmed: 'RHEED direction confirmed',
+          sample_direction_adjusted: 'Sample direction adjustment',
+          rheed_current_adjusted: 'RHEED current adjustment',
+          rheed_energy_adjusted: 'RHEED energy adjustment',
+          rheed_adjustment: 'RHEED current or energy adjustment',
+          gun_adjustment: 'RHEED current or energy adjustment',
+          qc_reject: 'Image marked unusable for analysis',
+          image_unusable: 'Image unusable for analysis',
+          qc_pass: 'Image marked usable for analysis',
+        };
+        return {
+          referenceId: String(raw.event_id || raw.reference_id || makeId('reference')),
+          kind: descriptions[eventType] || 'Read-only RHEED reference',
+          label: String(raw.note || raw.label || descriptions[eventType] || 'Read-only RHEED reference'),
+          index: pointFrameIndex(anchor, fallbackIndex),
+          raw: cloneValue(raw),
+        };
+      }
+
+      function pointEventSnapshot(event) {
+        if (!event) return null;
+        return {
+          schema: pointSchema,
+          event_id: event.eventId,
+          source: cloneValue(event.sourceRecord),
+          review: {
+            anchor: cloneValue(event.reviewAnchor),
+            comment: event.comment,
+            reviewer: event.reviewer,
+            confidence: event.confidence === '' ? null : event.confidence,
+            human_reconstruction: event.reconstruction || null,
+            change_from: event.reconstructionBefore || null,
+            change_to: event.reconstructionAfter || null,
+            equalizer: cloneValue(event.equalizer),
+            disposition: event.disposition,
+            disposition_reason: event.dispositionReason,
+          },
+          status: event.status,
+          revision_id: event.lastRevisionId || '',
+        };
+      }
+
+      function pointAnchorForIndex(index) {
+        const endpoint = endpointForIndex(index);
+        return {
+          frame_index: endpoint.frame_index,
+          heartbeat_idx: endpoint.heartbeat_idx,
+          elapsed_s: endpoint.elapsed_s,
+          captured_at_utc: endpoint.captured_at_utc,
+          capture_sequence: endpoint.capture_sequence,
+          image_sha256: endpoint.frame_sha256,
+          image_sha256_algorithm: 'raw-file-bytes-v1',
+          archive_member: endpoint.review_asset,
+        };
+      }
+
+      function pointDocument() {
+        if (!pointAnnotationSetId) pointAnnotationSetId = pointUuid();
+        const reviewers = [...new Set(pointEvents.map(event => event.reviewer.trim()).filter(Boolean))];
+        return {
+          schema_version: pointSchema,
+          document_type: 'ai4mbe_rheed_point_event_annotations',
+          exported_at_utc: nowUtc(),
+          dataset: cloneValue(datasetIdentity),
+          annotation_set: {
+            annotation_set_id: pointAnnotationSetId,
+            reviewer: reviewers.length === 1 ? reviewers[0] : (reviewers.length ? 'multiple event reviewers' : 'browser draft'),
+            model_outputs_visible: true,
+            eligible_for_gold: false,
+          },
+          review_mode: {
+            model_outputs_visible: true,
+            eligible_for_blind_gold: false,
+            equalizer_is_model_probability: false,
+          },
+          events: pointEvents.map(pointEventSnapshot),
+          reference_events: cloneValue(pointReferences.map(reference => reference.raw)),
+          unlinked_legacy_labels: cloneValue(config.unlinked_legacy_labels || []),
+          source_revisions: cloneValue(config.source_event_revisions || []),
+          source_journal: config.source_event_journal == null
+            ? null : cloneValue(config.source_event_journal),
+          revisions: cloneValue(pointRevisions),
+        };
+      }
+
+      function pointSeedEvents() {
+        return (Array.isArray(config.point_events) ? config.point_events : [])
+          .map((item, index) => normalizePointEvent(item, index));
+      }
+
+      function validatePointDocument(documentValue) {
+        if (!documentValue || documentValue.schema_version !== pointSchema ||
+            documentValue.document_type !== 'ai4mbe_rheed_point_event_annotations') {
+          throw new Error(`Expected ${pointSchema} point-event JSON`);
+        }
+        const importedDataset = documentValue.dataset || {};
+        for (const key of ['dataset_id', 'ordered_frame_fingerprint', 'model_context_fingerprint']) {
+          if (String(importedDataset[key] || '') !== String(datasetIdentity[key] || '')) {
+            throw new Error(`Dataset provenance mismatch: ${key}`);
+          }
+        }
+        if (stableJson(documentValue.source_revisions || []) !== stableJson(config.source_event_revisions || []) ||
+            stableJson(documentValue.source_journal ?? null) !== stableJson(config.source_event_journal ?? null)) {
+          throw new Error('Archived live revision provenance was changed or omitted');
+        }
+        if (!Array.isArray(documentValue.events)) throw new Error('events must be an array');
+        const imported = documentValue.events.map((item, index) => normalizePointEvent(item, index));
+        const ids = new Set();
+        imported.forEach(event => {
+          if (!event.eventId || event.eventId.length > 200 || ids.has(event.eventId)) {
+            throw new Error(`Invalid or duplicate event_id: ${event.eventId}`);
+          }
+          ids.add(event.eventId);
+          const anchor = endpointForIndex(event.reviewIndex);
+          const importedItem = itemForEvent(documentValue.events, event.eventId);
+          const importedAnchor = importedItem.review?.anchor || importedItem.review_anchor || {};
+          const importedHash = String(importedAnchor.image_sha256 || importedAnchor.frame_sha256 || '');
+          if (importedHash && importedHash.toLowerCase() !== anchor.frame_sha256.toLowerCase()) {
+            throw new Error(`Review-anchor frame hash mismatch for ${event.eventId}`);
+          }
+          if (event.equalizer && (event.equalizer.HTR !== null ||
+              ['raw', 'final', 'normalized'].some(stage => event.equalizer.weights?.[stage]?.HTR !== null))) {
+            throw new Error(`HTR Equalizer value must be null for ${event.eventId}`);
+          }
+        });
+        const seeds = pointSeedEvents().filter(event => event.source !== 'posthoc');
+        seeds.forEach(seed => {
+          const candidate = imported.find(event => event.eventId === seed.eventId);
+          if (!candidate) throw new Error(`Source event is missing: ${seed.eventId}`);
+          if (stableJson(candidate.sourceRecord) !== stableJson(seed.sourceRecord)) {
+            throw new Error(`Immutable source evidence changed for ${seed.eventId}`);
+          }
+        });
+        return {
+          events: imported,
+          revisions: Array.isArray(documentValue.revisions) ? cloneValue(documentValue.revisions) : [],
+          annotationSetId: String(documentValue.annotation_set?.annotation_set_id || pointUuid()),
+        };
+      }
+
+      function itemForEvent(items, eventId) {
+        return items.find(item => String(item.event_id || item.eventId || '') === eventId) || {};
+      }
+
+      function pointPersist() {
+        if (!pointStorageAvailable) return;
+        try {
+          localStorage.setItem(pointStorageKey, JSON.stringify(pointDocument()));
+        } catch (_error) {
+          pointStorageAvailable = false;
+          pointMessage('Browser autosave failed. Export JSON before closing.', true);
+        }
+      }
+
+      function pointLoad() {
+        pointEvents = pointSeedEvents();
+        pointReferences = (Array.isArray(config.reference_events) ? config.reference_events : [])
+          .map((item, index) => normalizePointReference(item, index));
+        try {
+          const probe = `${pointStorageKey}.probe`;
+          localStorage.setItem(probe, '1');
+          localStorage.removeItem(probe);
+          pointStorageAvailable = true;
+          // A tokenized desktop session is server-authoritative. Never show a
+          // browser-only status while the durable event journal is loading or
+          // unavailable.
+          if (pointDesktopSession) return false;
+          const stored = localStorage.getItem(pointStorageKey);
+          if (!stored) return false;
+          const parsed = validatePointDocument(JSON.parse(stored));
+          pointEvents = parsed.events;
+          pointRevisions = parsed.revisions;
+          pointAnnotationSetId = parsed.annotationSetId;
+          return true;
+        } catch (error) {
+          pointStorageAvailable = false;
+          pointMessage(`Browser draft was not restored: ${error.message}`, true);
+          return false;
+        }
+      }
+
+      function pointPushHistory() {
+        pointHistory.push({
+          events: cloneValue(pointEvents),
+          selectedPointEventId,
+        });
+        if (pointHistory.length > 100) pointHistory.shift();
+      }
+
+      async function pointMutate(action, eventId, updater, serverChanges = null) {
+        if (pointRevisionPending) {
+          pointMessage('Wait for the previous desktop revision to finish before editing again.', true);
+          return false;
+        }
+        const current = pointEvents.find(event => event.eventId === eventId) || null;
+        if (!current) return false;
+        const before = pointEventSnapshot(current);
+        const updated = cloneValue(current);
+        updater(updated);
+        updated.updatedAt = nowUtc();
+        const revisionId = pointUuid();
+        const baseRevisionId = current.lastRevisionId || '';
+        updated.lastRevisionId = revisionId;
+        const revision = {
+          schema_version: pointSchema,
+          revision_id: revisionId,
+          base_revision_id: baseRevisionId,
+          actor: updated.reviewer || current.reviewer || 'local-browser-reviewer',
+          at_utc: updated.updatedAt,
+          action,
+          event_id: eventId,
+          before_sha256: before ? sha256Hex(stableJson(before)) : '',
+          before,
+          after: pointEventSnapshot(updated),
+        };
+        return commitPointRevision(revision, updated, serverChanges);
+      }
+
+      function pointBridgeEndpoint(pathname, parameters = {}) {
+        const url = new URL(pathname, location.origin);
+        url.searchParams.set('bridge_token', pointBridgeToken);
+        Object.entries(parameters).forEach(([key, value]) => url.searchParams.set(key, String(value)));
+        return url.toString();
+      }
+
+      function pointRevisionChanges(revision, override) {
+        if (override && typeof override === 'object') return cloneValue(override);
+        const afterReview = revision.after?.review || {};
+        if (revision.action === 'create_posthoc') return { anchor: afterReview.anchor };
+        if (revision.action === 'edit') return {
+          comment: afterReview.comment, reviewer: afterReview.reviewer,
+          confidence: afterReview.confidence, human_reconstruction: afterReview.human_reconstruction,
+          change_from: afterReview.change_from, change_to: afterReview.change_to,
+        };
+        if (revision.action === 'move_anchor') return { anchor: afterReview.anchor };
+        if (revision.action === 'dismiss' || revision.action === 'delete') {
+          return { dismiss_reason: afterReview.disposition_reason };
+        }
+        return {};
+      }
+
+      async function commitPointRevision(revision, candidate, serverChanges = null) {
+        if (!pointDesktopSession) {
+          pointPushHistory();
+          const existing = pointEvents.some(event => event.eventId === revision.event_id);
+          pointEvents = existing
+            ? pointEvents.map(event => event.eventId === revision.event_id ? candidate : event)
+            : [...pointEvents, candidate];
+          pointRevisions.push(revision);
+          pointPersist();
+          renderPointEditor();
+          return true;
+        }
+        if (!pointRevisionPersistenceAvailable) {
+          pointMessage('Desktop revision service is unavailable. The change was not applied; reopen the report through the desktop Labeler.', true);
+          renderPointEditor();
+          return false;
+        }
+        pointRevisionPending = true;
+        renderPointEditor();
+        try {
+          const command = {
+            dataset_id: datasetIdentity.dataset_id,
+            action: revision.action,
+            actor: revision.actor,
+            event_id: revision.event_id,
+            base_revision_id: revision.base_revision_id,
+            changes: pointRevisionChanges(revision, serverChanges),
+          };
+          const response = await fetch(pointBridgeEndpoint('/api/revisions'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command),
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const payload = await response.json();
+          if (!payload.event || !payload.revision) throw new Error('desktop service returned no canonical revision');
+          const localEventId = revision.event_id;
+          const canonical = normalizePointEvent(payload.event);
+          pointPushHistory();
+          pointEvents = pointEvents.some(event => event.eventId === localEventId)
+            ? pointEvents.map(event => event.eventId === localEventId ? canonical : event)
+            : [...pointEvents, canonical];
+          if (selectedPointEventId === localEventId || revision.action === 'create_posthoc') {
+            selectedPointEventId = canonical.eventId;
+          }
+          pointRevisions.push(payload.revision);
+          pointPersist();
+          return true;
+        } catch (error) {
+          pointRevisionPersistenceAvailable = false;
+          pointBridgeAvailable = false;
+          pointMessage(`Desktop revision persistence failed (${error.message}). The change was not applied; canonical event state was retained.`, true);
+          return false;
+        } finally {
+          pointRevisionPending = false;
+          renderPointEditor();
+        }
+      }
+
+      async function initializePointBridge() {
+        if (!isPointReport || location.protocol === 'file:' || pointBridgeToken.length < 16) return;
+        try {
+          const response = await fetch(pointBridgeEndpoint('/api/status'), { cache: 'no-store' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const status = await response.json();
+          pointRevisionPersistenceAvailable = status.revision_persistence_available === true;
+          pointBridgeAvailable = status.desktop === true && status.equalizer_available === true &&
+            pointRevisionPersistenceAvailable && status.event_state_available === true;
+          if (status.event_state_available === true) {
+            const stateResponse = await fetch(pointBridgeEndpoint('/api/events'), { cache: 'no-store' });
+            if (!stateResponse.ok) throw new Error(`event state returned HTTP ${stateResponse.status}`);
+            const state = await stateResponse.json();
+            const events = Array.isArray(state.events) ? state.events : Object.values(state.events || {});
+            pointEvents = events.map((event, index) => normalizePointEvent(event, index));
+            if (Array.isArray(state.revisions)) pointRevisions = cloneValue(state.revisions);
+            if (state.annotation_set?.annotation_set_id) {
+              pointAnnotationSetId = String(state.annotation_set.annotation_set_id);
+            }
+            selectedPointEventId = pointEvents.some(event => event.eventId === selectedPointEventId)
+              ? selectedPointEventId : null;
+            pointPersist();
+          }
+          renderPointEditor();
+          if (pointBridgeAvailable) pointMessage('Desktop Labeler connected; Equalizer and durable revision journal are available.');
+          else pointMessage('Desktop service is present but Equalizer or durable revision persistence is unavailable. Complete remains disabled.', true);
+        } catch (error) {
+          pointBridgeAvailable = false;
+          pointRevisionPersistenceAvailable = false;
+          renderPointEditor();
+          pointMessage(`Desktop Labeler connection failed: ${error.message}. No desktop edits will be applied until the report is reopened through the Labeler.`, true);
+        }
+      }
+
+      function pointReopenIfComplete(event) {
+        if (event.status === 'Complete') event.status = 'Draft';
+      }
+
+      function pointEqualizerValid(event) {
+        const measurement = event && event.equalizer;
+        if (!measurement || measurement.valid !== true) return false;
+        if (!measurement.calibration_id || !measurement.basis_bundle_id) return false;
+        if (!Number.isFinite(measurement.fit_residual) || !Number.isFinite(measurement.valid_coverage)) return false;
+        if (measurement.fit_residual < 0 || measurement.valid_coverage <= 0 || measurement.valid_coverage > 1) return false;
+        if (Number(measurement.capture_sequence) !== Number(sequences[event.reviewIndex])) return false;
+        if (String(measurement.frame_sha256).toLowerCase() !== frameSha256(event.reviewIndex).toLowerCase()) return false;
+        if (measurement.HTR !== null) return false;
+        return equalizerBases.every(basis => ['raw', 'final', 'normalized'].every(stage => {
+          const rawValue = measurement.weights?.[stage]?.[equalizerBasisNames[basis]];
+          if (stage === 'raw' && rawValue === null) return true;
+          const value = Number(rawValue);
+          return rawValue !== null && Number.isFinite(value) && value >= 0;
+        }));
+      }
+
+      function pointCompletionProblems(event) {
+        const problems = [];
+        if (!event.comment.trim()) problems.push('a non-empty review comment');
+        if (!event.reviewer.trim()) problems.push('a reviewer');
+        if (!pointEqualizerValid(event)) problems.push('a valid Equalizer result for the review frame');
+        if (event.disposition !== 'active') problems.push('an active event');
+        if (!pointBridgeAvailable) problems.push('the desktop Labeler connection');
+        return problems;
+      }
+
+      function pointSensorContext(event) {
+        const originalIndex = pointFrameIndex(event.immutableEvidence.original_anchor, event.reviewIndex);
+        const rows = Array.isArray(config.sensor_context) ? config.sensor_context
+          : (Array.isArray(config.sensor_context?.rows) ? config.sensor_context.rows : []);
+        const clickElapsedRaw = event.immutableEvidence.original_elapsed_s ?? event.sourceRecord?.original_elapsed_s;
+        const clickElapsed = clickElapsedRaw === null || clickElapsedRaw === undefined || clickElapsedRaw === ''
+          ? NaN : Number(clickElapsedRaw);
+        const anchorElapsedRaw = event.immutableEvidence.original_anchor?.elapsed_s;
+        const anchorElapsed = anchorElapsedRaw === null || anchorElapsedRaw === undefined || anchorElapsedRaw === ''
+          ? NaN : Number(anchorElapsedRaw);
+        const targetElapsed = Number.isFinite(clickElapsed) ? clickElapsed
+          : (Number.isFinite(anchorElapsed) ? anchorElapsed : Number(times[originalIndex]));
+        const clickUtc = event.sourceRecord?.original_at_utc || event.immutableEvidence.original_event_at_utc;
+        const anchorUtc = event.immutableEvidence.original_anchor?.captured_at_utc || formatUtc(originalIndex);
+        const targetUtcMs = Date.parse(clickUtc || anchorUtc);
+        const configured = rows.length ? rows.reduce((best, row) => {
+          const elapsed = row.elapsed_s === null || row.elapsed_s === undefined || row.elapsed_s === ''
+            ? NaN : Number(row.elapsed_s);
+          const utc = Date.parse(row.snapshot_at_utc || row.timestamp || row.received_at_utc || '');
+          const distance = Number.isFinite(elapsed) ? Math.abs(elapsed - targetElapsed)
+            : (Number.isFinite(utc) && Number.isFinite(targetUtcMs) ? Math.abs(utc - targetUtcMs) / 1000 : Infinity);
+          return !best || distance < best.distance ? { row, distance } : best;
+        }, null)?.row : null;
+        const source = configured || (Object.keys(event.context || {}).length ? event.context : {});
+        const contextIndex = Number.isFinite(targetElapsed) ? nearestIndex(targetElapsed) : originalIndex;
+        const frameContext = Array.isArray(config.frame_contexts) ? config.frame_contexts[contextIndex] || {} : {};
+        const temperature = source.pyrometer_temp_C ?? source.temperature_c ?? source.pyrometer_temperature_c ??
+          source.pyrometer_temp_c ?? source.pyrometer_temperature ??
+          (temperatures[contextIndex] === -32768 ? null : temperatures[contextIndex] / 10);
+        const ages = {
+          pyrometer: source.pyrometer_age_ms ?? null,
+          mistral: source.mistral_age_ms ?? null,
+          evap: source.evap_age_ms ?? null,
+          rheed: source.rheed_age_ms ?? source.frame_age_ms ?? frameContext.frame_age_ms ?? null,
+        };
+        const finiteAges = Object.values(ages)
+          .filter(value => value !== null && value !== undefined && value !== '')
+          .map(Number).filter(Number.isFinite);
+        const maxAge = finiteAges.length ? Math.max(...finiteAges)
+          : (source.max_data_age_ms ?? source.data_age_ms ?? null);
+        return {
+          temperature_c: temperature,
+          voltage_v: source.mistral_v_actual_V ?? source.voltage_v ?? source.mistral_voltage_v ?? source.mistral_v_actual ?? source.voltage ?? null,
+          current_a: source.mistral_i_actual_A ?? source.current_a ?? source.mistral_current_a ?? source.mistral_i_actual ?? source.current ?? null,
+          ages,
+          max_data_age_ms: maxAge,
+          lookup_elapsed_s: Number.isFinite(targetElapsed) ? targetElapsed : null,
+          matched_elapsed_s: configured && Number.isFinite(Number(configured.elapsed_s)) ? Number(configured.elapsed_s) : null,
+        };
+      }
+
+      function pointAddDefinitionList(host, rows) {
+        host.replaceChildren();
+        rows.forEach(([term, value]) => {
+          const dt = document.createElement('dt');
+          const dd = document.createElement('dd');
+          dt.textContent = term;
+          dd.textContent = value === null || value === undefined || value === '' ? 'N/A' : String(value);
+          host.append(dt, dd);
+        });
+      }
+
+      function renderPointForm(event) {
+        const form = root.querySelector('#arp-point-form');
+        const empty = root.querySelector('#arp-point-empty');
+        if (!event) {
+          form.hidden = true;
+          empty.hidden = false;
+          root.querySelector('#arp-point-editor-heading').textContent = 'Select an event or add one at the playhead';
+          return;
+        }
+        form.hidden = false;
+        empty.hidden = true;
+        root.querySelector('#arp-point-editor-heading').textContent =
+          `${event.source} · ${event.status} · ${event.eventId}`;
+        root.querySelector('#arp-point-comment').value = event.comment;
+        root.querySelector('#arp-point-reviewer').value = event.reviewer;
+        root.querySelector('#arp-point-confidence').value = event.confidence;
+        root.querySelector('#arp-point-reconstruction').value = event.reconstruction;
+        root.querySelector('#arp-point-before').value = event.reconstructionBefore;
+        root.querySelector('#arp-point-after').value = event.reconstructionAfter;
+        const original = event.immutableEvidence.original_anchor;
+        pointAddDefinitionList(root.querySelector('#arp-point-evidence'), [
+          ['Event ID', event.eventId],
+          ['Source', event.source],
+          ['Original event time', event.immutableEvidence.original_event_at_utc || original.captured_at_utc],
+          ['Original event elapsed', event.immutableEvidence.original_elapsed_s === null ? null : formatElapsed(event.immutableEvidence.original_elapsed_s)],
+          ['Original frame', original.frame_index !== null && original.frame_index !== undefined &&
+            original.frame_index !== '' && Number.isInteger(Number(original.frame_index))
+            ? `saved heartbeat frame #${original.frame_index} · capture #${original.capture_sequence}`
+            : `separate source image (no saved-heartbeat ordinal)${original.capture_sequence === null || original.capture_sequence === undefined ? '' : ` · capture #${original.capture_sequence}`}`],
+          ['Original frame SHA-256', event.immutableEvidence.image_sha256 || original.frame_sha256],
+          ['Original note', event.immutableEvidence.original_comment],
+          ['Source file', event.immutableEvidence.source_file],
+          ['Source row SHA-256', event.immutableEvidence.source_row_sha256],
+          ['Review point', `#${event.reviewIndex + 1} · ${formatElapsed(times[event.reviewIndex])} · ${frameSha256(event.reviewIndex)}`],
+        ]);
+        const context = pointSensorContext(event);
+        const contextHost = root.querySelector('#arp-point-context');
+        contextHost.dataset.lookupElapsedS = context.lookup_elapsed_s === null ? '' : String(context.lookup_elapsed_s);
+        contextHost.dataset.matchedElapsedS = context.matched_elapsed_s === null ? '' : String(context.matched_elapsed_s);
+        contextHost.dataset.originalAnchorElapsedS = original.elapsed_s === null || original.elapsed_s === undefined ? '' : String(original.elapsed_s);
+        const formatAge = value => value === null || value === undefined || !Number.isFinite(Number(value))
+          ? null : `${Number(value).toFixed(1)} ms`;
+        pointAddDefinitionList(contextHost, [
+          ['Temperature', context.temperature_c === null ? null : `${Number(context.temperature_c).toFixed(1)} °C`],
+          ['Voltage', context.voltage_v === null ? null : `${Number(context.voltage_v).toFixed(3)} V`],
+          ['Current', context.current_a === null ? null : `${Number(context.current_a).toFixed(3)} A`],
+          ['Pyrometer data age', formatAge(context.ages.pyrometer)],
+          ['MISTRAL data age', formatAge(context.ages.mistral)],
+          ['EvapControl data age', formatAge(context.ages.evap)],
+          ['RHEED data age', formatAge(context.ages.rheed)],
+          ['Maximum data age (oldest source)', formatAge(context.max_data_age_ms)],
+        ]);
+        const bridgeNote = root.querySelector('#arp-point-bridge-note');
+        bridgeNote.textContent = pointBridgeAvailable
+          ? 'Desktop Labeler is connected. Run Equalizer on the exact archived frame, then review its auxiliary fit here.'
+          : (pointDesktopSession
+            ? 'The desktop revision service is unavailable. Changes are not applied locally; reopen this report through the desktop Labeler.'
+            : 'Draft editing is available. Run Equalizer and Complete require opening this report through the desktop Labeler.');
+        const measurement = event.equalizer;
+        pointAddDefinitionList(root.querySelector('#arp-point-equalizer-provenance'), [
+          ['Validity', pointEqualizerValid(event) ? 'Valid for this review frame' : 'Missing or invalid'],
+          ['Calibration ID', measurement?.calibration_id],
+          ['Basis bundle ID', measurement?.basis_bundle_id],
+          ['Fit residual', Number.isFinite(measurement?.fit_residual) ? measurement.fit_residual : null],
+          ['Coverage', Number.isFinite(measurement?.valid_coverage) ? measurement.valid_coverage : null],
+          ['Exact frame SHA-256', measurement?.frame_sha256],
+        ]);
+        const weights = root.querySelector('#arp-point-equalizer-weights');
+        weights.replaceChildren();
+        equalizerBases.forEach(basis => {
+          const row = document.createElement('tr');
+          const name = document.createElement('td');
+          name.textContent = basis === '1x1' ? '1×1' : annotationLabels[basis] || basis;
+          row.append(name);
+          ['raw', 'final', 'normalized'].forEach(field => {
+            const cell = document.createElement('td');
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = 'any';
+            input.dataset.equalizerBasis = basis;
+            input.dataset.equalizerField = field;
+            const value = measurement?.weights?.[field]?.[equalizerBasisNames[basis]];
+            input.value = typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
+            input.disabled = true;
+            input.setAttribute('aria-label', `${basis} ${field} weight`);
+            cell.append(input);
+            row.append(cell);
+          });
+          weights.append(row);
+        });
+        root.querySelector('#arp-point-equalizer-run').disabled = !pointBridgeAvailable || pointRevisionPending;
+        root.querySelector('#arp-point-complete').disabled = pointRevisionPending || pointCompletionProblems(event).length > 0 || event.status === 'Complete';
+        root.querySelector('#arp-point-reopen').disabled = pointRevisionPending || event.status !== 'Complete';
+        const durableUnavailable = pointDesktopSession && !pointRevisionPersistenceAvailable;
+        root.querySelector('#arp-point-save').disabled = pointRevisionPending || durableUnavailable;
+        root.querySelector('#arp-point-move').disabled = pointRevisionPending || durableUnavailable;
+        root.querySelector('#arp-point-dismiss').disabled = pointRevisionPending || durableUnavailable;
+        root.querySelector('#arp-point-delete').disabled = pointRevisionPending || durableUnavailable;
+        ['#arp-point-comment', '#arp-point-reviewer', '#arp-point-confidence', '#arp-point-reconstruction',
+          '#arp-point-before', '#arp-point-after'].forEach(selector => {
+          root.querySelector(selector).disabled = pointRevisionPending || durableUnavailable;
+        });
+        root.querySelector('#arp-point-dismiss').hidden = event.source === 'posthoc';
+        root.querySelector('#arp-point-delete').hidden = event.source !== 'posthoc';
+      }
+
+      function renderPointQueue(host, events, emptyText) {
+        host.replaceChildren();
+        if (!events.length) {
+          const empty = document.createElement('span');
+          empty.className = 'text-muted text-small';
+          empty.textContent = emptyText;
+          host.append(empty);
+          return;
+        }
+        events.forEach(event => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'btn';
+          button.dataset.pointEventListId = event.eventId;
+          button.setAttribute('aria-pressed', event.eventId === selectedPointEventId ? 'true' : 'false');
+          const label = document.createElement('span');
+          label.textContent = `${formatElapsed(times[event.reviewIndex])} · ${event.source} · ${event.comment || '(no comment)'}`;
+          const status = document.createElement('span');
+          status.className = 'arp-point-status-pill';
+          status.textContent = event.disposition === 'active' ? event.status : event.disposition;
+          button.append(label, status);
+          button.addEventListener('click', () => selectPointEvent(event.eventId));
+          host.append(button);
+        });
+      }
+
+      function renderPointTrack() {
+        const host = root.querySelector('#arp-point-track-host');
+        host.replaceChildren();
+        const width = Math.max(320, Math.floor(host.getBoundingClientRect().width));
+        const height = 128;
+        const margin = { top: 10, right: 12, bottom: 36, left: 64 };
+        const innerWidth = width - margin.left - margin.right;
+        const innerHeight = height - margin.top - margin.bottom;
+        const extent = d3.extent(times);
+        const padding = Math.max(1, (extent[1] - extent[0]) * 0.005);
+        const x = d3.scaleLinear().domain([extent[0] - padding, extent[1] + padding]).range([0, innerWidth]);
+        const svg = d3.select(host).append('svg')
+          .attr('class', 'arp-chart arp-point-track').attr('viewBox', `0 0 ${width} ${height}`)
+          .attr('role', 'img').attr('aria-label', 'RHEED point events and saved-frame review anchors');
+        svg.append('title').text('RHEED point-event review');
+        svg.append('desc').text('Filled circles are immutable original events. Outlined diamonds are movable review points snapped to saved frames.');
+        const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+        g.append('rect').attr('data-chart-frame', '').attr('width', innerWidth).attr('height', innerHeight).attr('fill', 'none');
+        const hit = g.append('rect').attr('data-point-track-hit', '').attr('width', innerWidth).attr('height', innerHeight)
+          .attr('fill', 'transparent').style('cursor', 'crosshair')
+          .on('click', event => {
+            const [pointerX] = d3.pointer(event);
+            updateSelected(nearestIndex(x.invert(Math.max(0, Math.min(innerWidth, pointerX)))));
+          });
+        pointReferences.forEach((reference, index) => {
+          const cx = x(times[reference.index]);
+          const line = g.append('line').attr('class', 'point-reference')
+            .attr('x1', cx).attr('x2', cx).attr('y1', 3).attr('y2', innerHeight - 3)
+            .attr('stroke', 'var(--muted-foreground)').attr('stroke-dasharray', '2 2');
+          line.append('title').text(`Read-only ${reference.kind}: ${reference.label}`);
+        });
+        pointEvents.filter(event => event.disposition !== 'deleted').forEach((event, index) => {
+          const lane = 13 + (index % 4) * 15;
+          const originalElapsed = Number(event.immutableEvidence.original_anchor.elapsed_s);
+          const originalX = x(Number.isFinite(originalElapsed) ? originalElapsed : times[pointFrameIndex(event.immutableEvidence.original_anchor)]);
+          const reviewX = x(times[event.reviewIndex]);
+          if (Math.abs(reviewX - originalX) > 1) {
+            g.append('line').attr('class', 'point-link').attr('x1', originalX).attr('x2', reviewX)
+              .attr('y1', lane).attr('y2', lane);
+          }
+          const original = g.append('circle')
+            .attr('class', `point-original${event.eventId === selectedPointEventId ? ' point-selected' : ''}`)
+            .attr('data-point-event-id', event.eventId).attr('data-point-role', 'original')
+            .attr('cx', originalX).attr('cy', lane).attr('r', 5)
+            .attr('fill', event.status === 'Complete' ? 'var(--viz-series-2)' : 'var(--viz-series-5)')
+            .on('click', clickEvent => { clickEvent.stopPropagation(); selectPointEvent(event.eventId); });
+          original.append('title').text(`Original ${event.source} event · ${event.eventId}`);
+          const review = g.append('path')
+            .attr('class', `point-review${event.eventId === selectedPointEventId ? ' point-selected' : ''}`)
+            .attr('data-point-event-id', event.eventId).attr('data-point-role', 'review')
+            .attr('d', d3.symbol().type(d3.symbolDiamond).size(88)())
+            .attr('transform', `translate(${reviewX},${lane})`)
+            .attr('stroke', event.status === 'Complete' ? 'var(--viz-series-2)' : 'var(--viz-series-5)')
+            .on('click', clickEvent => { clickEvent.stopPropagation(); selectPointEvent(event.eventId); });
+          review.append('title').text(`Review frame #${event.reviewIndex + 1} · ${event.status}`);
+        });
+        const playhead = g.append('line').attr('class', 'annotation-playhead')
+          .attr('y1', 0).attr('y2', innerHeight).attr('x1', x(times[selectedIndex])).attr('x2', x(times[selectedIndex]));
+        g.append('g').attr('transform', `translate(0,${innerHeight})`)
+          .call(d3.axisBottom(x).ticks(width < 500 ? 4 : 7).tickFormat(value => (value / 60).toFixed(0)));
+        svg.append('text').attr('class', 'axis-title').attr('data-axis', 'y')
+          .attr('x', 4).attr('y', margin.top + innerHeight / 2 + 4).text('Events');
+        svg.append('text').attr('class', 'axis-title').attr('data-axis', 'x')
+          .attr('x', margin.left + innerWidth / 2).attr('y', height - 3).attr('text-anchor', 'middle')
+          .text('Elapsed time (min)');
+        pointState = {
+          draw: renderPointTrack,
+          updateSelection: () => playhead.attr('x1', x(times[selectedIndex])).attr('x2', x(times[selectedIndex])),
+        };
+      }
+
+      function renderPointEditor() {
+        if (!isPointReport) return;
+        const active = pointEvents.filter(event => event.disposition !== 'deleted');
+        const unfinished = active.filter(event => event.status !== 'Complete' && event.disposition === 'active');
+        root.querySelector('#arp-point-summary').textContent =
+          `${active.length} event${active.length === 1 ? '' : 's'} · ${unfinished.length} unfinished · ${pointReferences.length} read-only reference${pointReferences.length === 1 ? '' : 's'}`;
+        renderPointQueue(root.querySelector('#arp-point-unfinished'), unfinished, 'No unfinished events.');
+        renderPointQueue(root.querySelector('#arp-point-all'), active, 'No point events yet.');
+        const selected = pointEvents.find(event => event.eventId === selectedPointEventId) || null;
+        renderPointForm(selected);
+        renderPointTrack();
+        root.querySelector('#arp-point-add').disabled = pointRevisionPending || (pointDesktopSession && !pointRevisionPersistenceAvailable);
+        root.querySelector('#arp-point-export-json').disabled = pointRevisionPending || !config.full_assets;
+        root.querySelector('#arp-point-export-csv').disabled = pointRevisionPending || !config.full_assets;
+        root.querySelector('#arp-point-import').disabled = pointRevisionPending ||
+          (pointDesktopSession && !pointRevisionPersistenceAvailable);
+      }
+
+      function syncPointScrubber() {
+        if (!isPointReport) return;
+        const scrubber = root.querySelector('#arp-frame-scrubber-point');
+        scrubber.value = String(selectedIndex);
+        root.querySelector('#arp-frame-scrubber-output-point').textContent =
+          `#${selectedIndex + 1} · ${formatElapsed(times[selectedIndex])} · capture #${sequences[selectedIndex]}`;
+        if (pointState) pointState.updateSelection();
+      }
+
+      function selectPointEvent(eventId) {
+        const event = pointEvents.find(item => item.eventId === eventId && item.disposition !== 'deleted');
+        if (!event) return;
+        selectedPointEventId = eventId;
+        updateSelected(event.reviewIndex);
+        renderPointEditor();
+        pointMessage(`Selected ${event.source} event ${event.eventId}.`);
+      }
+
+      function pointFormState(event) {
+        return {
+          comment: root.querySelector('#arp-point-comment').value,
+          reviewer: root.querySelector('#arp-point-reviewer').value.trim(),
+          confidence: root.querySelector('#arp-point-confidence').value === ''
+            ? null : Number(root.querySelector('#arp-point-confidence').value),
+          reconstruction: root.querySelector('#arp-point-reconstruction').value,
+          reconstructionBefore: root.querySelector('#arp-point-before').value,
+          reconstructionAfter: root.querySelector('#arp-point-after').value,
+        };
+      }
+
+      async function savePointDraft(silent = false) {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event) return false;
+        const next = pointFormState(event);
+        const before = JSON.stringify({
+          comment: event.comment, reviewer: event.reviewer, confidence: event.confidence,
+          reconstruction: event.reconstruction, reconstructionBefore: event.reconstructionBefore,
+          reconstructionAfter: event.reconstructionAfter,
+        });
+        if (before === JSON.stringify(next)) {
+          if (!silent) pointMessage('Draft already matches the saved review state.');
+          return true;
+        }
+        const changed = await pointMutate('edit', event.eventId, target => {
+          Object.assign(target, next);
+          pointReopenIfComplete(target);
+        });
+        if (changed === false) return false;
+        if (!silent) pointMessage('Draft saved. Human reconstruction fields remain independent of Equalizer.');
+        return true;
+      }
+
+      async function addPointEvent() {
+        if (pointRevisionPending) return pointMessage('Wait for the pending desktop revision.', true);
+        if (pointDesktopSession && !pointRevisionPersistenceAvailable) {
+          return pointMessage('Desktop revision service is unavailable; no event was created.', true);
+        }
+        const actor = pointDesktopSession
+          ? String(window.prompt('Reviewer name for this posthoc event:') || '').trim()
+          : 'local-browser-reviewer';
+        if (!actor) return pointMessage('A reviewer is required to add an event through the desktop Labeler.', true);
+        const event = normalizePointEvent({
+          schema: pointSchema,
+          event_id: pointUuid(),
+          source: {
+            kind: 'posthoc', created_at_utc: nowUtc(), created_by: actor,
+            source_row_sha256: '', source_file: '', source_index: '', session_identity: '',
+            original_at_utc: formatUtc(selectedIndex), original_elapsed_s: Number(times[selectedIndex]),
+            original_anchor: pointAnchorForIndex(selectedIndex), original_note: '', legacy_imports: [],
+          },
+          review: {
+            anchor: pointAnchorForIndex(selectedIndex), comment: '', reviewer: pointDesktopSession ? actor : '', confidence: null,
+            human_reconstruction: null, change_from: null, change_to: null, equalizer: null,
+            disposition: 'active', disposition_reason: '',
+          },
+          status: 'Draft', revision_id: '',
+        }, selectedIndex);
+        const revisionId = pointUuid();
+        event.lastRevisionId = revisionId;
+        const revision = {
+          schema_version: pointSchema, revision_id: revisionId, base_revision_id: '',
+          actor, at_utc: nowUtc(), before_sha256: '',
+          action: 'create_posthoc', event_id: event.eventId, before: null, after: pointEventSnapshot(event),
+        };
+        const changed = await commitPointRevision(revision, event);
+        if (!changed) return;
+        if (!pointDesktopSession) selectedPointEventId = event.eventId;
+        renderPointEditor();
+        pointMessage(`Added posthoc Draft at saved frame #${selectedIndex + 1}.`);
+      }
+
+      async function movePointReviewAnchor() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event) return;
+        if (event.reviewIndex === selectedIndex) return pointMessage('The review point is already on this saved frame.');
+        const previous = event.reviewIndex;
+        const changed = await pointMutate('move_anchor', event.eventId, target => {
+          target.reviewIndex = selectedIndex;
+          target.reviewAnchor = pointAnchorForIndex(selectedIndex);
+          target.equalizer = null;
+          target.status = 'Draft';
+        });
+        if (changed === false) return;
+        pointMessage(`Review point moved from frame #${previous + 1} to #${selectedIndex + 1}; the previous Equalizer result was invalidated.`);
+      }
+
+      async function runPointEqualizer() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event) return;
+        if (!(await savePointDraft(true))) return;
+        if (!pointBridgeAvailable) {
+          return pointMessage('Run Equalizer requires opening the report through the desktop Labeler.', true);
+        }
+        root.querySelector('#arp-point-equalizer-run').disabled = true;
+        pointMessage('Equalizer request sent for the exact archived review frame…');
+        try {
+          const current = pointEvents.find(item => item.eventId === event.eventId);
+          const response = await fetch(pointBridgeEndpoint('/api/equalizer/request'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              event_id: current.eventId,
+              review_frame_index: current.reviewIndex + 1,
+              reviewer: current.reviewer,
+            }),
+          });
+          if (response.status !== 202) throw new Error(`desktop service returned HTTP ${response.status}`);
+          const request = await response.json();
+          if (!request.request_id) throw new Error('desktop service returned no request ID');
+          let payload = request;
+          for (let attempt = 0; attempt < 2400 && ['pending', 'requested', 'running'].includes(String(payload.status)); attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, 750));
+            const poll = await fetch(pointBridgeEndpoint('/api/equalizer/result', { request_id: request.request_id }), { cache: 'no-store' });
+            if (!poll.ok) throw new Error(`Equalizer status returned HTTP ${poll.status}`);
+            payload = await poll.json();
+          }
+          if (['error', 'failed', 'cancelled'].includes(String(payload.status))) {
+            throw new Error(payload.error || payload.message || `Equalizer ${payload.status}`);
+          }
+          if (String(payload.status) !== 'complete') throw new Error('Equalizer request timed out before completion');
+          const measurement = payload.equalizer || payload.measurement || payload.result;
+          if (!measurement) throw new Error(payload.message || 'desktop service returned no Equalizer measurement');
+          if (!payload.result_token) throw new Error('desktop service returned no one-time Equalizer result token');
+          const changed = await pointMutate('set_equalizer', event.eventId, target => {
+            target.equalizer = normalizePointEqualizer(measurement, target.reviewIndex);
+            target.status = 'Draft';
+          }, { equalizer_result_token: String(payload.result_token) });
+          if (changed === false) return;
+          pointMessage(pointEqualizerValid(pointEvents.find(item => item.eventId === event.eventId))
+            ? 'Equalizer result saved. Review it, then Complete explicitly.'
+            : 'Equalizer returned an incomplete or incompatible result; Complete remains disabled.',
+            !pointEqualizerValid(pointEvents.find(item => item.eventId === event.eventId)));
+        } catch (error) {
+          pointMessage(`Equalizer failed: ${error.message}`, true);
+          renderPointEditor();
+        }
+      }
+
+      async function completePointEvent() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event) return;
+        if (!(await savePointDraft(true))) return;
+        const updated = pointEvents.find(item => item.eventId === selectedPointEventId);
+        const problems = pointCompletionProblems(updated);
+        if (problems.length) return pointMessage(`Cannot Complete: requires ${problems.join(', ')}.`, true);
+        const changed = await pointMutate('complete', updated.eventId, target => { target.status = 'Complete'; });
+        if (changed === false) return;
+        pointMessage('Event explicitly marked Complete.');
+      }
+
+      async function reopenPointEvent() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event || event.status !== 'Complete') return;
+        const changed = await pointMutate('reopen', event.eventId, target => { target.status = 'Draft'; });
+        if (changed === false) return;
+        pointMessage('Event reopened as Draft.');
+      }
+
+      async function dismissPointEvent() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event || event.source === 'posthoc') return;
+        const reason = window.prompt('Reason this source event will not be processed:');
+        if (!reason || !reason.trim()) return pointMessage('A reason is required; the source event was not changed.', true);
+        const changed = await pointMutate('dismiss', event.eventId, target => {
+          target.disposition = 'dismissed'; target.dispositionReason = reason.trim(); target.status = 'Draft';
+        });
+        if (changed === false) return;
+        pointMessage('Source evidence was preserved and marked not processed with an audit reason.');
+      }
+
+      async function deletePosthocEvent() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event || event.source !== 'posthoc') return;
+        const reason = window.prompt('Reason for deleting this posthoc event:');
+        if (!reason || !reason.trim()) return pointMessage('A deletion reason is required.', true);
+        const changed = await pointMutate('delete', event.eventId, target => {
+          target.disposition = 'deleted'; target.dispositionReason = reason.trim(); target.status = 'Draft';
+        });
+        if (changed === false) return;
+        selectedPointEventId = null;
+        renderPointEditor();
+        pointMessage('Posthoc event was tombstoned; its audit history remains in exports.');
+      }
+
+      function exportPointJson() {
+        if (!config.full_assets) return pointMessage('Open the standalone report to export annotation files.', true);
+        const runName = String(config.run_name || datasetIdentity.dataset_id || 'rheed').replace(/[^a-zA-Z0-9._-]+/g, '_');
+        downloadText(`${runName}_point_events.json`, `${JSON.stringify(pointDocument(), null, 2)}\n`, 'application/json;charset=utf-8');
+        pointMessage(`Exported ${pointEvents.length} point events and ${pointRevisions.length} audit revisions.`);
+      }
+
+      function exportPointCsv() {
+        if (!config.full_assets) return pointMessage('Open the standalone report to export annotation files.', true);
+        const headers = [
+          'schema_version','dataset_id','source_archive_sha256','ordered_frame_fingerprint','model_context_fingerprint',
+          'model_outputs_visible','eligible_for_gold','event_id','source','status','disposition','original_event_at_utc',
+          'original_frame_index','original_frame_sha256','review_frame_index','review_frame_sha256','comment','reviewer',
+          'confidence','human_reconstruction','reconstruction_before','reconstruction_after','calibration_id',
+          'basis_bundle_id','equalizer_fit_residual','equalizer_coverage','equalizer_valid',
+          'equalizer_1x1_raw','equalizer_1x1_final','equalizer_1x1_normalized',
+          'equalizer_twinned_2x1_raw','equalizer_twinned_2x1_final','equalizer_twinned_2x1_normalized',
+          'equalizer_c_6x2_raw','equalizer_c_6x2_final','equalizer_c_6x2_normalized',
+          'equalizer_rt13_raw','equalizer_rt13_final','equalizer_rt13_normalized','equalizer_htr',
+        ];
+        const rows = pointEvents.map(event => {
+          const measurement = event.equalizer;
+          const row = {
+            schema_version: pointSchema, dataset_id: datasetIdentity.dataset_id,
+            source_archive_sha256: datasetIdentity.source_archive_sha256 || '',
+            ordered_frame_fingerprint: datasetIdentity.ordered_frame_fingerprint || '',
+            model_context_fingerprint: datasetIdentity.model_context_fingerprint || '',
+            model_outputs_visible: true, eligible_for_gold: false, event_id: event.eventId,
+            source: event.source, status: event.status, disposition: event.disposition,
+            original_event_at_utc: event.immutableEvidence.original_event_at_utc,
+            original_frame_index: event.immutableEvidence.original_anchor.frame_index,
+            original_frame_sha256: event.immutableEvidence.image_sha256 || event.immutableEvidence.original_anchor.frame_sha256,
+            review_frame_index: event.reviewIndex + 1, review_frame_sha256: frameSha256(event.reviewIndex),
+            comment: event.comment, reviewer: event.reviewer, confidence: event.confidence,
+            human_reconstruction: event.reconstruction, reconstruction_before: event.reconstructionBefore,
+            reconstruction_after: event.reconstructionAfter, calibration_id: measurement?.calibration_id || '',
+            basis_bundle_id: measurement?.basis_bundle_id || '', equalizer_fit_residual: measurement?.fit_residual ?? '',
+            equalizer_coverage: measurement?.valid_coverage ?? '', equalizer_valid: pointEqualizerValid(event), equalizer_htr: '',
+          };
+          equalizerBases.forEach(basis => ['raw', 'final', 'normalized'].forEach(field => {
+            row[`equalizer_${basis}_${field}`] = measurement?.weights?.[field]?.[equalizerBasisNames[basis]] ?? '';
+          }));
+          return row;
+        });
+        const csv = [headers.join(','), ...rows.map(row => headers.map(header => csvValue(row[header])).join(','))].join('\r\n');
+        const runName = String(config.run_name || datasetIdentity.dataset_id || 'rheed').replace(/[^a-zA-Z0-9._-]+/g, '_');
+        downloadText(`${runName}_point_events.csv`, `\ufeff${csv}\r\n`, 'text/csv;charset=utf-8');
+        pointMessage(`Exported ${rows.length} point events as CSV.`);
+      }
+
+      async function importPointJson(event) {
+        const input = event.currentTarget;
+        const file = input.files && input.files[0];
+        if (!file) return;
+        try {
+          const documentValue = JSON.parse(await file.text());
+          const parsed = validatePointDocument(documentValue);
+          if (pointEvents.length && !window.confirm('Replace the current point-event review state with this file?')) return;
+          if (pointDesktopSession) {
+            if (!pointRevisionPersistenceAvailable) {
+              throw new Error('desktop revision service is unavailable; the current canonical state was retained');
+            }
+            pointRevisionPending = true;
+            renderPointEditor();
+            const response = await fetch(pointBridgeEndpoint('/api/events/import'), {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ document: documentValue }),
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(payload.error || `desktop import returned HTTP ${response.status}`);
+            if (!Array.isArray(payload.events) || !Array.isArray(payload.revisions) ||
+                !payload.annotation_set?.annotation_set_id) {
+              throw new Error('desktop import returned incomplete canonical state');
+            }
+            const canonicalEvents = payload.events.map((item, index) => normalizePointEvent(item, index));
+            pointPushHistory();
+            pointEvents = canonicalEvents;
+            pointRevisions = cloneValue(payload.revisions);
+            pointAnnotationSetId = String(payload.annotation_set.annotation_set_id);
+            selectedPointEventId = null;
+            pointPersist();
+            pointMessage(`Durably imported ${pointEvents.length} point events from ${file.name}.`);
+            return;
+          }
+          pointPushHistory();
+          pointEvents = parsed.events;
+          pointRevisions = parsed.revisions;
+          pointAnnotationSetId = parsed.annotationSetId;
+          selectedPointEventId = null;
+          pointPersist();
+          renderPointEditor();
+          pointMessage(`Imported ${pointEvents.length} point events from ${file.name}.`);
+        } catch (error) {
+          pointMessage(`Import failed: ${error.message}`, true);
+        } finally {
+          pointRevisionPending = false;
+          renderPointEditor();
+          input.value = '';
+        }
+      }
+
+      function initializePointEditor() {
+        pointEditor.hidden = !isPointReport;
+        legacyEditor.hidden = isPointReport;
+        if (!isPointReport) {
+          legacyEditor.querySelector('#arp-annotation-title').textContent = 'Legacy reconstruction segments — read-only';
+          legacyEditor.querySelector('.arp-annotation-note').textContent =
+            'This rheed-temporal-segments-v1 report remains viewable for compatibility. Segment editing and automatic conversion to point events are intentionally disabled.';
+          legacyEditor.querySelectorAll('button,input,select').forEach(control => { control.disabled = true; });
+          legacyEditor.style.pointerEvents = 'none';
+          return;
+        }
+        const before = root.querySelector('#arp-point-before');
+        const after = root.querySelector('#arp-point-after');
+        const choices = root.querySelector('#arp-point-reconstruction').innerHTML;
+        before.innerHTML = choices;
+        after.innerHTML = choices;
+        root.querySelector('#arp-frame-scrubber-point').max = String(config.count - 1);
+        const restored = pointLoad();
+        if (restored) pointMessage(`Restored ${pointEvents.length} point events from browser autosave.`);
+        else if (pointStorageAvailable) pointMessage('Browser Draft autosave is active. Export JSON for a durable collaborative record.');
+        else pointMessage('Browser autosave is unavailable. Export JSON before closing.', true);
+        renderPointEditor();
+        initializePointBridge();
       }
 
       function applyDisplayFilter() {
@@ -1536,6 +3004,7 @@
         chartStates.forEach(state => state.updateSelection());
         if (annotationState) annotationState.updateSelection();
         else syncFrameScrubber();
+        syncPointScrubber();
         syncZoomFrame();
       }
 
@@ -1746,6 +3215,26 @@
       });
       root.querySelector('#arp-frame-previous').addEventListener('click', () => updateSelected(selectedIndex - 1));
       root.querySelector('#arp-frame-next').addEventListener('click', () => updateSelected(selectedIndex + 1));
+      root.querySelector('#arp-frame-scrubber-point').addEventListener('input', event => {
+        updateSelected(Number(event.currentTarget.value));
+      });
+      root.querySelector('#arp-frame-previous-point').addEventListener('click', () => updateSelected(selectedIndex - 1));
+      root.querySelector('#arp-frame-next-point').addEventListener('click', () => updateSelected(selectedIndex + 1));
+      root.querySelector('#arp-point-add').addEventListener('click', addPointEvent);
+      root.querySelector('#arp-point-save').addEventListener('click', () => savePointDraft(false));
+      ['#arp-point-comment', '#arp-point-reviewer', '#arp-point-confidence', '#arp-point-reconstruction',
+        '#arp-point-before', '#arp-point-after'].forEach(selector => {
+        root.querySelector(selector).addEventListener('change', () => savePointDraft(true));
+      });
+      root.querySelector('#arp-point-move').addEventListener('click', movePointReviewAnchor);
+      root.querySelector('#arp-point-equalizer-run').addEventListener('click', runPointEqualizer);
+      root.querySelector('#arp-point-complete').addEventListener('click', completePointEvent);
+      root.querySelector('#arp-point-reopen').addEventListener('click', reopenPointEvent);
+      root.querySelector('#arp-point-dismiss').addEventListener('click', dismissPointEvent);
+      root.querySelector('#arp-point-delete').addEventListener('click', deletePosthocEvent);
+      root.querySelector('#arp-point-export-json').addEventListener('click', exportPointJson);
+      root.querySelector('#arp-point-export-csv').addEventListener('click', exportPointCsv);
+      root.querySelector('#arp-point-import').addEventListener('change', importPointJson);
       root.querySelector('#arp-mark-in').addEventListener('click', markAnnotationIn);
       root.querySelector('#arp-mark-out').addEventListener('click', markAnnotationOut);
       annotationApply.addEventListener('click', applyAnnotationSegment);
@@ -1847,6 +3336,7 @@
         setAnnotationMessage('Browser autosave is unavailable. Export JSON before closing.', true);
       }
       renderAnnotationTrack();
+      initializePointEditor();
       config.models.forEach(addPanel);
       addNodeEvidence();
       const firstNode = config.models.flatMap(model => model.nodes).sort((a, b) => a.elapsed_s - b.elapsed_s)[0];
@@ -1859,6 +3349,7 @@
 
       const resizeObserver = new ResizeObserver(() => {
         if (annotationState) annotationState.draw();
+        if (pointState) pointState.draw();
         chartStates.forEach(state => state.draw());
       });
       resizeObserver.observe(root.querySelector('#arp-plots'));

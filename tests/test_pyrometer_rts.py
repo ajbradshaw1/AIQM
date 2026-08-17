@@ -175,7 +175,9 @@ class WorkerWiringTests(unittest.TestCase):
 
         sensor = PyrometerWorker(
             mode="modbus", rts=CHALCOGENIDE_MBE.pyrometer_rts,
+            device_id=CHALCOGENIDE_MBE.pyrometer_device_id,
             modbus_backend=CHALCOGENIDE_MBE.pyrometer_modbus_backend,
         )._create_sensor()
         self.assertIs(sensor._rts, False)
+        self.assertEqual(sensor._device_id, CHALCOGENIDE_MBE.pyrometer_device_id)
         self.assertEqual(sensor._backend, "raw_serial")

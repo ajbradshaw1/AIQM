@@ -238,6 +238,9 @@ def test_report_preserves_irregular_provenance_and_is_model_agnostic(
     assert payload["heartbeat_indices"] == HEARTBEATS
     assert payload["capture_sequences"] == SEQUENCES
     assert payload["config"]["count"] == len(ELAPSED)
+    assert len(payload["config"]["frame_contexts"]) == len(ELAPSED)
+    assert payload["config"]["frame_contexts"][0]["received_monotonic_ns"] is None
+    assert "received_monotonic_ns" in payload["config"]["frame_contexts"][0]["missing_provenance"]
 
     dataset = payload["config"]["dataset"]
     assert dataset["source_archive_sha256"] == hashlib.sha256(bundle.archive.read_bytes()).hexdigest()

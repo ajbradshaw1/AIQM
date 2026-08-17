@@ -498,7 +498,9 @@ class CalibrationRecordTests(unittest.TestCase):
             session_id="",
             gun_aligned=False,
         )
-        with self.assertRaisesRegex(ValueError, "stable session/QC"):
+        with self.assertRaisesRegex(
+            ValueError, "stable session and image-acquisition provenance",
+        ):
             self._accepted(pending)
 
     def test_invalidated_record_cannot_be_revived(self) -> None:
