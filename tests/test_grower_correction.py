@@ -702,6 +702,7 @@ class ConfigLockTests(unittest.TestCase):
             self.monitor.config_browse_btn,
             self.monitor.config_prefix,
             self.monitor.config_camera_mode,
+            self.monitor.config_camera_exposure_ms,
             self.monitor.config_pyrometer_mode,
             self.monitor.config_exactus_port,
             self.monitor.config_exactus_baud,
@@ -766,6 +767,15 @@ class DefaultSavePathTests(unittest.TestCase):
     """Tests _default_save_path's three-way branching for T9 SSD /
     Windows fallback / non-Windows fallback. Path.exists() is patched
     per test to simulate the environments."""
+
+    def test_installed_session_root_has_priority(self):
+        import gui.growth_monitor as gm
+        with unittest.mock.patch.dict(
+            gm.os.environ,
+            {"AIQM_SESSION_ROOT": r"D:\Selected\GrowthSessions"},
+        ):
+            result = gm._default_save_path()
+        self.assertEqual(result, r"D:\Selected\GrowthSessions")
 
     def test_windows_with_t9_returns_ssd_path(self):
         # Simulate Bulbasaur with T9 mounted.

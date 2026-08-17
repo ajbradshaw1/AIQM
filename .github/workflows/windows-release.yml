@@ -1,0 +1,52 @@
+name: Windows x64 Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-2022
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build ZIP and EXE
+        shell: powershell
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          & .\scripts\windows\build_release.ps1 -Version $version -OutputDirectory $dist
+          $zip = Join-Path $dist "AI4MBE-Growth-Monitor-$version-Windows-x64.zip"
+          $expanded = Join-Path $dist 'expanded'
+          Expand-Archive -LiteralPath $zip -DestinationPath $expanded -Force
+          $payload = Join-Path $expanded "AI4MBE-Growth-Monitor-$version"
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          & $iscc "/DMyAppVersion=$version" "/DPayloadRoot=$payload" "/DOutputDir=$dist" .\scripts\windows\ai4mbe_growth_monitor.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
+          $setup = Join-Path $dist "AI4MBE-Growth-Monitor-$version-Windows-x64-Setup.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path -Leaf $setup)" | Set-Content "$setup.sha256" -Encoding ASCII
+          Remove-Item -LiteralPath $expanded -Recurse -Force
+
+      - name: Publish GitHub Release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          $setup = Join-Path $dist "AI4MBE-Growth-Monitor-$version-Windows-x64-Setup.exe"
+          $zip = Join-Path $dist "AI4MBE-Growth-Monitor-$version-Windows-x64.zip"
+          gh release create $env:GITHUB_REF_NAME `
+            $setup "$setup.sha256" $zip "$zip.sha256" `
+            --title "AI4MBE Growth Monitor $env:GITHUB_REF_NAME (Windows x64)" `
+            --notes "Windows x64 release. Use the Setup.exe for the standard install wizard with a selectable program directory, Start Menu/Desktop shortcuts, operator manual, and Windows uninstall entry. The ZIP is retained as a fallback package. Experiment sessions remain separate and are preserved during uninstall."

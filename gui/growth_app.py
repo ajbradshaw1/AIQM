@@ -216,6 +216,7 @@ class GrowthApp(QMainWindow):
         self.setMinimumSize(1000, 700)
 
         self.camera_worker: Optional[RheedCameraWorker] = None
+        self._reported_camera_exposure_us: Optional[float] = None
         self.pyrometer_worker: Optional[PyrometerWorker] = None
         self.mistral_worker: Optional[MistralWorker] = None
         self.evap_worker: Optional[EvapControlWorker] = None
@@ -249,7 +250,8 @@ class GrowthApp(QMainWindow):
         # native worker is still exiting, so queued worker signals must remain
         # fail-closed even though the main window is still alive.
         self._shutdown_pending = False
-        self.growth_log = GrowthLogger()
+        session_root = os.environ.get("AIQM_SESSION_ROOT", "logs/growths")
+        self.growth_log = GrowthLogger(base_dir=session_root)
 
         # Periodic sensor logging timer (1 second interval while running)
         self._sensor_log_timer = QTimer(self)
@@ -528,6 +530,14 @@ class GrowthApp(QMainWindow):
     def _on_arm(self):
         """Connect camera, pyrometer, MISTRAL, and Evap Control workers."""
         camera_mode = self.monitor.config_camera_mode.currentText()
+        self._reported_camera_exposure_us = None
+        exposure_ms = self.monitor.config_camera_exposure_ms.value()
+        exposure_us = (
+            exposure_ms * 1000.0
+            if camera_mode in ("vimba", "direct") and exposure_ms > 0
+            else None
+        )
+        self.monitor.clear_camera_provenance()
         pyrometer_mode = self.monitor.config_pyrometer_mode.currentText()
         mistral_mode = self.monitor.config_mistral_mode.currentText()
         evap_mode = self.monitor.config_evap_mode.currentText()
@@ -535,7 +545,11 @@ class GrowthApp(QMainWindow):
         new_camera_worker = False
         if not self.camera_worker or not self.camera_worker.isRunning():
             self.camera_worker = RheedCameraWorker(
-                mode=camera_mode, poll_interval=1.0,
+                mode=camera_mode,
+                poll_interval=1.0,
+                camera_index=self._chamber_config.camera_index,
+                trigger_hz=self._chamber_config.camera_fps,
+                exposure_us=exposure_us,
             )
             self.camera_worker.state_updated.connect(self._on_camera_state)
             self.camera_worker.start()
@@ -670,7 +684,9 @@ class GrowthApp(QMainWindow):
 
         if not self.evap_worker or not self.evap_worker.isRunning():
             self.evap_worker = EvapControlWorker(
-                mode=evap_mode, poll_interval=1.0,
+                mode=evap_mode,
+                poll_interval=1.0,
+                chamber_config=self._chamber_config,
             )
             self.evap_worker.state_updated.connect(self._on_evap_state)
             self.evap_worker.start()
@@ -785,6 +801,22 @@ class GrowthApp(QMainWindow):
     @pyqtSlot()
     def _on_start(self):
         """Begin a growth session — start logging."""
+        if not self._has_live_camera_frame():
+            # ARM only proves the worker started; it does not prove the camera
+            # ever delivered anything. Direct Vimba reads are edge-triggered,
+            # so a camera that connects but never fires a callback leaves the
+            # GUI armed and silent. Without this gate a grower could run a
+            # whole growth believing RHEED was being recorded while the frame
+            # log stayed empty — the one failure that cannot be recovered
+            # after the fact.
+            self.statusBar().showMessage(
+                "START blocked: no live RHEED frame yet. Wait for the image, "
+                "or DISARM and check camera access.",
+                9000,
+            )
+            log.warning("START refused: no valid camera frame received yet")
+            return
+
         if self._equalizer_calibration is not None:
             self._invalidate_equalizer_calibration(
                 "new session started before prior calibration was cleared",
@@ -2374,6 +2406,7 @@ class GrowthApp(QMainWindow):
             return
 
         state = _stamp_gui_received(state)
+        self._announce_camera_exposure(state)
         if self.growth_log.active:
             GrowthApp._trace_temporal(self,
                 "state_received", "rheed",
@@ -2405,6 +2438,9 @@ class GrowthApp(QMainWindow):
             self.monitor.set_auto_capture_status(
                 "Auto-capture: stopped (RHEED capture unavailable)"
             )
+            handled_pre_session_loss = self._return_to_idle_if_arm_failed(
+                state,
+            )
             if (
                 self._rheed_qc_state.session_active
                 and not self._camera_capture_interrupted
@@ -2426,10 +2462,15 @@ class GrowthApp(QMainWindow):
                     frame_role="camera_disconnect",
                     note=state.error,
                 )
-            self.statusBar().showMessage(
-                f"RHEED capture stopped: {state.error}",
-                10000,
-            )
+            if not handled_pre_session_loss:
+                # Suppressed after a pre-session teardown: that path has
+                # already said something more specific — either the reason
+                # the arm was refused, or _on_disarm's actionable warning
+                # that workers are still stopping.
+                self.statusBar().showMessage(
+                    f"RHEED capture stopped: {state.error}",
+                    10000,
+                )
         elif (
             state.connected
             and getattr(state, "valid", state.connected)
@@ -2476,6 +2517,97 @@ class GrowthApp(QMainWindow):
                     f"score: {self.auto_capture_engine.latest_score:.2f} | "
                     f"events: {self._auto_capture_event_count}"
                 )
+
+    def _return_to_idle_if_arm_failed(self, state) -> bool:
+        """Tear down an arm the camera cannot support. Returns True if it did.
+
+        Scope is broader than the name suggests, and deliberately so: this
+        fires on ANY camera loss while armed with no session started — a
+        refused connect, but equally a camera that connected and then dropped
+        during preview. Both leave the grower armed with no frames, and in
+        both the honest state is idle. It is named for the case that motivated
+        it; the tests cover both.
+
+        ``_on_arm`` sets "armed" before the camera thread answers, so a refused
+        or failed connect used to leave the GUI armed: config panel locked, ARM
+        button reading DISARM, after an arm that did not succeed. The grower
+        had to work out that the next click was a disarm. Manual exposure makes
+        that reachable by design — requesting a write while kSA or the Vimba X
+        Viewer holds Full access is refused on purpose, and since the camera
+        mode now defaults to vimba it is reachable on the very first ARM.
+
+        This performs a REAL disarm rather than relabelling the state. Flipping
+        to "idle" alone would unlock the config panel while the pyrometer,
+        MISTRAL, evap and classifier workers — which arm successfully and
+        independently — still own the hardware they were configured against.
+        That is the exact condition ``_on_disarm``'s "Disarm incomplete" guard
+        exists to prevent, so this reuses it and inherits that guard: if a
+        worker will not stop, the app stays armed and says so.
+
+        Deliberately scoped to a failure DURING ARM. Losing the camera
+        mid-session must not tear the session down — sensor logging continues
+        so the record still shows when capture was lost, which is why
+        ``growth_log.active`` is checked rather than the state alone.
+        """
+        if (
+            self.monitor.state != "armed"
+            or self.growth_log.active
+            or self._shutdown_pending
+        ):
+            return False
+        log.error("Camera lost before the session started: %s", state.error)
+        self._on_disarm()
+        if self.monitor.state != "idle":
+            # _on_disarm refused: a worker would not stop, so it stayed armed
+            # and posted "Disarm incomplete — wait and press DISARM again".
+            # That message is ACTIONABLE and this one is not, so it has to be
+            # the one left on screen. Returning True suppresses the caller's
+            # trailing message too.
+            return True
+        self.statusBar().showMessage(
+            f"Camera did not connect — disarmed: {state.error}", 10000,
+        )
+        return True
+
+    def _has_live_camera_frame(self) -> bool:
+        """Whether the camera has delivered a usable frame this arm cycle.
+
+        Deliberately reads the LAST EMITTED state rather than a "did we ever
+        see one" flag: a camera that delivered frames and then died must not
+        keep permitting a fresh session start. ``valid`` is the worker's own
+        judgement that the read produced real pixels, and the starvation
+        deadline clears ``connected`` once delivery stops, so both the
+        never-started and the went-quiet cases fail this check.
+        """
+        state = getattr(self.monitor, "_latest_camera", None)
+        if state is None:
+            return False
+        return bool(
+            getattr(state, "connected", False)
+            and getattr(state, "valid", False)
+            and getattr(state, "frame", None) is not None
+        )
+
+    def _announce_camera_exposure(self, state) -> None:
+        """Tell the grower the exposure the camera actually confirmed.
+
+        The readback, not the request — those differ whenever the device
+        quantises onto its increment grid, and the grower needs to see what the
+        frames were really taken at. Fires only on change, so a 1 Hz state
+        stream does not repaint the status bar every second.
+        """
+        exposure_us = getattr(state, "exposure_us", None)
+        if (
+            state.connected
+            and exposure_us is not None
+            and exposure_us != self._reported_camera_exposure_us
+        ):
+            self._reported_camera_exposure_us = exposure_us
+            self.statusBar().showMessage(
+                f"Direct camera exposure confirmed: "
+                f"{exposure_us / 1000.0:.0f} ms",
+                5000,
+            )
 
     def _on_heartbeat(self):
         """Heartbeat timer tick — save the latest RHEED frame as an anchor.

@@ -1,4 +1,10 @@
 @echo off
 setlocal
-powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0scripts\windows\start_chmbe.ps1"
-exit /b %ERRORLEVEL%
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\launch_ai4mbe.ps1" -Application chmbe
+set "rc=%ERRORLEVEL%"
+if not "%rc%"=="0" (
+  echo.
+  echo Launch failed. See the error dialog and launcher log.
+  pause
+)
+exit /b %rc%

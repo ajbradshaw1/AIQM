@@ -1,0 +1,4 @@
+# Complete runtime used only when no compatible ai4mbe-gui environment exists.
+# Existing lab environments are reused without reinstalling packages.
+torch
+-r requirements-windows-live.txt

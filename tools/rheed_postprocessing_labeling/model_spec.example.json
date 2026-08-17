@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "key": "example_model",
+  "title": "Example reconstruction classifier",
+  "subtitle": "Replace this text with the locked model and evaluation status",
+  "classes": [
+    "1x1",
+    "twinned_2x1",
+    "c_6x2",
+    "rt13",
+    "htr"
+  ],
+  "probability_columns": [
+    "prob_1x1",
+    "prob_twinned_2x1",
+    "prob_c_6x2",
+    "prob_rt13",
+    "prob_htr"
+  ],
+  "quality_column": "quality",
+  "predicted_column": "predicted_class",
+  "status": "shadow_only",
+  "smoothing_window_s": 0.0,
+  "new_argmax_minimum_dwell_s": 0.0,
+  "provenance": {
+    "model_family": "replace-me",
+    "checkpoint_sha256": "replace-with-sha256",
+    "manifest_sha256": "replace-with-sha256"
+  }
+}
