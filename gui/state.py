@@ -21,6 +21,99 @@ class PowerSupplyState:
     ocp_limit: float = 0.0
     connected: bool = False
     error: str = ""
+    # OWON exposes no device clock.  UTC is stamped by the host after a
+    # complete poll; monotonic values are used for ordering, age, PID timing,
+    # and plots.  A failed poll leaves the last values visible but sets
+    # ``valid=False`` and does not advance ``sample_sequence``.
+    source_at_utc: Optional[str] = None
+    primary_completed_at_utc: Optional[str] = None
+    primary_completed_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    primary_read_duration_ms: Optional[float] = None
+    received_at_utc: Optional[str] = None
+    sample_sequence: int = 0
+    read_duration_ms: Optional[float] = None
+    acquire_started_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    worker_emitted_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    gui_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    valid: bool = False
+    connection_generation: int = 0
+    settings_sample_sequence: int = 0
+    settings_received_at_utc: Optional[str] = None
+    settings_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    settings_age_ms: Optional[float] = None
+    # Secondary OWON queries are not simultaneous with MEAS:ALL?. Each field
+    # therefore carries its own freshness provenance. A secondary failure does
+    # not invalidate an otherwise successful primary V/I/P sample.
+    output_sample_sequence: int = 0
+    output_valid: bool = False
+    output_received_at_utc: Optional[str] = None
+    output_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    output_age_ms: Optional[float] = None
+    voltage_setpoint_sample_sequence: int = 0
+    voltage_setpoint_received_at_utc: Optional[str] = None
+    voltage_setpoint_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    voltage_setpoint_age_ms: Optional[float] = None
+    current_setpoint_sample_sequence: int = 0
+    current_setpoint_received_at_utc: Optional[str] = None
+    current_setpoint_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    current_setpoint_age_ms: Optional[float] = None
+    ovp_sample_sequence: int = 0
+    ovp_received_at_utc: Optional[str] = None
+    ovp_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    ovp_age_ms: Optional[float] = None
+    ocp_sample_sequence: int = 0
+    ocp_received_at_utc: Optional[str] = None
+    ocp_received_monotonic_ns: Optional[int] = field(
+        default=None, repr=False, compare=False,
+    )
+    ocp_age_ms: Optional[float] = None
+
+    @property
+    def has_valid_reading(self) -> bool:
+        return (
+            self.connected
+            and self.valid
+            and all(
+                math.isfinite(value)
+                for value in (
+                    self.voltage_measured,
+                    self.current_measured,
+                    self.power_measured,
+                )
+            )
+        )
+
+    @property
+    def has_fresh_output(self) -> bool:
+        """True only for a recent successful OUTP? or command readback."""
+        return (
+            self.connected
+            and self.output_valid
+            and self.output_sample_sequence > 0
+            and self.output_age_ms is not None
+            and self.output_age_ms <= 2_000.0
+        )
 
 
 @dataclass

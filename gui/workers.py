@@ -3,7 +3,11 @@ Background worker threads for instrument communication.
 """
 
 import logging
+import itertools
+import queue
+import threading
 import time
+import uuid
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -125,6 +129,12 @@ from gui.state import (
     CameraState, ClassifierState, EvapControlState, MistralState, PowerSupplyState,
     PyrometerState, RheedQcState, TemperatureState, WeakPrimaryShadowState,
 )
+from gui.heater_control.heater_commands import (
+    SAFETY_COMMANDS,
+    PowerSupplyCommand,
+    PowerSupplyCommandResult,
+)
+from gui.heater_control.heater_session import utc_now_iso
 
 # ---------------------------------------------------------------------------
 # Optional heater-control deps (pyvisa + owon_power_supply)
@@ -159,9 +169,21 @@ class PowerSupplyWorker(QThread):
     """
 
     state_updated = pyqtSignal(PowerSupplyState)
+    command_completed = pyqtSignal(object)  # PowerSupplyCommandResult
+    system_event = pyqtSignal(object)  # append-only audit event payload
 
-    def __init__(self, resource: str, poll_interval: float = 0.5):
-        if pyvisa is None or OWONPowerSupply is None:
+    SAFE_VOLTAGE_TOLERANCE = 0.005
+    SAFE_CURRENT_TOLERANCE = 0.005
+    SAFE_TRANSACTION_TIMEOUT_S = 15.0
+
+    def __init__(
+        self,
+        resource: str,
+        poll_interval: float = 0.5,
+        *,
+        psu_factory=None,
+    ):
+        if psu_factory is None and (pyvisa is None or OWONPowerSupply is None):
             raise ImportError(
                 "PowerSupplyWorker requires pyvisa + owon_power_supply. "
                 "Install pyvisa (`pip install pyvisa`) and make sure "
@@ -170,15 +192,23 @@ class PowerSupplyWorker(QThread):
         super().__init__()
         self.resource = resource
         self.poll_interval = poll_interval
+        self._psu_factory = psu_factory or OWONPowerSupply
         self.psu = None
         # Set in __init__ (not run()) to close the stop()-before-run
         # race — if stop() fires between start() and the first line of
         # run(), it must not be undone by a re-assignment. See
         # worker_run_race_followup memory for the full rationale.
         self.running = True
-        self._command_queue = []
+        self._stop_event = threading.Event()
+        self._command_queue: queue.PriorityQueue = queue.PriorityQueue()
+        self._queue_counter = itertools.count()
+        self._queue_state_lock = threading.RLock()
+        self._pending_safety_count = 0
+        self._safety_epoch = 0
+        self._commands_gated = True
         self._consecutive_failures = 0
         self._poll_counter = 0
+        self._connection_generation = 0
 
     def run(self):
         """Main worker loop."""
@@ -186,59 +216,153 @@ class PowerSupplyWorker(QThread):
 
         # Connect
         try:
-            self.psu = OWONPowerSupply(self.resource)
+            self.psu = self._psu_factory(self.resource)
             self.psu.connect()
+            self._connection_generation += 1
+            state.connection_generation = self._connection_generation
             state.connected = True
         except Exception as e:
+            self.running = False
             state.connected = False
             state.error = str(e)
-            self.state_updated.emit(replace(state))
+            state.valid = False
+            self.state_updated.emit(_emission_snapshot(state))
+            self._reject_all_pending(f"PSU connection failed: {e}")
             return
 
         # Main polling loop
         while self.running:
-            try:
-                # Process any queued commands
-                while self._command_queue:
-                    cmd, args = self._command_queue.pop(0)
-                    self._execute_command(cmd, args)
+            loop_started_ns = time.perf_counter_ns()
+            safety_processed = self._process_queued_commands(state)
+            if safety_processed:
+                # A safety command's forced readback is the authoritative
+                # result for this cycle. Do not immediately issue unrelated
+                # polling queries after it.
+                self._update_secondary_ages(state, time.perf_counter_ns())
+                self.state_updated.emit(_emission_snapshot(state))
+                self._stop_event.wait(self.poll_interval)
+                continue
 
-                # Read high-rate telemetry each cycle
+            read_started_ns = time.perf_counter_ns()
+            try:
+                # MEAS:ALL? is the primary sample. Its success is sufficient
+                # for valid V/I/P telemetry; secondary queries below cannot
+                # retroactively invalidate it.
                 v, i, p = self.psu.measure_all()
                 state.voltage_measured = v
                 state.current_measured = i
                 state.power_measured = p
-                state.output_enabled = self.psu.get_output_state()
-
-                # Read slower-moving values less frequently to reduce bus load
-                if self._poll_counter % 5 == 0:
-                    state.voltage_setpoint = self.psu.get_voltage_setpoint()
-                    state.current_setpoint = self.psu.get_current_setpoint()
-                    state.ovp_limit = self.psu.get_ovp()
-                    state.ocp_limit = self.psu.get_ocp()
-
-                self._poll_counter += 1
                 state.connected = True
                 state.error = ""
                 self._consecutive_failures = 0
+                primary_completed_ns = time.perf_counter_ns()
+                state.primary_completed_at_utc = _utc_iso_now()
+                state.primary_completed_monotonic_ns = primary_completed_ns
+                state.primary_read_duration_ms = max(
+                    0.0,
+                    (primary_completed_ns - read_started_ns) / 1_000_000.0,
+                )
 
             except Exception as e:
-                state.error = str(e)
+                _mark_read_failed(state, e, read_started_ns)
                 self._consecutive_failures += 1
+                self._emit_system_event(
+                    "primary_poll_failed", str(e), state.connection_generation,
+                )
 
                 # If repeated VISA timeouts happen, force reconnect path
                 if self._is_timeout_error(e) and self._consecutive_failures >= 3:
+                    self._reject_pending_normal("PSU reconnect in progress")
                     state.connected = False
+                    self._emit_system_event(
+                        "reconnect_started", str(e), state.connection_generation,
+                    )
                     if self._reconnect():
+                        self._connection_generation += 1
+                        state.connection_generation = self._connection_generation
                         state.connected = True
                         state.error = ""
+                        state.valid = False
                         self._consecutive_failures = 0
                         self._poll_counter = 0
+                        with self._queue_state_lock:
+                            self._commands_gated = True
+                        self._reset_secondary_freshness(state)
+                        self._emit_system_event(
+                            "reconnect_succeeded",
+                            "waiting for first valid primary sample",
+                            state.connection_generation,
+                        )
+                    else:
+                        self._emit_system_event(
+                            "reconnect_failed", str(e), state.connection_generation,
+                        )
 
-            self.state_updated.emit(state)
-            time.sleep(self.poll_interval)
+                # Secondary values deliberately retain their last readback on
+                # a failed primary poll.  Their ages must still advance so a
+                # consumer cannot mistake that retained value for a fresh
+                # setting/output observation.
+                self._update_secondary_ages(state, time.perf_counter_ns())
+                self.state_updated.emit(_emission_snapshot(state))
+                elapsed_s = (
+                    time.perf_counter_ns() - loop_started_ns
+                ) / 1_000_000_000.0
+                self._stop_event.wait(max(0.0, self.poll_interval - elapsed_s))
+                continue
+
+            secondary_errors = []
+            if not self._refresh_secondary(
+                state, "output", "output_enabled", self.psu.get_output_state,
+            ):
+                secondary_errors.append("output")
+
+            if self._poll_counter % 5 == 0:
+                secondary_specs = (
+                    ("voltage_setpoint", "voltage_setpoint", self.psu.get_voltage_setpoint),
+                    ("current_setpoint", "current_setpoint", self.psu.get_current_setpoint),
+                    ("ovp", "ovp_limit", self.psu.get_ovp),
+                    ("ocp", "ocp_limit", self.psu.get_ocp),
+                )
+                for freshness_name, value_name, getter in secondary_specs:
+                    if not self._refresh_secondary(
+                        state, freshness_name, value_name, getter,
+                    ):
+                        secondary_errors.append(freshness_name)
+
+            self._poll_counter += 1
+            state.error = (
+                "secondary query failed: " + ", ".join(secondary_errors)
+                if secondary_errors else ""
+            )
+            # ``received_*`` describes the end of the complete host query
+            # round.  The earlier MEAS:ALL? completion remains separately
+            # available through ``primary_completed_*``.
+            now_ns = time.perf_counter_ns()
+            state.acquire_started_monotonic_ns = read_started_ns
+            state.received_at_utc = _utc_iso_now()
+            state.received_monotonic_ns = now_ns
+            state.read_duration_ms = max(
+                0.0, (now_ns - read_started_ns) / 1_000_000.0,
+            )
+            state.sample_sequence += 1
+            state.valid = True
+            self._update_secondary_ages(state, now_ns)
+            with self._queue_state_lock:
+                if self._commands_gated:
+                    self._commands_gated = False
+                    self._emit_system_event(
+                        "connection_generation_ready",
+                        "first valid primary sample received",
+                        state.connection_generation,
+                    )
+
+            self.state_updated.emit(_emission_snapshot(state))
+            elapsed_s = (time.perf_counter_ns() - loop_started_ns) / 1_000_000_000.0
+            self._stop_event.wait(max(0.0, self.poll_interval - elapsed_s))
 
         # Cleanup
+        self.running = False
+        self._reject_all_pending("power supply worker stopped")
         if self.psu:
             try:
                 self.psu.disconnect()
@@ -247,7 +371,7 @@ class PowerSupplyWorker(QThread):
 
     def _is_timeout_error(self, exc: Exception) -> bool:
         """Return True if exception is a VISA timeout."""
-        if isinstance(exc, pyvisa.errors.VisaIOError):
+        if pyvisa is not None and isinstance(exc, pyvisa.errors.VisaIOError):
             return exc.error_code == pyvisa.constants.VI_ERROR_TMO
         return "VI_ERROR_TMO" in str(exc)
 
@@ -259,42 +383,381 @@ class PowerSupplyWorker(QThread):
                     self.psu.disconnect()
                 except Exception:
                     pass
-            self.psu = OWONPowerSupply(self.resource)
+            self.psu = self._psu_factory(self.resource)
             self.psu.connect()
             return True
         except Exception:
             return False
 
-    def _execute_command(self, cmd: str, args: tuple):
-        """Execute a command on the power supply. Raises on failure so the
-        caller can surface the error through state.error."""
-        if not self.psu:
-            return
+    def _emit_system_event(
+        self, action: str, error: str, connection_generation: int,
+    ) -> None:
+        self.system_event.emit({
+            "action": action,
+            "error": error,
+            "connection_generation": connection_generation,
+            "event_at_utc": _utc_iso_now(),
+            "event_monotonic_ns": time.perf_counter_ns(),
+        })
 
-        if cmd == "set_voltage":
-            self.psu.set_voltage(args[0])
-        elif cmd == "set_current":
-            self.psu.set_current(args[0])
-        elif cmd == "output_on":
-            self.psu.output_on()
-        elif cmd == "output_off":
-            self.psu.output_off()
-        elif cmd == "set_ovp":
-            self.psu.set_ovp(args[0])
-        elif cmd == "set_ocp":
-            self.psu.set_ocp(args[0])
-        elif cmd == "emergency_stop":
-            self.psu.output_off()
-            self.psu.set_voltage(0)
-            self.psu.set_current(0)
+    def _refresh_secondary(
+        self,
+        state: PowerSupplyState,
+        freshness_name: str,
+        value_name: str,
+        getter,
+    ) -> bool:
+        try:
+            value = getter()
+            setattr(state, value_name, value)
+            self._stamp_secondary(state, freshness_name)
+            return True
+        except Exception as exc:
+            if freshness_name == "output":
+                state.output_valid = False
+            self._emit_system_event(
+                f"secondary_{freshness_name}_failed",
+                str(exc),
+                state.connection_generation,
+            )
+            return False
 
-    def queue_command(self, cmd: str, *args):
-        """Queue a command for execution."""
-        self._command_queue.append((cmd, args))
+    @staticmethod
+    def _stamp_secondary(state: PowerSupplyState, name: str) -> None:
+        now_ns = time.perf_counter_ns()
+        sequence_name = f"{name}_sample_sequence"
+        setattr(state, sequence_name, getattr(state, sequence_name) + 1)
+        setattr(state, f"{name}_received_at_utc", _utc_iso_now())
+        setattr(state, f"{name}_received_monotonic_ns", now_ns)
+        if name == "output":
+            state.output_valid = True
+        if name in {"voltage_setpoint", "current_setpoint", "ovp", "ocp"}:
+            state.settings_sample_sequence += 1
+            state.settings_received_at_utc = _utc_iso_now()
+            state.settings_received_monotonic_ns = now_ns
+
+    @staticmethod
+    def _update_secondary_ages(state: PowerSupplyState, now_ns: int) -> None:
+        for name in (
+            "output", "voltage_setpoint", "current_setpoint", "ovp", "ocp",
+        ):
+            received_ns = getattr(state, f"{name}_received_monotonic_ns")
+            age = None
+            if received_ns is not None:
+                age = max(0.0, (now_ns - received_ns) / 1_000_000.0)
+            setattr(state, f"{name}_age_ms", age)
+        if state.settings_received_monotonic_ns is not None:
+            state.settings_age_ms = max(
+                0.0,
+                (now_ns - state.settings_received_monotonic_ns) / 1_000_000.0,
+            )
+
+    @staticmethod
+    def _reset_secondary_freshness(state: PowerSupplyState) -> None:
+        """Invalidate field provenance when a new connection generation starts."""
+        state.settings_sample_sequence = 0
+        state.settings_received_at_utc = None
+        state.settings_received_monotonic_ns = None
+        state.settings_age_ms = None
+        state.output_valid = False
+        for name in (
+            "output", "voltage_setpoint", "current_setpoint", "ovp", "ocp",
+        ):
+            setattr(state, f"{name}_sample_sequence", 0)
+            setattr(state, f"{name}_received_at_utc", None)
+            setattr(state, f"{name}_received_monotonic_ns", None)
+            setattr(state, f"{name}_age_ms", None)
+
+    def _process_queued_commands(self, state: PowerSupplyState) -> bool:
+        safety_processed = False
+        while self.running:
+            try:
+                priority, sequence, command = self._command_queue.get_nowait()
+            except queue.Empty:
+                return safety_processed
+            if safety_processed and not command.safety_critical:
+                # Never execute a newly-arrived ordinary command in the same
+                # loop turn as a safety transaction.  Re-queue it for the
+                # next turn, after the confirmed safe snapshot has first been
+                # emitted to the GUI/audit consumers.
+                self._command_queue.put((priority, sequence, command))
+                return True
+            result = self._execute_transaction(command, state)
+            self.command_completed.emit(result)
+            self._command_queue.task_done()
+            if command.safety_critical:
+                safety_processed = True
+                with self._queue_state_lock:
+                    self._pending_safety_count = max(
+                        0, self._pending_safety_count - 1,
+                    )
+        return safety_processed
+
+    def _execute_transaction(
+        self, command: PowerSupplyCommand, state: PowerSupplyState,
+    ) -> PowerSupplyCommandResult:
+        requested = {"args": list(command.args)}
+        effective = {}
+        readback = {}
+        error = ""
+        status = "CONFIRMED"
+        started_ns = time.perf_counter_ns()
+
+        try:
+            if not self.psu:
+                raise RuntimeError("power supply is not connected")
+
+            cmd = command.command
+            args = command.args
+            if cmd == "set_voltage":
+                value = float(args[0])
+                effective = {"voltage_setpoint": value}
+                self.psu.set_voltage(value)
+                actual = self.psu.get_voltage_setpoint()
+                readback = {"voltage_setpoint": actual}
+                if abs(actual - value) > self.SAFE_VOLTAGE_TOLERANCE:
+                    raise RuntimeError(
+                        f"voltage readback {actual:.6g} V does not confirm {value:.6g} V"
+                    )
+                state.voltage_setpoint = actual
+                self._stamp_secondary(state, "voltage_setpoint")
+            elif cmd == "set_current":
+                value = float(args[0])
+                effective = {"current_setpoint": value}
+                self.psu.set_current(value)
+                actual = self.psu.get_current_setpoint()
+                readback = {"current_setpoint": actual}
+                if abs(actual - value) > self.SAFE_CURRENT_TOLERANCE:
+                    raise RuntimeError(
+                        f"current readback {actual:.6g} A does not confirm {value:.6g} A"
+                    )
+                state.current_setpoint = actual
+                self._stamp_secondary(state, "current_setpoint")
+            elif cmd in ("output_on", "output_off"):
+                expected = cmd == "output_on"
+                effective = {"output_enabled": expected}
+                (self.psu.output_on if expected else self.psu.output_off)()
+                actual = bool(self.psu.get_output_state())
+                readback = {"output_enabled": actual}
+                if actual is not expected:
+                    raise RuntimeError(
+                        f"output readback {actual!r} does not confirm {expected!r}"
+                    )
+                state.output_enabled = actual
+                self._stamp_secondary(state, "output")
+            elif cmd == "set_ovp":
+                value = float(args[0])
+                effective = {"ovp_limit": value}
+                self.psu.set_ovp(value)
+                actual = self.psu.get_ovp()
+                readback = {"ovp_limit": actual}
+                if abs(actual - value) > 0.01:
+                    raise RuntimeError("OVP readback mismatch")
+                state.ovp_limit = actual
+                self._stamp_secondary(state, "ovp")
+            elif cmd == "set_ocp":
+                value = float(args[0])
+                effective = {"ocp_limit": value}
+                self.psu.set_ocp(value)
+                actual = self.psu.get_ocp()
+                readback = {"ocp_limit": actual}
+                if abs(actual - value) > self.SAFE_CURRENT_TOLERANCE:
+                    raise RuntimeError("OCP readback mismatch")
+                state.ocp_limit = actual
+                self._stamp_secondary(state, "ocp")
+            elif cmd in SAFETY_COMMANDS:
+                effective = {
+                    "output_enabled": False,
+                    "voltage_setpoint": 0.0,
+                    "current_setpoint": 0.0,
+                }
+                # Keep this exact order: remove output energy first, then erase
+                # both setpoints, then query all three safety predicates.
+                self.psu.output_off()
+                self.psu.set_voltage(0.0)
+                self.psu.set_current(0.0)
+                readback = {
+                    "output_enabled": bool(self.psu.get_output_state()),
+                    "voltage_setpoint": float(self.psu.get_voltage_setpoint()),
+                    "current_setpoint": float(self.psu.get_current_setpoint()),
+                }
+                state.output_enabled = readback["output_enabled"]
+                state.voltage_setpoint = readback["voltage_setpoint"]
+                state.current_setpoint = readback["current_setpoint"]
+                self._stamp_secondary(state, "output")
+                self._stamp_secondary(state, "voltage_setpoint")
+                self._stamp_secondary(state, "current_setpoint")
+                safe = (
+                    not readback["output_enabled"]
+                    and abs(readback["voltage_setpoint"])
+                    <= self.SAFE_VOLTAGE_TOLERANCE
+                    and abs(readback["current_setpoint"])
+                    <= self.SAFE_CURRENT_TOLERANCE
+                )
+                if not safe:
+                    raise RuntimeError("safe shutdown readback did not reach zero/off")
+                if (
+                    time.perf_counter_ns() - started_ns
+                    > self.SAFE_TRANSACTION_TIMEOUT_S * 1_000_000_000
+                ):
+                    raise TimeoutError("safe shutdown exceeded 15 second deadline")
+            else:
+                status = "REJECTED"
+                raise ValueError(f"unknown PSU command: {cmd}")
+        except Exception as exc:
+            if status != "REJECTED":
+                status = "FAILED"
+            error = str(exc)
+
+        return PowerSupplyCommandResult(
+            request_id=command.request_id,
+            source=command.source,
+            command=command.command,
+            status=status,
+            requested=requested,
+            effective=effective,
+            readback=readback,
+            error=error,
+            completed_at_utc=utc_now_iso(),
+            completed_monotonic_ns=time.perf_counter_ns(),
+            confirmation_sample_sequence=state.sample_sequence,
+            connection_generation=state.connection_generation,
+            safety_epoch=command.safety_epoch,
+        )
+
+    def queue_command(
+        self,
+        cmd: str,
+        *args,
+        request_id: Optional[str] = None,
+        source: str = "system",
+        requested_at_utc: Optional[str] = None,
+        requested_monotonic_ns: Optional[int] = None,
+    ) -> str:
+        """Queue a transaction and return its correlation id.
+
+        Safety transactions pre-empt and reject ordinary queued work.  Calls
+        made while a safety transaction is pending are rejected immediately.
+        """
+        request_id = request_id or str(uuid.uuid4())
+        rejected = []
+        with self._queue_state_lock:
+            safety = cmd in SAFETY_COMMANDS
+            if safety:
+                self._safety_epoch += 1
+                safety_epoch = self._safety_epoch
+            else:
+                safety_epoch = 0
+            command = PowerSupplyCommand(
+                request_id=request_id,
+                source=source,
+                command=cmd,
+                args=tuple(args),
+                requested_at_utc=requested_at_utc or utc_now_iso(),
+                requested_monotonic_ns=(
+                    requested_monotonic_ns
+                    if requested_monotonic_ns is not None
+                    else time.perf_counter_ns()
+                ),
+                priority=0 if safety else 10,
+                safety_epoch=safety_epoch,
+            )
+            if not self.running or self.isFinished():
+                rejected.append(self._rejected(command, "power supply worker is stopped"))
+            elif safety:
+                self._pending_safety_count += 1
+                rejected.extend(
+                    self._drain_pending_normal_locked(
+                        "superseded by safety shutdown",
+                    )
+                )
+                self._command_queue.put(
+                    (command.priority, next(self._queue_counter), command)
+                )
+            elif self._pending_safety_count > 0:
+                rejected.append(self._rejected(command, "safety shutdown pending"))
+            elif self._commands_gated:
+                rejected.append(self._rejected(
+                    command,
+                    "commands gated until first valid sample in connection generation",
+                ))
+            else:
+                self._command_queue.put(
+                    (command.priority, next(self._queue_counter), command)
+                )
+        for result in rejected:
+            self.command_completed.emit(result)
+        return request_id
+
+    def request_safe_shutdown(
+        self, *, request_id: Optional[str] = None, source: str = "system",
+    ) -> str:
+        return self.queue_command(
+            "safe_shutdown", request_id=request_id, source=source,
+        )
+
+    def _reject_pending_normal(self, reason: str) -> None:
+        with self._queue_state_lock:
+            rejected = self._drain_pending_normal_locked(reason)
+        for result in rejected:
+            self.command_completed.emit(result)
+
+    def _drain_pending_normal_locked(self, reason: str) -> list:
+        retained = []
+        rejected = []
+        while True:
+            try:
+                item = self._command_queue.get_nowait()
+            except queue.Empty:
+                break
+            command = item[2]
+            if command.safety_critical:
+                retained.append(item)
+            else:
+                rejected.append(self._rejected(command, reason))
+            self._command_queue.task_done()
+        for item in retained:
+            self._command_queue.put(item)
+        return rejected
+
+    def _reject_all_pending(self, reason: str) -> None:
+        rejected = []
+        with self._queue_state_lock:
+            while True:
+                try:
+                    _priority, _sequence, command = self._command_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if command.safety_critical:
+                    self._pending_safety_count = max(
+                        0, self._pending_safety_count - 1,
+                    )
+                rejected.append(self._rejected(command, reason))
+                self._command_queue.task_done()
+        for result in rejected:
+            self.command_completed.emit(result)
+
+    @staticmethod
+    def _rejected(command: PowerSupplyCommand, reason: str) -> PowerSupplyCommandResult:
+        return PowerSupplyCommandResult(
+            request_id=command.request_id,
+            source=command.source,
+            command=command.command,
+            status="REJECTED",
+            requested={"args": list(command.args)},
+            effective={},
+            readback={},
+            error=reason,
+            completed_at_utc=utc_now_iso(),
+            completed_monotonic_ns=time.perf_counter_ns(),
+            safety_epoch=command.safety_epoch,
+        )
 
     def stop(self):
         """Stop the worker thread."""
-        self.running = False
+        with self._queue_state_lock:
+            self.running = False
+        self._stop_event.set()
 
 
 class ThermocoupleWorker(QThread):

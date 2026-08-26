@@ -21,7 +21,9 @@ from gui.heater_control.pid_controller import PIDController, PIDConfig, GainBand
 _STATE_COLORS = {
     "IDLE":     "#888888",
     "ARMED":    "#FF9800",
+    "STARTING": "#FF9800",
     "RUNNING":  "#4CAF50",
+    "STOPPING": "#FF9800",
     "COMPLETE": "#2196F3",
     "FAULT":    "#F44336",
     "STOPPED":  "#9E9E9E",
@@ -319,7 +321,9 @@ class PIDTab(QWidget):
         self.state_label.setText(state.controller_state)
         self.state_label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
-        if state.controller_state in ("RUNNING", "COMPLETE", "FAULT", "STOPPED"):
+        if state.controller_state in (
+            "STARTING", "RUNNING", "STOPPING", "COMPLETE", "FAULT", "STOPPED",
+        ):
             self.temp_label.setText(f"T: {state.measured_c:.2f} °C")
             self.error_label.setText(f"err: {state.error_c:+.2f} °C")
             self.voltage_label.setText(f"V-out: {state.output_v:.3f} V")
@@ -352,7 +356,7 @@ class PIDTab(QWidget):
         self.stop_btn.setEnabled(state in ("RUNNING", "ARMED"))
         self.reset_btn.setEnabled(state in ("STOPPED", "COMPLETE", "FAULT"))
 
-        editable = state not in ("RUNNING", "ARMED")
+        editable = state not in ("RUNNING", "ARMED", "STARTING", "STOPPING")
         for spin in (
             self.target_spin, self.hold_spin, self.margin_spin,
             self.max_v_spin, self.curr_spin, self.slew_spin,

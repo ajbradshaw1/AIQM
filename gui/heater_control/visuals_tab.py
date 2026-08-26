@@ -26,7 +26,8 @@ class VisualsTab(QWidget):
         self.psu_voltage = deque(maxlen=120)
         self.psu_current = deque(maxlen=120)
         self.psu_power = deque(maxlen=120)
-        self.psu_start = time.time()
+        self._psu_generation = None
+        self._psu_origin_ns = None
 
         # Temperature data buffers
         self.temp_time = deque(maxlen=240)
@@ -85,10 +86,17 @@ class VisualsTab(QWidget):
     # --- State update methods (called via signal fan-out) ---
 
     def update_psu_state(self, state: PowerSupplyState):
-        if not state.connected:
+        if not state.has_valid_reading or state.received_monotonic_ns is None:
             return
 
-        now = time.time() - self.psu_start
+        if self._psu_generation != state.connection_generation:
+            self._psu_generation = state.connection_generation
+            self._psu_origin_ns = state.received_monotonic_ns
+            self.psu_time.clear()
+            self.psu_voltage.clear()
+            self.psu_current.clear()
+            self.psu_power.clear()
+        now = (state.received_monotonic_ns - self._psu_origin_ns) / 1_000_000_000.0
         self.psu_time.append(now)
         self.psu_voltage.append(state.voltage_measured)
         self.psu_current.append(state.current_measured)

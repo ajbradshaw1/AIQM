@@ -2,7 +2,6 @@
 Power Supply tab widget.
 """
 
-import time
 from collections import deque
 
 from PyQt6.QtWidgets import (
@@ -16,6 +15,7 @@ import pyqtgraph as pg
 from gui.state import PowerSupplyState
 from gui.widgets import ValueDisplay, ControlPanel, ProtectionPanel
 from gui.heater_control.action_logger import ActionLogger
+from gui.heater_control.heater_commands import PowerSupplyCommandResult
 
 
 class PowerSupplyTab(QWidget):
@@ -31,7 +31,8 @@ class PowerSupplyTab(QWidget):
         self.advanced_mode = True
 
         # Live plot buffers
-        self.psu_start = time.time()
+        self._psu_generation = None
+        self._psu_origin_ns = None
         self.psu_time = deque(maxlen=120)
         self.psu_voltage = deque(maxlen=120)
         self.psu_current = deque(maxlen=120)
@@ -165,39 +166,27 @@ class PowerSupplyTab(QWidget):
     def _on_connect_clicked(self):
         if self.connect_btn.text() == "Connect":
             self.connect_requested.emit()
-            self.action_logger.log("Power Supply", "Connect", "Requested connection")
         else:
             self.disconnect_requested.emit()
-            self.action_logger.log("Power Supply", "Disconnect", "Requested disconnection")
 
     def _on_set_voltage(self, voltage: float):
         self.command_requested.emit("set_voltage", (voltage,))
-        self.action_logger.log("Power Supply", "Set Voltage", f"{voltage:.2f} V")
 
     def _on_set_current(self, current: float):
         self.command_requested.emit("set_current", (current,))
-        self.action_logger.log("Power Supply", "Set Current", f"{current:.3f} A")
 
     def _on_output_toggled(self, enabled: bool):
         cmd = "output_on" if enabled else "output_off"
         self.command_requested.emit(cmd, ())
-        self.action_logger.log(
-            "Power Supply",
-            "Output On" if enabled else "Output Off",
-            ""
-        )
 
     def _on_set_ovp(self, voltage: float):
         self.command_requested.emit("set_ovp", (voltage,))
-        self.action_logger.log("Power Supply", "Set OVP", f"{voltage:.1f} V")
 
     def _on_set_ocp(self, current: float):
         self.command_requested.emit("set_ocp", (current,))
-        self.action_logger.log("Power Supply", "Set OCP", f"{current:.2f} A")
 
     def _on_emergency_stop(self):
         self.command_requested.emit("emergency_stop", ())
-        self.action_logger.log("Power Supply", "Emergency Stop", "")
 
     def _toggle_view(self, advanced: bool):
         self.advanced_mode = advanced
@@ -214,6 +203,17 @@ class PowerSupplyTab(QWidget):
         """Handle state update from worker."""
         if not state.connected:
             self.status_label.setText(f"Error: {state.error}")
+            self.control_panel.mark_output_unknown()
+            self.voltage_display.set_color("#888")
+            self.current_display.set_color("#888")
+            return
+        if not state.has_valid_reading:
+            self.status_label.setText(
+                f"STALE — last poll failed: {state.error or 'no valid sample'}"
+            )
+            self.control_panel.mark_output_unknown()
+            self.voltage_display.set_color("#888")
+            self.current_display.set_color("#888")
             return
 
         self.status_label.setText(
@@ -228,20 +228,35 @@ class PowerSupplyTab(QWidget):
         self.voltage_sp_display.set_value(state.voltage_setpoint)
         self.current_sp_display.set_value(state.current_setpoint)
 
-        # Update controls
-        self.control_panel.update_state(state)
+        # Update controls only from field-specific readbacks. Output can be
+        # unknown/stale even when primary V/I/P is fresh.
+        if state.has_fresh_output:
+            self.control_panel.update_state(state)
+        else:
+            self.control_panel.mark_output_unknown()
         self.protection_panel.update_state(state)
 
         # Color code based on output state
-        if state.output_enabled:
+        if state.has_fresh_output and state.output_enabled:
             self.voltage_display.set_color("#4CAF50")
             self.current_display.set_color("#4CAF50")
         else:
             self.voltage_display.set_color("#888")
             self.current_display.set_color("#888")
 
-        # Update live plots
-        now = time.time() - self.psu_start
+        # Plot only fresh hardware samples. The X axis is process-monotonic,
+        # reset for every connection generation, so wall-clock corrections do
+        # not move points backwards.
+        if state.received_monotonic_ns is None:
+            return
+        if self._psu_generation != state.connection_generation:
+            self._psu_generation = state.connection_generation
+            self._psu_origin_ns = state.received_monotonic_ns
+            self.psu_time.clear()
+            self.psu_voltage.clear()
+            self.psu_current.clear()
+            self.psu_power.clear()
+        now = (state.received_monotonic_ns - self._psu_origin_ns) / 1_000_000_000.0
         self.psu_time.append(now)
         self.psu_voltage.append(state.voltage_measured)
         self.psu_current.append(state.current_measured)
@@ -252,8 +267,18 @@ class PowerSupplyTab(QWidget):
         self.i_curve.setData(t, list(self.psu_current))
         self.p_curve.setData(t, list(self.psu_power))
 
+    def on_command_result(self, result: PowerSupplyCommandResult) -> None:
+        if result.command not in ("output_on", "output_off"):
+            return
+        expected = result.command == "output_on"
+        actual = bool(result.readback.get("output_enabled", not expected))
+        self.control_panel.complete_output_request(result.confirmed, actual)
+
     def on_disconnected(self):
         """Reset UI on disconnect."""
         self.connect_btn.setText("Connect")
         self.status_label.setText("Disconnected")
         self.protection_panel.reset_initialized()
+        self.control_panel.mark_output_unknown()
+        self._psu_generation = None
+        self._psu_origin_ns = None
