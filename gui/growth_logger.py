@@ -34,6 +34,11 @@ from .equalizer_label_contract import (
     frame_rgb_sha256,
     validate_equalizer_payload,
 )
+from .rheed_intensity import (
+    INTENSITY_METRIC,
+    RheedIntensitySample,
+    RheedRoiDefinition,
+)
 
 
 log = logging.getLogger(__name__)
@@ -103,6 +108,18 @@ class GrowthLogger:
     AUTO_CAPTURE_TRANSACTION_SCHEMA_VERSION = 2
     HUMAN_LABELING_STATE_FILE = "human_labeling_state.json"
     HUMAN_LABELING_STATE_SCHEMA_VERSION = 1
+
+    RHEED_ROI_INTENSITY_FIELDS = [
+        "schema_version", "recorded_at_utc", "elapsed_s", "sample_idx",
+        "roi_definition_id", "roi_mode", "intensity_metric",
+        "captured_at_utc", "capture_sequence", "captured_monotonic_ns",
+        "capture_backend", "source_hwnd", "capture_geometry_id",
+        "frame_width", "frame_height", "view_segment_id",
+        "visual_history_generation", "region_count",
+        "regions_normalized_json", "pixel_count", "intensity_sum",
+        "intensity_mean", "relative_change_pct", "frame_age_ms",
+        "measurement_duration_ms",
+    ]
 
     # Source of truth for independent human primary judgments.  Unlike
     # events_labels.csv this file is never rewritten or keyed by event_idx:
@@ -1931,6 +1948,9 @@ class GrowthLogger:
         self._live_label_writer = None
         self._equalizer_calibration_file = None
         self._temporal_trace_file = None
+        self._rheed_roi_intensity_file = None
+        self._rheed_roi_intensity_writer = None
+        self._rheed_roi_definition_file = None
         self._calibration_journal_trusted = True
         self._commit_counter = 0
         self._heartbeat_counter = 0
@@ -1939,6 +1959,8 @@ class GrowthLogger:
         self._rheed_view_event_counter = 0
         self._live_label_counter = 0
         self._equalizer_calibration_event_counter = 0
+        self._rheed_roi_sample_counter = 0
+        self._rheed_roi_sample_keys: set[tuple[str, str, int, str, int]] = set()
         self._basis_bundle_ids_recorded: set[str] = set()
         # A fresh runtime identifier is intentionally not persisted across
         # process restarts.  Blind-label provenance is valid only after this
@@ -2071,6 +2093,20 @@ class GrowthLogger:
             self._session_dir / "temporal_trace.jsonl",
             "a", encoding="utf-8", newline="\n",
         )
+        self._rheed_roi_intensity_file = open(
+            self._session_dir / "rheed_roi_intensity.csv",
+            "w", newline="", encoding="utf-8",
+        )
+        self._rheed_roi_intensity_writer = csv.DictWriter(
+            self._rheed_roi_intensity_file,
+            fieldnames=self.RHEED_ROI_INTENSITY_FIELDS,
+        )
+        self._rheed_roi_intensity_writer.writeheader()
+        self._rheed_roi_intensity_file.flush()
+        self._rheed_roi_definition_file = open(
+            self._session_dir / "rheed_roi_definitions.jsonl",
+            "a", encoding="utf-8", newline="\n",
+        )
         self.log_temporal_event(
             "session_start", "gui",
             details={"session_dir": str(self._session_dir)},
@@ -2083,9 +2119,151 @@ class GrowthLogger:
         self._rheed_view_event_counter = 0
         self._live_label_counter = 0
         self._equalizer_calibration_event_counter = 0
+        self._rheed_roi_sample_counter = 0
+        self._rheed_roi_sample_keys.clear()
         self._sensor_row_counter = 0
         self._session_start = datetime.now()
         self._entries = []
+
+    def record_rheed_roi_definition(
+        self,
+        event: str,
+        roi: RheedRoiDefinition,
+        *,
+        reason: str = "",
+    ) -> bool:
+        """Append one ROI lifecycle event with its complete source binding."""
+        if self._rheed_roi_definition_file is None:
+            return False
+        if not isinstance(roi, RheedRoiDefinition):
+            log.error("Rejected non-typed RHEED ROI definition payload")
+            return False
+        event_name = str(event or "").strip()
+        if event_name not in {"defined", "activated", "superseded", "invalidated", "cleared"}:
+            log.error("Rejected unknown RHEED ROI lifecycle event: %s", event_name)
+            return False
+        payload = {
+            "schema_version": 1,
+            "event": event_name,
+            "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+            "reason": str(reason or ""),
+            "roi": roi.to_dict(),
+        }
+        try:
+            self._rheed_roi_definition_file.write(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+            )
+            self._rheed_roi_definition_file.flush()
+        except OSError as exc:
+            log.error("Could not append RHEED ROI definition event: %s", exc)
+            return False
+        self.log_temporal_event(
+            "rheed_roi_definition_changed",
+            "rheed",
+            details={
+                "event": event_name,
+                "reason": str(reason or ""),
+                "roi_definition_id": roi.roi_definition_id,
+                "roi_mode": roi.mode,
+                "definition_capture_sequence": roi.definition_capture_sequence,
+            },
+        )
+        return True
+
+    def record_rheed_roi_intensity(
+        self,
+        sample: RheedIntensitySample,
+        *,
+        elapsed_s: float,
+        view_segment_id: Optional[int] = None,
+        visual_history_generation: int = 0,
+    ) -> bool:
+        """Append one unique capture-bound ROI intensity sample and flush."""
+        if self._rheed_roi_intensity_writer is None:
+            return False
+        if not isinstance(sample, RheedIntensitySample):
+            log.error("Rejected non-typed RHEED ROI intensity payload")
+            return False
+        numeric = (
+            sample.intensity_sum,
+            sample.intensity_mean,
+            sample.relative_change_pct,
+            sample.frame_age_ms,
+            sample.measurement_duration_ms,
+            float(elapsed_s),
+        )
+        if (
+            sample.capture_sequence <= 0
+            or sample.pixel_count <= 0
+            or not all(math.isfinite(float(value)) for value in numeric)
+            or float(elapsed_s) < 0.0
+        ):
+            log.error("Rejected invalid RHEED ROI intensity sample")
+            return False
+        roi = sample.roi
+        key = (
+            roi.roi_definition_id,
+            sample.capture_backend,
+            sample.source_hwnd,
+            sample.captured_at_utc,
+            sample.capture_sequence,
+        )
+        if key in self._rheed_roi_sample_keys:
+            return False
+        sample_idx = self._rheed_roi_sample_counter + 1
+        row = {
+            "schema_version": 1,
+            "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+            "elapsed_s": f"{float(elapsed_s):.6f}",
+            "sample_idx": sample_idx,
+            "roi_definition_id": roi.roi_definition_id,
+            "roi_mode": roi.mode,
+            "intensity_metric": INTENSITY_METRIC,
+            "captured_at_utc": sample.captured_at_utc,
+            "capture_sequence": sample.capture_sequence,
+            "captured_monotonic_ns": sample.captured_monotonic_ns,
+            "capture_backend": sample.capture_backend,
+            "source_hwnd": sample.source_hwnd,
+            "capture_geometry_id": sample.capture_geometry_id,
+            "frame_width": roi.frame_width,
+            "frame_height": roi.frame_height,
+            "view_segment_id": "" if view_segment_id is None else int(view_segment_id),
+            "visual_history_generation": int(visual_history_generation),
+            "region_count": len(roi.regions),
+            "regions_normalized_json": json.dumps(
+                [region.to_dict() for region in roi.regions],
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "pixel_count": sample.pixel_count,
+            "intensity_sum": f"{sample.intensity_sum:.9f}",
+            "intensity_mean": f"{sample.intensity_mean:.9f}",
+            "relative_change_pct": f"{sample.relative_change_pct:.9f}",
+            "frame_age_ms": f"{sample.frame_age_ms:.6f}",
+            "measurement_duration_ms": f"{sample.measurement_duration_ms:.6f}",
+        }
+        try:
+            self._rheed_roi_intensity_writer.writerow(row)
+            self._rheed_roi_intensity_file.flush()
+        except OSError as exc:
+            log.error("Could not append RHEED ROI intensity sample: %s", exc)
+            return False
+        self._rheed_roi_sample_counter = sample_idx
+        self._rheed_roi_sample_keys.add(key)
+        self.log_temporal_event(
+            "rheed_roi_intensity_measured",
+            "rheed",
+            details={
+                "roi_definition_id": roi.roi_definition_id,
+                "capture_sequence": sample.capture_sequence,
+                "captured_monotonic_ns": sample.captured_monotonic_ns,
+                "measured_monotonic_ns": sample.measured_monotonic_ns,
+                "frame_age_ms": sample.frame_age_ms,
+                "measurement_duration_ms": sample.measurement_duration_ms,
+                "pixel_count": sample.pixel_count,
+            },
+        )
+        return True
 
     def log_sensors(
         self, pyro_temp, elapsed_s,
@@ -4433,6 +4611,8 @@ class GrowthLogger:
             self._live_label_file,
             self._equalizer_calibration_file,
             self._temporal_trace_file,
+            self._rheed_roi_intensity_file,
+            self._rheed_roi_definition_file,
         ):
             if f and not f.closed:
                 f.close()
@@ -4454,6 +4634,9 @@ class GrowthLogger:
         self._live_label_writer = None
         self._equalizer_calibration_file = None
         self._temporal_trace_file = None
+        self._rheed_roi_intensity_file = None
+        self._rheed_roi_intensity_writer = None
+        self._rheed_roi_definition_file = None
         # NOTE: _session_dir and _entries intentionally preserved
         # so Export Growth Log works after STOP.
 

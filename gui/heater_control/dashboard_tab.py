@@ -83,9 +83,18 @@ class DashboardTab(QWidget):
     def update_psu_state(self, state: PowerSupplyState):
         if not state.connected:
             self.psu_status.setText(f"Disconnected" if not state.error else f"Error: {state.error}")
+            self._mark_output_unknown()
+            return
+        if not state.has_valid_reading:
+            self.psu_status.setText(
+                f"STALE: {state.error or 'waiting for a valid PSU sample'}"
+            )
+            self._mark_output_unknown()
             return
 
-        self.psu_status.setText("Connected")
+        self.psu_status.setText(
+            f"Connected ⚠ {state.error}" if state.error else "Connected"
+        )
 
         self.d_voltage.set_value(state.voltage_measured)
         self.d_current.set_value(state.current_measured)
@@ -93,7 +102,9 @@ class DashboardTab(QWidget):
         self.d_vsp.set_value(state.voltage_setpoint)
         self.d_isp.set_value(state.current_setpoint)
 
-        if state.output_enabled:
+        if not state.has_fresh_output:
+            self._mark_output_unknown()
+        elif state.output_enabled:
             self.output_badge.setText("OUTPUT ON")
             self.output_badge.setStyleSheet(
                 "background-color: #4CAF50; color: white; padding: 6px;"
@@ -107,6 +118,14 @@ class DashboardTab(QWidget):
             )
             self.d_voltage.set_color("#888")
             self.d_current.set_color("#888")
+
+    def _mark_output_unknown(self) -> None:
+        self.output_badge.setText("OUTPUT UNKNOWN / STALE")
+        self.output_badge.setStyleSheet(
+            "background-color: #FF9800; color: black; padding: 6px;"
+        )
+        self.d_voltage.set_color("#888")
+        self.d_current.set_color("#888")
 
     def update_temp_state(self, state: TemperatureState):
         if not state.connected:

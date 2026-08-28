@@ -68,15 +68,16 @@ class ConfigTab(QWidget):
         self.interval_spin.setSuffix(" s")
         self.interval_spin.setDecimals(1)
         self.interval_spin.setSingleStep(0.5)
+        self.interval_spin.setEnabled(False)
         form.addRow("Interval:", self.interval_spin)
 
         rec_row = QHBoxLayout()
-        self.record_btn = QPushButton("Start Recording")
-        self.record_btn.setCheckable(True)
-        self.record_btn.clicked.connect(self._on_record_toggled)
+        self.record_btn = QPushButton("Mandatory recording is automatic")
+        self.record_btn.setCheckable(False)
+        self.record_btn.setEnabled(False)
         rec_row.addWidget(self.record_btn)
 
-        self.rec_status = QLabel("")
+        self.rec_status = QLabel("Every successful PSU poll is written while connected.")
         rec_row.addWidget(self.rec_status)
         rec_row.addStretch()
         form.addRow("", rec_row)
@@ -118,6 +119,11 @@ class ConfigTab(QWidget):
         self.psu_poll_spin.setSingleStep(0.1)
         self.psu_poll_spin.setDecimals(1)
         self.psu_poll_spin.setSuffix(" s")
+        self.psu_poll_spin.editingFinished.connect(
+            lambda: self._log_config_change(
+                "psu_poll_interval_s", self.psu_poll_spin.value(),
+            )
+        )
         form.addRow("PSU poll interval:", self.psu_poll_spin)
 
         self.tc_poll_spin = QDoubleSpinBox()
@@ -126,6 +132,11 @@ class ConfigTab(QWidget):
         self.tc_poll_spin.setSingleStep(0.1)
         self.tc_poll_spin.setDecimals(1)
         self.tc_poll_spin.setSuffix(" s")
+        self.tc_poll_spin.editingFinished.connect(
+            lambda: self._log_config_change(
+                "thermocouple_poll_interval_s", self.tc_poll_spin.value(),
+            )
+        )
         form.addRow("Thermocouple poll interval:", self.tc_poll_spin)
 
         note = QLabel("Changes take effect on next connect.")
@@ -144,6 +155,11 @@ class ConfigTab(QWidget):
         self.hard_cutoff_spin.setSingleStep(5.0)
         self.hard_cutoff_spin.setDecimals(1)
         self.hard_cutoff_spin.setSuffix(" °C")
+        self.hard_cutoff_spin.editingFinished.connect(
+            lambda: self._log_config_change(
+                "pid_hard_cutoff_c", self.hard_cutoff_spin.value(),
+            )
+        )
         form.addRow("PID hard cutoff:", self.hard_cutoff_spin)
 
         note = QLabel(
@@ -161,32 +177,29 @@ class ConfigTab(QWidget):
     # ------------------------------------------------------------------
 
     def _on_record_toggled(self, checked: bool):
-        if checked:
-            interval_ms = int(self.interval_spin.value() * 1000)
-            self._rec_count = 0
-            self._rec_timer.start(interval_ms)
-            self.record_btn.setText("Stop Recording")
-            self.record_btn.setStyleSheet("background-color: #d32f2f; color: white;")
-            self.interval_spin.setEnabled(False)
-            self.action_logger.log(
-                "Recording", "Started", f"Interval: {self.interval_spin.value():.1f}s"
-            )
-        else:
-            self._rec_timer.stop()
-            self.record_btn.setText("Start Recording")
-            self.record_btn.setStyleSheet("")
-            self.interval_spin.setEnabled(True)
-            self.rec_status.setText("")
-            self.action_logger.log(
-                "Recording", "Stopped", f"{self._rec_count} measurements taken"
-            )
-            if self.auto_export_check.isChecked():
-                self._auto_export()
+        # Kept as a compatibility slot for old notebooks/UI automation. The
+        # mandatory session recorder cannot be started or stopped here.
+        self._rec_timer.stop()
+        self.record_btn.setChecked(False)
+        self.action_logger.log(
+            "Recording", "Mandatory Audit Unchanged",
+            "Heater telemetry is automatic while the PSU is connected",
+        )
 
     def _on_record_tick(self):
-        self._rec_count += 1
-        self.action_logger.log("Measurement", "Auto-Record", f"#{self._rec_count}")
-        self.rec_status.setText(f"#{self._rec_count}")
+        # No cached-state sampling: telemetry is written from each successful
+        # PowerSupplyWorker poll instead.
+        self._rec_timer.stop()
+
+    def _log_config_change(self, name: str, value: float) -> None:
+        if self.action_logger.session.started:
+            self.action_logger.immediate_action(
+                "Config",
+                "Apply Setting",
+                source="manual_ui",
+                requested={name: value},
+                effective={name: value},
+            )
 
     def _on_browse(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Save Folder")

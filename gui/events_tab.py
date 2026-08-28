@@ -77,6 +77,7 @@ from gui.growth_logger import (
     EVENT_STATE_KEPT_EXPLICIT,
     GrowthLogger,
 )
+from gui.classifier_repository import resolve_ai_repo_root
 from gui.widgets import ScalingImageLabel
 
 
@@ -1494,37 +1495,10 @@ class EventsTab(QWidget):
     # === (per-event classify button + Equalizer launcher for labeling) ===
     # =====================================================================
 
-    # Known AI_for_quantum clone locations, in preference order.
-    # Extend this list as new lab machines onboard rather than requiring
-    # each site to set AI_REPO_ROOT. Same pattern as ElogReader's
-    # KNOWN_LOG_DIRS (drivers/evap_control.py).
-    _KNOWN_AI_REPO_ROOTS = [
-        # Bulbasaur (O-MBE)
-        r"C:\Users\Lab10\AI_for_quantum",
-        # Ch-MBE (Omicron chalcogenide MBE) — added 2026-07-21
-        r"C:\Users\Omicron\AI_for_quantum",
-        # AJ's Mac dev clone
-        "/Users/aj/ai-for-quantum",
-    ]
-
     @staticmethod
     def _default_ai_repo_root() -> "Path":
-        """Resolve the AI_for_quantum repo location for this machine.
-
-        Precedence:
-          1. ``AI_REPO_ROOT`` env var — per-machine escape hatch
-          2. First existing dir from ``_KNOWN_AI_REPO_ROOTS``
-          3. First entry as fallback (error message will point at a
-             concrete path we tried)
-        """
-        import os
-        env = os.environ.get("AI_REPO_ROOT")
-        if env:
-            return Path(env)
-        for candidate in EventsTab._KNOWN_AI_REPO_ROOTS:
-            if Path(candidate).exists():
-                return Path(candidate)
-        return Path(EventsTab._KNOWN_AI_REPO_ROOTS[0])
+        """Resolve the Classifier2 checkout through the shared policy."""
+        return resolve_ai_repo_root()
 
     def _get_classifier(self):
         """Lazy-load ClassifierBridge on first call. Cache for subsequent calls.
@@ -1540,11 +1514,6 @@ class EventsTab(QWidget):
         try:
             from gui.classifier_bridge import ClassifierBridge
             repo_root = self._default_ai_repo_root()
-            if not repo_root.exists():
-                raise FileNotFoundError(
-                    f"AI_for_quantum repo not found at {repo_root}. "
-                    f"Clone it or set AI_REPO_ROOT env var."
-                )
             self._classifier = ClassifierBridge(repo_root)
             return self._classifier
         except Exception as e:

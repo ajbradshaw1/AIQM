@@ -43,6 +43,27 @@ The two apps share only `gui/state.py`, `gui/widgets.py`, and
 the heater-control dashboard is v4 closed-loop infrastructure for the
 AI-Scientist mode roadmap.
 
+### Heater audit and time reference
+
+The Hardware Control Dashboard creates a mandatory session directory before
+its first PSU connection under `logs/heater/heater_<UTC>_<UUID>/` (override
+the root with `AI4MBE_HEATER_LOG_ROOT`). It continuously appends every valid
+OWON V/I/P poll to `heater_telemetry.csv` and records command
+`REQUESTED`/`CONFIRMED`/`FAILED`/`REJECTED` events in
+`heater_actions.csv`; clearing the Action Log tab only clears its UI table.
+
+OWON provides no device timestamp. `primary_completed_*` identifies completion
+of the primary `MEAS:ALL?` V/I/P query. `received_at_utc`,
+`received_monotonic_ns`, and `read_duration_ms` describe completion of the full
+host query round after output/setpoint/protection queries and are intended for
+cross-log correlation. Field-specific sequences, validity, and ages must be
+used before interpreting an output or setting readback; stale output is shown
+as unknown. `perf_counter_ns` fields are process-local and are authoritative
+for order, duration, sample age, PID timing, and plot X axes. Disconnecting or closing
+requires confirmed `OUTP OFF`, `VSET=0`, and `ISET=0` readback. These paths
+have fake-device tests only on development machines and still require a
+separate laboratory validation before controlling a real heater.
+
 ## OMBE Growth Monitor — what it does
 
 Automates the growth-log workflow during an MBE growth session:

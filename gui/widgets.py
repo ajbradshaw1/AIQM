@@ -95,6 +95,7 @@ class ControlPanel(QGroupBox):
 
         # Prevents the poll loop from fighting the button for 2 s after a click
         self._output_pending = False
+        self._confirmed_output = False
         self._pending_timer = QTimer(self)
         self._pending_timer.setSingleShot(True)
         self._pending_timer.setInterval(2000)
@@ -110,11 +111,27 @@ class ControlPanel(QGroupBox):
         enabled = self.output_btn.isChecked()
         self._output_pending = True
         self._pending_timer.start()
-        self._update_output_button(enabled)
+        # A click is only a request. Keep the visible/checkable state at the
+        # last hardware-confirmed value until the worker's forced readback.
+        self.output_btn.setChecked(self._confirmed_output)
+        self.output_btn.setEnabled(False)
+        self.output_btn.setText(
+            "REQUESTING OUTPUT ON..." if enabled else "REQUESTING OUTPUT OFF..."
+        )
         self.output_toggled.emit(enabled)
 
     def _clear_output_pending(self):
+        # Timeout is not success. Revert to the last confirmed value.
+        self.complete_output_request(False, self._confirmed_output)
+
+    def complete_output_request(self, confirmed: bool, actual: bool) -> None:
+        self._pending_timer.stop()
         self._output_pending = False
+        self.output_btn.setEnabled(True)
+        if confirmed:
+            self._confirmed_output = bool(actual)
+        self.output_btn.setChecked(self._confirmed_output)
+        self._update_output_button(self._confirmed_output)
 
     def _update_output_button(self, enabled: bool):
         if enabled:
@@ -126,16 +143,26 @@ class ControlPanel(QGroupBox):
             self.output_btn.setText("OUTPUT OFF")
             self.output_btn.setStyleSheet("background-color: #666; color: white;")
 
+    def mark_output_unknown(self) -> None:
+        """Do not present an old OUTP? value as current hardware state."""
+        self._pending_timer.stop()
+        self._output_pending = False
+        self._confirmed_output = False
+        self.output_btn.setChecked(False)
+        self.output_btn.setEnabled(False)
+        self.output_btn.setText("OUTPUT UNKNOWN / STALE")
+        self.output_btn.setStyleSheet(
+            "background-color: #FF9800; color: black; font-weight: bold;"
+        )
+
     def update_state(self, state: PowerSupplyState):
         """Update controls to reflect current state."""
         if self._output_pending:
-            # Hardware has caught up — stop blocking updates
-            if state.output_enabled == self.output_btn.isChecked():
-                self._pending_timer.stop()
-                self._output_pending = False
-        else:
-            self.output_btn.setChecked(state.output_enabled)
-            self._update_output_button(state.output_enabled)
+            return
+        self.output_btn.setEnabled(True)
+        self._confirmed_output = bool(state.output_enabled)
+        self.output_btn.setChecked(state.output_enabled)
+        self._update_output_button(state.output_enabled)
 
 
 class ProtectionPanel(QGroupBox):

@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from gui.state import ActionLogEntry
-from gui.heater_control.action_logger import ActionLogger
+from gui.heater_control.action_logger import ActionLogger, MAX_ENTRIES
 
 
 class ActionLogTab(QWidget):
@@ -65,6 +65,8 @@ class ActionLogTab(QWidget):
 
     def _on_entry_added(self, entry: ActionLogEntry):
         """Append a new row to the table."""
+        if self.table.rowCount() >= MAX_ENTRIES:
+            self.table.removeRow(0)
         row = self.table.rowCount()
         self.table.insertRow(row)
 
