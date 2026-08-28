@@ -539,7 +539,7 @@ def run_performance_probe(
                     "event_id": selected_id,
                     "base_revision_id": current.get("revision_id", ""),
                     "actor": actor,
-                    "changes": {"comment": comment, "reviewer": actor},
+                    "changes": {"comment": comment},
                 }
                 result, elapsed_ms = _timed(lambda command=command: store.apply_revision(command))
                 current = result["event"]
