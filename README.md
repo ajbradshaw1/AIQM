@@ -37,7 +37,10 @@ Full installation, update, and uninstall details are in the
 
 - On GitHub: [English PDF operator manual](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf)
 - Searchable on GitHub: [English Markdown manual](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.md)
-- Earlier edition: [bilingual PDF manual](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
+- Historical v1 reference only: the
+  [bilingual interval-labeling manual](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
+  does not describe the current point-event workflow and must not be used as
+  operating instructions.
 - After installation: use the **AI4MBE Operator Manual** Desktop shortcut, or
   open `docs\RHEED_GUI_Postprocessing_Labeling_User_Manual_EN.pdf` below the
   installation folder you selected.
@@ -67,7 +70,7 @@ For a developer clone, double-click
 - **Ch-MBE Growth Monitor** starts the live acquisition GUI with the chamber
   fixed to Ch-MBE and prevents a second competing Ch-MBE instance.
 - **RHEED Post-processing Labeler** builds, opens, reviews, and validates
-  offline RHEED point events and runs exact-frame Equalizer fits.
+  offline RHEED point-event annotations.
 - **AI4MBE Operator Manual** opens the English PDF guide.
 - **Uninstall AI4MBE Growth Monitor** removes program files and shortcuts while
   preserving experiment sessions and launcher logs.
@@ -93,16 +96,16 @@ and a constrained
 [AI prompt pack](docs/RHEED_GUI_Postprocessing_Labeling_AI_Prompt_Pack_EN.md)
 are provided alongside it. The guide covers the shared workflow once and
 branches explicitly where O-MBE and Ch-MBE differ; every numbered chapter
-begins with an `In brief` summary. The earlier
-[bilingual edition](docs/RHEED_GUI_Postprocessing_Labeling_User_Manual.pdf)
-remains available.
+begins with an `In brief` summary. The historical bilingual v1 interval manual
+remains available only for read-only legacy interpretation; it is not current
+operating guidance.
 
 ## Two GUI Applications
 
 | Product | Launch | Window title | Tabs |
 |---|---|---|---|
-| **O-MBE Growth Monitor** (primary product) | double-click `Start O-MBE Growth Monitor.cmd` | "Oxide MBE Growth Monitor" | Monitor / Direct-read / Events / Scrubber / Live Equalizer / Session |
-| **Ch-MBE Growth Monitor** | double-click `Start Ch-MBE Growth Monitor.cmd` | "Chalcogenide MBE Growth Monitor" | Monitor / Direct-read / Events / Scrubber / Live Equalizer / Session |
+| **O-MBE Growth Monitor** (primary product) | double-click `Start O-MBE Growth Monitor.cmd` | "Oxide MBE Growth Monitor" | Monitor / Direct-read / Events / Scrubber / Session |
+| **Ch-MBE Growth Monitor** | double-click `Start Ch-MBE Growth Monitor.cmd` | "Chalcogenide MBE Growth Monitor" | Monitor / Direct-read / Events / Scrubber / Session |
 | **Hardware Control Dashboard** (dummy-loop heater control) | `python gui.py` | "Hardware Control Dashboard" | RHEED / Pyrometer / PSU / Thermocouple / Dashboard / Visuals / Config / PID / Action Log |
 
 The two apps share only `gui/state.py`, `gui/widgets.py`, and
@@ -140,8 +143,9 @@ Automates the growth-log workflow during an MBE growth session:
 - **Sensor log** — 1 Hz CSV of pyrometer temperature, MISTRAL V/I,
   chamber pressure, and (in `elog` mode) substrate manipulator
   temperature + active cell PVs + plasma source state.
-- **Auto-capture** — pixel-diff change detector flags RHEED frame
-  buffers around detected reconstruction transitions.
+- **Auto-capture** — translation-insensitive change detector flags candidate
+  RHEED change points and records registration diagnostics with their frame
+  buffers. The detector does not assign a physical cause or reconstruction.
 - **Commit log** — timestamped grower notes via the LOG ENTRY button
   capture the moment with the current sensor snapshot.
 - **RHEED view and image-usability log** — explicit gun-alignment boundaries,
@@ -189,12 +193,16 @@ Each session creates a directory containing:
 - `auto_capture_events.csv` — detector-flagged events with buffer dumps
 - `manual_events.csv` — one-click grower event marks
 - `heartbeat_log.csv` — periodic captures with camera, timing, geometry,
-  view-state, and accepted Equalizer calibration provenance when available
+  view-state, and separate diagnostic Equalizer calibration provenance when
+  available; this is not an event-label input
 - `rheed_view_events.csv` — alignment, visual generation, history, and
   explicit `qc_pass`/`qc_reject` image-usability event names retained for
   file compatibility
 - `rheed_event_revisions.jsonl` — append-only point-event review history
-- `rheed_point_events.json` — rebuildable current point-event state
+- `rheed_point_events.json` — rebuildable `rheed-point-events-v2` state,
+  including the fixed initial state (`1x1` present, clarity unknown), event
+  decisions, concise semantic labels, derived full-state intervals, and their
+  representative Anchors. The initial state is not an `appeared` event.
 - `rheed_roi_intensity.csv` — one capture-bound row per valid ROI sample
 - `rheed_roi_definitions.jsonl` — append-only ROI definition changes
 - `frames/` — RHEED frame PNGs (heartbeat + per-event buffers)
@@ -239,7 +247,7 @@ scripts/                      CLI utilities, smoke tests, validation reports
   rheed_change_detector*.py   Offline detector + HTML validation report
   plot_temperature.py         Post-session T vs t plot from sensor_log.csv
   vimba_*.py                  Allied Vision direct-camera demos
-  equalizer_*.py              Hybrid-basis labeling-game prototype
+  equalizer_*.py              Separate diagnostic prototype; not event labeling
   ...
 
 tools/rheed_postprocessing_labeling/
@@ -247,7 +255,7 @@ tools/rheed_postprocessing_labeling/
   desktop_launcher.py         Windows build/open/validate application
   point_events.py             Point-event import, revision, and validation
   loopback_service.py         Token-protected 127.0.0.1 report service
-  offline_equalizer.py        Exact-frame four-basis Equalizer fit
+  offline_equalizer.py        Legacy separate diagnostic; not event labeling
   performance_probe.py        Large-session report performance probe
   templates/timeline.html     Interactive timeline and Unfinished queue
   tests/                      Synthetic offline unit and browser tests
@@ -288,14 +296,21 @@ diagnostic charts and reports after the fact — no lab PC required.
 | `scripts/plot_temperature.py` | Single T-vs-t PNG | Quick temperature-trace view of one session |
 | `scripts/growth_profile_explorer.py` | 5 PNGs + self-contained HTML report in `<session>/analysis/` | Full session review: T + std band + event overlays + classifier trajectory + auto-capture score distribution + grower-vs-classifier agreement scatter. HTML wraps all 5 with base64-embedded PNGs and a session metadata header — emailable, no external dependencies |
 | `scripts/validate_angle_robustness.py` | HTML report + CSV | Classifier sensitivity to camera-angle rotations against an archived session |
-| `python -m tools.rheed_postprocessing_labeling desktop` | Interactive local report + JSON/CSV sidecar | Review `manual`, `auto_capture`, and `posthoc` RHEED point events; run exact-frame Equalizer through the desktop launcher; preserve legacy interval annotations as read-only; see `tools/rheed_postprocessing_labeling/README.md` |
+| `python -m tools.rheed_postprocessing_labeling desktop` | Interactive local report + JSON/CSV sidecar | Review the explicit initial state plus `manual`, `auto_capture`, and `posthoc` RHEED change events; confirm/reject automatic candidates; edit semantic labels and interval Anchors; preserve legacy interval annotations as read-only; see `tools/rheed_postprocessing_labeling/README.md` |
 
-Equalizer is an independent four-basis visual fit, not model probabilities,
-area fractions, or a human reconstruction label; HTR remains logically null.
-Completing an event requires a reviewer, a nonblank comment, an exact saved
-frame, and a valid Equalizer result. Desktop write controls are served only on
-`127.0.0.1` and verify the original BMP or PNG; static HTML and legacy interval
-annotations remain read-only.
+The `rheed-point-events-v2` vocabulary is intentionally small: reconstruction
+`appeared`/`disappeared` for `1x1`, Twinned `2x1`, `c(6x2)`, RT13, or HTR;
+and pattern clarity `became` Good/Bad. Good/Bad is not image usability,
+chemical surface quality, or FeSe film quality. The initial state is explicitly
+`1x1 present` with unknown clarity and is not an appearance event. Automatic
+candidates require an explicit Confirmed/Rejected decision. Accepted changes
+are replayed into complete state intervals. A confirmed Complete change event
+requires reviewer, semantic label, and a representative saved-frame Anchor in
+its derived interval; the initial-state item needs reviewer and first-interval
+Anchor only. Comment is optional. Editing completed review content reopens Draft. Durable revisions
+and Complete use the desktop service on `127.0.0.1`; static HTML supports only
+local Draft editing. Equalizer, if used as a diagnostic elsewhere, is separate
+and is not shown or stored as an event-label input.
 
 ```bash
 # Five-chart + HTML report

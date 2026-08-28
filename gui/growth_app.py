@@ -17,12 +17,12 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMainWindow
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMainWindow
 from PyQt6.QtCore import QEvent, pyqtSlot, Qt, QTimer
 
 log = logging.getLogger(__name__)
 
-from gui.auto_capture import AutoCaptureEngine, PixelDiffChangeDetector
+from gui.auto_capture import AutoCaptureEngine
 from gui.classifier_repository import resolve_ai_repo_root
 from gui.equalizer_alignment import (
     BasisBundle,
@@ -32,6 +32,7 @@ from gui.equalizer_alignment import (
 )
 from gui.growth_logger import (
     EVENT_STATE_DISCARDED,
+    EVENT_STATE_KEPT_EXPLICIT,
     RHEED_VIEW_EVENT_CURRENT_ADJUSTED,
     RHEED_VIEW_EVENT_ENERGY_ADJUSTED,
     RHEED_VIEW_EVENT_HISTORY_RESET,
@@ -240,7 +241,7 @@ class GrowthApp(QMainWindow):
         self._heartbeat_timer.setInterval(int(HEARTBEAT_INTERVAL_SECONDS * 1000))
         self._heartbeat_timer.timeout.connect(self._on_heartbeat)
 
-        # Auto-capture engine — shadow-mode pixel-diff change detection.
+        # Auto-capture engine — translation-registered RHEED change proposals.
         # Engine is disarmed at construction; armed in _on_start, disarmed
         # in _on_stop. Frame ingestion happens in _on_camera_state.
         self.auto_capture_engine = AutoCaptureEngine(
@@ -249,15 +250,6 @@ class GrowthApp(QMainWindow):
             warmup_frames=AUTO_CAPTURE_BUFFER_SIZE,
             adaptive_sigma=AUTO_CAPTURE_ADAPTIVE_SIGMA,
             adaptive_floor=AUTO_CAPTURE_ADAPTIVE_FLOOR,
-        )
-        # Hardcoded opt-in for specular-anchored ROI + std-of-|diff|;
-        # remove these kwargs to fall back to full-frame mean-of-|diff|.
-        self.auto_capture_engine.set_detector(
-            PixelDiffChangeDetector(
-                buffer_size=AUTO_CAPTURE_BUFFER_SIZE,
-                score_metric="std",
-                roi_mode="specular",
-            ),
         )
         self.auto_capture_engine.frame_captured.connect(
             self._on_auto_capture_event,
@@ -321,15 +313,9 @@ class GrowthApp(QMainWindow):
         self.monitor.live_equalizer_tab.calibration_invalidation_requested.connect(
             self._on_equalizer_calibration_invalidation,
         )
-        self.monitor.events_tab.retrospective_calibration_accept_requested.connect(
-            self._on_retrospective_calibration_accept,
-        )
-        self.monitor.events_tab.retrospective_calibration_invalidation_requested.connect(
-            self._on_retrospective_calibration_invalidation,
-        )
-        self.monitor.events_tab.retrospective_calibration_resolve_requested.connect(
-            self._on_retrospective_calibration_resolve,
-        )
+        # Event review no longer launches or stores retrospective Equalizer
+        # measurements.  The separate Live Equalizer remains available for
+        # non-labeling diagnostics, but it is not part of event semantics.
         self.monitor.auto_capture_pause_toggled.connect(
             self._on_auto_capture_pause_toggled,
         )
@@ -344,10 +330,9 @@ class GrowthApp(QMainWindow):
         self.auto_capture_engine.frame_captured.connect(
             self.monitor.events_tab.on_frame_captured,
         )
-        # Events tab also reflects banner Keep/Discard decisions in its
-        # state column + unreviewed badge. Same connection-order reasoning:
-        # GrowthApp's handler (above) writes the CSV first, the tab updates
-        # its UI second using the state arg from the signal payload.
+        # Events tab reloads after the banner's Confirm/Reject decision. Same
+        # connection-order reasoning: GrowthApp first writes both the legacy
+        # storage state and the v2 event revision, then the tab re-reads them.
         self.monitor.auto_capture_decision.connect(
             self.monitor.events_tab.on_decision_made,
         )
@@ -1913,100 +1898,6 @@ class GrowthApp(QMainWindow):
 
     # --- LIVE EQUALIZER save (Jul 10 2026 workstream #4) -------------------
 
-    def _select_live_equalizer_point_event(
-        self,
-        *,
-        snapshot: RheedFrameSnapshot,
-        actor: str,
-        pyro_temp: Optional[float],
-        voltage_v: Optional[float],
-        current_a: Optional[float],
-        psu_source: str,
-    ) -> Optional[str]:
-        """Require an explicit event choice before saving Equalizer output.
-
-        The newest unfinished manual mark is the first choice, but it is never
-        selected silently.  This method returns ``None`` when the grower
-        cancels and ``""`` only for older test/compatibility loggers that have
-        no point-event API.
-        """
-        get_events = getattr(self.growth_log, "unfinished_point_events", None)
-        if get_events is None:
-            return ""
-        events = list(get_events())
-        labels: list[str] = []
-        ids: list[str] = []
-        for event in events:
-            source = event.get("source", {})
-            kind = str(source.get("kind") or "event")
-            elapsed = source.get("original_elapsed_s")
-            elapsed_text = "time unavailable"
-            try:
-                if elapsed is not None:
-                    elapsed_text = f"{float(elapsed):.1f} s"
-            except (TypeError, ValueError):
-                pass
-            comment = str(event.get("review", {}).get("comment") or "").strip()
-            summary = comment[:45] if comment else "unfinished - no comment"
-            labels.append(
-                f"{kind} at {elapsed_text} - {summary} "
-                f"[{str(event.get('event_id'))[:8]}]"
-            )
-            ids.append(str(event.get("event_id") or ""))
-        create_label = "Create a new event from the current frozen frame"
-        labels.append(create_label)
-        ids.append("__create__")
-        selected, accepted = QInputDialog.getItem(
-            self,
-            "Bind Equalizer to an event",
-            "Choose the event that this exact Equalizer frame belongs to. "
-            "The first item is only a suggested default:",
-            labels,
-            0,
-            False,
-        )
-        if not accepted:
-            return None
-        try:
-            event_id = ids[labels.index(selected)]
-        except (ValueError, IndexError):
-            return None
-        if event_id != "__create__":
-            return event_id
-
-        capture_metadata = {
-            "capture_backend": snapshot.capture_backend,
-            "captured_at_utc": snapshot.captured_at_utc,
-            "captured_monotonic_ns": snapshot.received_monotonic_ns,
-            "capture_sequence": snapshot.capture_sequence,
-            "frame_age_ms": snapshot.age_ms(),
-            "source_hwnd": snapshot.source_hwnd,
-            "capture_geometry_id": snapshot.capture_geometry_id,
-            "camera_width": snapshot.camera_width,
-            "camera_height": snapshot.camera_height,
-            "view_segment_id": snapshot.view_segment_id,
-            "visual_history_generation": snapshot.visual_history_generation,
-            "gun_aligned": snapshot.gun_aligned,
-            "realignment_active": snapshot.realignment_active,
-        }
-        index = self.growth_log.record_manual_event(
-            event_at_utc=datetime.now(timezone.utc).isoformat(),
-            elapsed_s=self.monitor.get_elapsed_seconds(),
-            pyro_temp=pyro_temp,
-            voltage_V=voltage_v,
-            current_A=current_a,
-            psu_source=psu_source,
-            frame=snapshot.rgb,
-            note="",
-            capture_metadata=capture_metadata,
-        )
-        if index <= 0 or not self.growth_log.last_point_event_id:
-            self.statusBar().showMessage(
-                "Could not create the event; Equalizer was not saved.", 5000,
-            )
-            return None
-        return self.growth_log.last_point_event_id
-
     @pyqtSlot(dict)
     def _on_live_label_save(self, payload: dict):
         """Write one label bound to the tab's immutable camera snapshot."""
@@ -2101,21 +1992,6 @@ class GrowthApp(QMainWindow):
                 "Enter the grower/reviewer before saving Equalizer output.", 4000,
             )
             return
-        event_id = GrowthApp._select_live_equalizer_point_event(
-            self,
-            snapshot=snapshot,
-            actor=actor,
-            pyro_temp=pyro_temp,
-            voltage_v=voltage_v,
-            current_a=current_a,
-            psu_source=psu_source,
-        )
-        if event_id is None:
-            self.statusBar().showMessage(
-                "Equalizer save cancelled; no event was changed.", 3000,
-            )
-            return
-
         write_started_ns = time.perf_counter_ns()
         try:
             idx = self.growth_log.record_live_label(
@@ -2137,23 +2013,6 @@ class GrowthApp(QMainWindow):
             )
             return
         if idx > 0:
-            point_event_bound = False
-            if event_id:
-                try:
-                    self.growth_log.attach_live_equalizer_to_point_event(
-                        event_id,
-                        live_label_index=idx,
-                        actor=actor,
-                        calibration=calibration,
-                        snapshot=snapshot,
-                        equalizer_payload=payload,
-                    )
-                    point_event_bound = True
-                except (OSError, TypeError, ValueError) as exc:
-                    log.error(
-                        "Live Equalizer label saved but point-event binding failed: %s",
-                        exc,
-                    )
             write_completed_ns = time.perf_counter_ns()
             GrowthApp._trace_temporal(self,
                 "equalizer_label_saved", "equalizer",
@@ -2161,8 +2020,8 @@ class GrowthApp(QMainWindow):
                     "label_index": idx,
                     "capture_sequence": snapshot.capture_sequence,
                     "calibration_id": calibration.calibration_id,
-                    "point_event_id": event_id or None,
-                    "point_event_bound": point_event_bound,
+                    "point_event_id": None,
+                    "point_event_bound": False,
                     "frame_age_at_request_ms": frame_age_ms,
                     "source_age_at_save_ms": snapshot.age_ms(
                         write_completed_ns,
@@ -2172,17 +2031,9 @@ class GrowthApp(QMainWindow):
                     ) / 1_000_000.0,
                 },
             )
-            if event_id and not point_event_bound:
-                self.statusBar().showMessage(
-                    f"Live label #{idx} saved, but event binding needs review.",
-                    6000,
-                )
-            elif point_event_bound:
-                self.statusBar().showMessage(
-                    f"Equalizer saved to Draft event {event_id[:8]}.", 4000,
-                )
-            else:
-                self.statusBar().showMessage(f"Live label #{idx} saved", 3000)
+            self.statusBar().showMessage(
+                f"Diagnostic Equalizer label #{idx} saved separately", 3000,
+            )
         else:
             self.statusBar().showMessage(
                 "Live label save failed — no session data.", 3000,
@@ -2725,9 +2576,15 @@ class GrowthApp(QMainWindow):
                 self._current_auto_capture_metadata(),
             )
             if self.auto_capture_engine.enabled:
+                diagnostics = self.auto_capture_engine.latest_diagnostics
+                shift_x = diagnostics.get("shift_x_px", 0)
+                shift_y = diagnostics.get("shift_y_px", 0)
+                confidence = diagnostics.get("registration_confidence", 0.0)
                 self.monitor.set_auto_capture_status(
                     f"Auto-capture: armed | "
                     f"score: {self.auto_capture_engine.latest_score:.2f} | "
+                    f"shift: ({float(shift_x):+.0f}, {float(shift_y):+.0f}) px | "
+                    f"registration: {float(confidence):.2f} | "
                     f"events: {self._auto_capture_event_count}"
                 )
 
@@ -2878,10 +2735,16 @@ class GrowthApp(QMainWindow):
             if self.monitor._latest_pyro and self.monitor._latest_pyro.has_valid_reading
             else None
         )
+        heartbeat_elapsed_s = self.monitor.get_elapsed_seconds()
         self.growth_log.log_heartbeat(
-            elapsed_s=self.monitor.get_elapsed_seconds(),
+            elapsed_s=heartbeat_elapsed_s,
             pyro_temp=pyro_temp,
             frame_path=path,
+            capture_metadata=capture_metadata,
+        )
+        self.growth_log.ensure_initial_point_event(
+            frame_path=path,
+            elapsed_s=heartbeat_elapsed_s,
             capture_metadata=capture_metadata,
         )
         write_completed_ns = time.perf_counter_ns()
@@ -3079,17 +2942,11 @@ class GrowthApp(QMainWindow):
     def _on_auto_capture_decision(
         self, event_idx: int, buffer_dir: str, state: str,
     ):
-        """Route the grower's decision (or default-keep timeout) for an
-        auto-captured event into the CSV.
+        """Persist storage evidence and one explicit v2 candidate decision.
 
-        Updates the event's row in auto_capture_events.csv to reflect the
-        decision state — one of ``kept_explicit``, ``kept_default``, or
-        ``discarded``. **Non-destructive by design**: the buffer directory
-        is preserved on disk regardless of state, so a "discarded" event
-        can be recovered from the Events tab if the grower changes their
-        mind. Rationale: feedback_aiqm_grower_friction.md (decisions
-        worth making should be recorded; a 10-second decision shouldn't
-        be irreversible).
+        Explicit Confirm/Reject buttons update ``review.candidate_decision``
+        for the same stable event ID. Countdown timeout leaves it Pending.
+        Every buffer remains preserved regardless of the legacy CSV state.
         """
         updated = self.growth_log.update_auto_capture_state(event_idx, state)
         if not updated:
@@ -3097,10 +2954,38 @@ class GrowthApp(QMainWindow):
                 f"Event #{event_idx} decision was not saved; inspect the event CSV.",
                 7000,
             )
+            return
+        decision = {
+            EVENT_STATE_KEPT_EXPLICIT: "confirmed",
+            EVENT_STATE_DISCARDED: "rejected",
+        }.get(state)
+        decision_saved = (
+            decision is None
+            or self.growth_log.set_auto_capture_candidate_decision(
+                event_idx,
+                decision,
+            )
+        )
+        if not decision_saved:
+            self.statusBar().showMessage(
+                f"Event #{event_idx} storage state was saved, but its "
+                "candidate decision was not journaled; review it in Events.",
+                9000,
+            )
         elif state == EVENT_STATE_DISCARDED:
             self.statusBar().showMessage(
-                f"Event #{event_idx} marked discarded (buffer preserved at {buffer_dir})",
-                3000,
+                f"Event #{event_idx} rejected; evidence preserved at {buffer_dir}",
+                4000,
+            )
+        elif state == EVENT_STATE_KEPT_EXPLICIT:
+            self.statusBar().showMessage(
+                f"Event #{event_idx} confirmed for labeling in Events",
+                4000,
+            )
+        else:
+            self.statusBar().showMessage(
+                f"Event #{event_idx} remains Unfinished; evidence was kept",
+                4000,
             )
 
     @pyqtSlot(bool)

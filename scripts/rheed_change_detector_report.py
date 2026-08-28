@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HTML validation report for the RHEED change detector.
+"""HTML report for the legacy pixel-difference RHEED baseline.
 
 Produces a single self-contained HTML file (matplotlib figures embedded as
 base64 PNGs) covering five validation views:
@@ -11,10 +11,10 @@ base64 PNGs) covering five validation views:
     5. Flagged-event frame-pair gallery (frame[start-1] | frame[peak] | |diff|)
     6. Threshold sensitivity sweep (event count vs threshold)
 
-The report exists to defend the choice of threshold and detector mode in
-the live PixelDiffChangeDetector — score plots tune the algorithm; the
-gallery and sensitivity sweep are what convince a reviewer that the
-algorithm is doing what it claims.
+This report is retained for historical comparison.  The live GUI now uses
+``TranslationInvariantChangeDetector``; validate that implementation with
+``replay_translation_change_detector.py``.  These score plots must not be
+presented as evidence for the current production detector.
 
 Chronological order:
     Frames must be in true acquisition order for the timeseries to mean

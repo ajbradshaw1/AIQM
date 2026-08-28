@@ -7,7 +7,6 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 import numpy as np
 
@@ -18,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 _app = QApplication.instance() or QApplication(sys.argv)
 
@@ -204,52 +203,25 @@ class HumanPrimaryAuditEventsTabTests(unittest.TestCase):
         self.logger.end_session()
         self.tmp.cleanup()
 
-    def _bind_exact_frame(self) -> None:
-        self.tab._currently_displayed_event_idx = 1
-        self.tab._cached_paths = [self.frame_path]
-        self.tab._capture_metadata_by_filename = {
-            self.frame_path.name: self.metadata,
-        }
-        self.tab._slider.setRange(0, 0)
-
-    def test_blank_labeler_shows_warning_and_never_saves(self) -> None:
-        self.tab.attach_session(self.logger, labeler="")
-        self._bind_exact_frame()
-        label_idx = self.tab._primary_recon_combo.findData("c(6x2)")
-        with patch.object(QMessageBox, "warning") as warning:
-            self.tab._on_primary_recon_activated(label_idx)
-        self.assertTrue(warning.called)
-        self.assertIn("Labeler required", warning.call_args.args[1])
-        self.assertEqual(self.logger.read_human_primary_labels(), [])
-
-    def test_explicit_blind_mode_hides_outputs_and_saves_gold(self) -> None:
+    def test_point_event_form_contains_no_model_answer_widgets(self) -> None:
         self.tab.attach_session(self.logger, labeler="expert-a")
-        self._bind_exact_frame()
-        self.tab._on_blind_labeling_toggled(True)
-        self.assertTrue(self.tab._blind_labeling_mode)
-        self.assertFalse(self.tab._classify_button.isEnabled())
-        self.assertFalse(self.tab._equalizer_button.isEnabled())
-        self.assertFalse(self.tab._classifier_result_label.isVisible())
+        for removed in (
+            "_classify_button", "_classifier_result_label",
+            "_equalizer_button", "_equalizer_window",
+        ):
+            self.assertFalse(hasattr(self.tab, removed), removed)
 
-        label_idx = self.tab._primary_recon_combo.findData("c(6x2)")
-        self.tab._on_primary_recon_activated(label_idx)
-        rows = self.logger.read_human_primary_labels()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["human_label_source"], "human_blind_primary")
-
-    def test_persisted_exposure_forces_assisted_annotation(self) -> None:
+    def test_external_output_exposure_hook_preserves_audit(self) -> None:
         self.tab.attach_session(self.logger, labeler="expert-a")
-        self._bind_exact_frame()
         self.tab.record_equalizer_output_visible(self.frame_path)
         self.tab._on_blind_labeling_toggled(True)
         self.assertTrue(self.tab._blind_labeling_mode)
         self.assertIn("assisted", self.tab._blind_mode_status.text())
-
-        label_idx = self.tab._primary_recon_combo.findData("HTR")
-        self.tab._on_primary_recon_activated(label_idx)
-        rows = self.logger.read_human_primary_labels()
-        self.assertEqual(rows[0]["human_label_source"], "human_assisted_primary")
-        self.assertEqual(rows[0]["human_blind_to_equalizer"], "False")
+        provenance = self.logger.human_primary_provenance(
+            frame_path=self.frame_path, labeler="expert-a",
+        )
+        self.assertEqual(provenance["human_label_source"], "human_assisted_primary")
+        self.assertFalse(provenance["human_blind_to_equalizer"])
 
 
 if __name__ == "__main__":

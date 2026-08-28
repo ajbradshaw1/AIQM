@@ -46,6 +46,7 @@ from gui.state import (
     EvapControlState,
     MistralState,
     PyrometerState,
+    RheedQcState,
 )
 from tools.rheed_postprocessing_labeling.desktop_launcher import (
     LabelingDesktopLauncher,
@@ -106,6 +107,20 @@ def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _csv_text(rows: list[dict[str, object]]) -> str:
+    """Serialize deterministic synthetic rows for an in-memory ZIP member."""
+
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        output,
+        fieldnames=list(rows[0]),
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    writer.writerows(rows)
+    return output.getvalue()
 
 
 def _scores(index: int, class_count: int, *, include_1x1: bool) -> list[float]:
@@ -177,22 +192,47 @@ def _create_fixture(root: Path) -> tuple[Path, tuple[Path, ...], tuple[Path, ...
             }
         )
 
-    heartbeat_buffer = io.StringIO(newline="")
-    heartbeat_writer = csv.DictWriter(
-        heartbeat_buffer,
-        fieldnames=list(heartbeat_rows[0]),
-        lineterminator="\n",
-    )
-    heartbeat_writer.writeheader()
-    heartbeat_writer.writerows(heartbeat_rows)
-    sensor_buffer = io.StringIO(newline="")
-    sensor_writer = csv.DictWriter(
-        sensor_buffer,
-        fieldnames=list(sensor_rows[0]),
-        lineterminator="\n",
-    )
-    sensor_writer.writeheader()
-    sensor_writer.writerows(sensor_rows)
+    auto_event_rows: list[dict[str, object]] = []
+    auto_capture_members: list[tuple[str, str, str, bytes]] = []
+    for event_index, frame_index in enumerate((18, 38), 1):
+        provenance = provenance_rows[frame_index]
+        buffer_dir = f"auto_capture/event_{event_index:04d}"
+        buffered_name = f"candidate_{event_index:04d}.png"
+        buffered_member = (
+            f"synthetic_session/{buffer_dir}/frames/{buffered_name}"
+        )
+        auto_event_rows.append(
+            {
+                "event_idx": event_index,
+                "timestamp": provenance["captured_at_utc"],
+                "elapsed_s": provenance["elapsed_s"],
+                "capture_sequence": provenance["capture_sequence"],
+                "change_score": 0.84 if event_index == 1 else 0.73,
+                "event_state": "pending",
+                "state_changed_at": "",
+                "buffer_dir": buffer_dir,
+                "frame_path": f"frames/{buffered_name}",
+            }
+        )
+        manifest_text = _csv_text(
+            [
+                {
+                    "capture_sequence": provenance["capture_sequence"],
+                    "frame_path": f"frames/{buffered_name}",
+                    "captured_at_utc": provenance["captured_at_utc"],
+                    "elapsed_s": provenance["elapsed_s"],
+                    "frame_sha256": provenance["frame_sha256"],
+                }
+            ]
+        )
+        auto_capture_members.append(
+            (
+                f"synthetic_session/{buffer_dir}/capture_manifest.csv",
+                manifest_text,
+                buffered_member,
+                frame_payloads[frame_index][1],
+            )
+        )
     metadata = {
         "session_id": "synthetic-manual-screenshot-session",
         "chamber_id": "DEMO-MBE",
@@ -208,14 +248,26 @@ def _create_fixture(root: Path) -> tuple[Path, tuple[Path, ...], tuple[Path, ...
         )
         archive.writestr(
             "synthetic_session/heartbeat_log.csv",
-            heartbeat_buffer.getvalue(),
+            _csv_text(heartbeat_rows),
         )
         archive.writestr(
             "synthetic_session/sensor_log.csv",
-            sensor_buffer.getvalue(),
+            _csv_text(sensor_rows),
+        )
+        archive.writestr(
+            "synthetic_session/auto_capture_events.csv",
+            _csv_text(auto_event_rows),
         )
         for name, payload in frame_payloads:
             archive.writestr(f"synthetic_session/frames/{name}", payload)
+        for (
+            manifest_member,
+            manifest_text,
+            buffered_member,
+            payload,
+        ) in auto_capture_members:
+            archive.writestr(manifest_member, manifest_text)
+            archive.writestr(buffered_member, payload)
 
     specs = (
         {
@@ -305,8 +357,8 @@ def _capture_qt(
     app.setFont(QFont("Segoe UI", 9))
     def capture_monitor(config, stem: str) -> None:
         # GrowthMonitor is the exact central widget used by GrowthApp, but it
-        # owns no hardware workers or logger.  The basis patch prevents the
-        # Live Equalizer tab from reading repository image assets while the
+        # owns no hardware workers or logger. The retained, hidden Equalizer
+        # compatibility widget must not read repository image assets while the
         # documentation window is being constructed.
         os.environ["AIQM_CHAMBER"] = config.chamber_id
         with patch.object(LiveEqualizerTab, "_load_basis", lambda self: None):
@@ -314,7 +366,10 @@ def _capture_qt(
         shell = QMainWindow()
         shell.setWindowTitle(f"{config.name} Growth Monitor")
         shell.setCentralWidget(monitor)
-        shell.resize(1440, 900)
+        # A common 16:9 workstation canvas keeps the five read-only RHEED
+        # adjustment buttons and their status label legible without altering
+        # the production widget layout.
+        shell.resize(1600, 900)
         chamber_token = stem.upper().replace("-", "_")
         monitor.grower_input.setText("Demo Operator")
         monitor.sample_id_input.setText(f"SYNTHETIC_{chamber_token}_DEMO")
@@ -404,6 +459,17 @@ def _capture_qt(
                 model_version="synthetic documentation state",
                 prediction_actionable=False,
                 model_input_mode="single_frame",
+            )
+        )
+        monitor.update_rheed_qc_state(
+            RheedQcState(
+                session_active=False,
+                view_segment_id=1,
+                visual_history_generation=1,
+                gun_aligned=True,
+                history_frame_count=32,
+                history_required=32,
+                history_ready=True,
             )
         )
         monitor.elapsed_display.value.setText("00:00:49.20")

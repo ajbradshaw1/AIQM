@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Generate the bilingual Ch-MBE GUI and RHEED labeling user manual.
+"""Generate the historical bilingual v1 temporal-segment manual.
+
+This is retained only for interpreting read-only
+``rheed-temporal-segments-v1`` exports. It is not the current operator manual
+and does not describe the point-event, derived-state, and interval-Anchor
+workflow. Build the authoritative English manual with
+``build_english_manual.ps1`` instead.
 
 The generator is intentionally self-contained and deterministic. It creates
 only synthetic illustrations; no session archive, RHEED frame, prediction

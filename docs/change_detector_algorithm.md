@@ -1,256 +1,148 @@
-# RHEED Change Detector — Algorithm and Validation
+# Translation-insensitive RHEED change proposals
 
-**Status:** Draft for group review · Last updated 2026-04-28
+Status: production candidate for grower review. The detector proposes event
+points; it does not assign reconstruction or pattern-clarity labels.
 
-This document describes the algorithm behind the Growth Monitor's intelligent
-RHEED auto-capture (`gui/auto_capture.py::PixelDiffChangeDetector` and
-`AutoCaptureEngine`), the empirical evidence supporting its threshold and
-mode choices, and the limitations a reader should be aware of when
-interpreting its output.
+## In brief
 
-It is the methods companion to `scripts/rheed_change_detector_report.py`,
-which renders the validation evidence as a self-contained HTML report.
+The live Growth Monitor now registers each RHEED frame to a rolling reference
+using a bounded two-dimensional translation before it measures visual change.
+Small camera or beam-image shifts therefore do not become reconstruction
+events. A proposal still requires persistence, an adaptive threshold, and a
+cooldown. Every proposal remains `pending` until a grower confirms or rejects
+it in the event editor.
 
----
+## What the detector is for
 
-## 1. Problem statement
+The detector answers one narrow question: **did the recorded RHEED pattern
+change enough to deserve review at this time?** It deliberately does not infer:
 
-During an MBE growth, the RHEED pattern transitions through several distinct
-surface reconstructions as conditions evolve (substrate temperature, deposition
-rate, surface coverage). Identifying *when* these transitions happen is
-valuable for two reasons:
+- which reconstruction appeared or disappeared;
+- whether the pattern became Good or Bad;
+- whether the surface is physically better or worse;
+- whether an annealing command should be issued.
 
-1. **Data efficiency.** A growth produces tens of thousands of RHEED frames,
-   but only ~30–50 are diagnostically interesting (Justin Meng's recommended
-   training-set sweet spot). Saving every frame wastes disk and dilutes the
-   signal in any downstream supervised task. Saving only at transitions
-   keeps the dataset focused.
-2. **Operator support.** Growers historically log entries by hand at
-   transitions they observe. An automatic detector that prompts the grower
-   at the right moments is a step toward the project's "AI making suggestions
-   that the human follows with high success rate" milestone (Apr 14 group
-   meeting).
+Those meanings require a grower label and the recorded temperature, power,
+pressure, and history. Image-unusable records such as obstruction or a camera
+failure are separate read-only context, not a Bad surface label.
 
-The first version of the detector deliberately uses **classical pixel-domain
-statistics, not a learned model**. Justification in §6.
+## Processing pipeline
 
----
+`gui.auto_capture.TranslationInvariantChangeDetector` performs these steps for
+each valid frame:
 
-## 2. Algorithm
+1. Convert the input to a two-dimensional floating-point image. Existing
+   false-colour inputs retain the established green-channel convention.
+2. Form a per-pixel rolling reference from the previous 20 aligned frames.
+   Validity masks keep padded borders out of both the reference and score.
+3. Estimate translation by windowed phase correlation on a down-sampled image.
+4. Refine the strongest bounded candidate using normalized correlation on
+   real, non-wrapped overlap pixels.
+5. Reject low-texture frames, insufficient overlap, and convincing motion
+   beyond the configured 12-pixel bound. These are zero-score, fail-closed
+   states with an explicit diagnostic reason.
+6. Robustly normalize the 5th-to-95th percentile luminance range of the
+   registered current/reference overlap independently. This reduces uniform
+   brightness and contrast sensitivity.
+7. Compute the winsorized mean absolute residual on the valid overlap and map
+   it to the familiar approximate 0-255 scale.
+8. Smooth the last three residual scores.
 
-### 2.1 Frame preprocessing
+The detector estimates translation only. It never fits scale or rotation, so a
+true geometry change is not silently normalized away.
 
-Each incoming frame is reduced to a single-channel `float32` grayscale image
-on the [0, 255] intensity scale. For RGB inputs (the common case — kSA 400
-ships RHEED frames as false-colored RGB screengrabs), the **green channel**
-is taken directly rather than computing a luminance average. RHEED intensity
-maps onto green in the kSA palette; mixing in red/blue dilutes the signal.
+## Live proposal policy
 
-For single-channel inputs, PIL's `'L'` luminance conversion is used.
+`AutoCaptureEngine` adds temporal gates to the detector score:
 
-### 2.2 The two comparison modes
+- 20 fixed warmup frames fill the visual reference;
+- 20 additional scores fill the adaptive baseline without firing;
+- the threshold is `max(0.5, baseline mean + 3 * baseline standard deviation)`;
+- three consecutive above-threshold frames are required;
+- after a proposal, three consecutive below-threshold frames are required to
+  rearm the detector; a sustained high-score plateau therefore produces one
+  proposal rather than one proposal per cooldown window;
+- a 10-second cooldown remains a second guard against nearby retriggers;
+- only non-trigger scores update the 100-score adaptive baseline.
 
-The detector computes a single scalar per frame: the **mean absolute pixel
-difference** between the current frame and a reference. Two modes differ in
-what they take as the reference.
+These values are the current operating defaults, not universal physical
+constants. Revalidate them when camera cadence, image geometry, palette, or
+beam-view conditions change.
 
-**Mode A — `previous`:** reference is the immediately preceding frame.
+## Logged evidence
 
+Every automatic event row and every saved context-frame manifest now includes:
+
+- detector name and status;
+- final and raw change scores;
+- registered x/y translation in pixels;
+- registration confidence and valid overlap fraction;
+- the effective threshold, armed state, trigger state, and any suppression
+  reason;
+- exact capture sequence, time, backend, geometry, and saved frame path.
+
+The original acquisition CSV remains evidence. Grower review is stored through
+the separate append-only point-event revision journal.
+
+## Human review
+
+An automatic candidate starts as `pending`. The grower must choose one of:
+
+- `confirmed`: keep it and add one or more semantic changes;
+- `rejected`: record that the detector proposal was not a useful event.
+
+For a confirmed event, labels are intentionally small:
+
+- reconstruction type `appeared` or `disappeared` for 1x1, Twinned 2x1,
+  c(6x2), RT13, or HTR;
+- pattern clarity `became Good` or `became Bad`.
+
+The event boundary and the representative Anchor are separate saved frames.
+The boundary indicates where the change is reviewed; the Anchor is the clearest
+example in the stable interval after that change.
+
+## Failure modes and interpretation
+
+- A zero score with `low_texture`, `insufficient_overlap`, `excessive_shift`,
+  or `invalid_frame` is unavailable evidence, not proof that nothing changed.
+- Temperature-dependent intensity changes can survive registration and may
+  legitimately produce proposals without a reconstruction transition.
+- Direction, RHEED current, RHEED energy, obstruction, and camera-geometry
+  changes remain read-only reference markers. They are not learned semantic
+  event labels.
+- Several 1 Hz frames from one run are correlated observations, not independent
+  training examples. Detector evaluation and model splits must be by complete
+  annealing run.
+
+## Validation
+
+Unit tests inject pure translations, brightness/contrast changes, structural
+changes, low-texture frames, excessive shifts, and detector reset conditions.
+The production replay utility streams a session ZIP without extraction:
+
+```powershell
+python scripts/replay_translation_change_detector.py `
+  D:\path\to\session.zip `
+  --output-dir D:\path\to\detector-audit
 ```
-score[i] = mean( | frame[i] - frame[i-1] | )
-```
 
-This catches the *rate* of change. Sharp transitions produce a single tall
-spike; sustained transitions produce only a brief peak followed by a return
-to baseline as both frames update together.
+It writes `translation_change_scores.csv` and
+`translation_change_summary.json`, including the observed frame cadence,
+registration-status counts, score distribution, replay proposal times, and a
+descriptive comparison with legacy candidates. That comparison is an audit,
+not accuracy, because legacy candidates are not human truth.
 
-**Mode B — `buffer-mean`:** reference is the per-pixel mean of the last `N`
-frames (default `N=20`, FIFO).
-
-```
-score[i] = mean( | frame[i] - mean(frame[i-N..i-1]) | )
-```
-
-This catches the *magnitude* of sustained shifts. A transition that lasts
-several frames produces a tall plateau because the new frames are compared
-against the older, stable reference.
-
-The live GUI (`PixelDiffChangeDetector`) uses **buffer-mean** by default —
-it gives more frames-per-event for downstream context, and its peaks are
-larger (better signal-to-noise headroom over baseline).
-
-### 2.3 Smoothing
-
-The raw score timeseries is passed through a centered rolling mean
-(`smooth_window`, default 3 frames). This removes single-frame spikes
-caused by camera read noise or screengrab race conditions while preserving
-real transitions that span multiple frames.
-
-### 2.4 Triggering: threshold + debounce + cooldown
-
-`AutoCaptureEngine` wraps the detector with three additional gates:
-
-1. **Threshold.** The smoothed score must exceed a fixed value (default 2.0)
-   for a frame to be considered "above noise." See §3 for the rationale.
-2. **Debounce.** The threshold must be exceeded on `debounce_required`
-   consecutive frames (default 3). Single-frame outliers don't fire the
-   trigger even if they squeak past the threshold.
-3. **Cooldown.** After a successful fire, no further triggers are allowed
-   for `cooldown_s` seconds (default 5.0). Prevents a single sustained
-   transition from firing repeatedly while the smoothed score is still
-   elevated.
-
-A fourth gate, **warmup**, suppresses triggering for the first 30 frames
-of a session. This lets the buffer fill before any score is even computed.
-
-### 2.5 Implementation note: O(1) buffer-mean
-
-Naively, computing the buffer mean each frame costs `O(buffer_size · pixels)`.
-The implementation maintains a running per-pixel sum and updates it
-incrementally:
-
-```python
-if len(self._buffer) == self._buffer_size:
-    self._sum -= self._buffer[0]   # subtract the about-to-be-evicted frame
-self._buffer.append(gray)
-self._sum += gray
-buffer_mean = self._sum / len(self._buffer)
-```
-
-Per-frame cost is `O(pixels)` regardless of buffer size, which matters at
-the camera's native ~10 Hz frame rate.
-
----
-
-## 3. Threshold rationale
-
-The default threshold `2.0` was chosen by validating against a reference
-dataset (Rahim's `2022_02_04` STO substrate trajectory, 388 chronologically-
-ordered frames). On that dataset:
-
-| Mode | Baseline mean ± std | Threshold position | Flagged frames | Discrete events |
-|---|---|---|---|---|
-| `previous` | 0.553 ± 0.222 | 6.5σ above noise | 10 (2.6%) | **3** |
-| `buffer-mean` | 0.825 ± 0.327 | 3.6σ above noise | 44 (11.3%) | **3** |
-
-Two pieces of evidence support the choice:
-
-1. **Statistical headroom.** For the live mode (`buffer-mean`), the
-   threshold sits at `0.825 + 3.6×0.327 ≈ 2.0` — more than 3σ above the
-   noise floor, which by convention separates "this is a real signal"
-   from "this could be a fluctuation."
-2. **Cross-mode agreement.** Both modes independently flag the same
-   number of discrete events (3) on the same data, despite very different
-   sensitivity profiles (10 vs 44 flagged frames). When two algorithms
-   with different bias/variance tradeoffs converge on the same answer,
-   the answer is unlikely to be a detector artifact.
-
-The full distribution of scores, the timeseries, the three flagged events
-themselves, and a threshold sensitivity sweep are rendered in
-`validation_report.html` produced by `scripts/rheed_change_detector_report.py`.
-
-### Caveats
-
-- **Single dataset.** All numbers above come from one trajectory. Threshold
-  generalization to other materials, growth conditions, or kSA palette
-  configurations has not been validated. Re-run the report on each new
-  reference dataset before assuming `2.0` is correct.
-- **Chronological ordering matters.** Lexicographic sort of these filenames
-  scrambles temperature ramp order (165°C frames sort before 291°C frames
-  even though they are from the cool-down phase). The report uses Rahim's
-  rename log to recover true chronological order. Earlier informal numbers
-  ("baseline ~0.5–1.0") were measured against scrambled order and were
-  approximately correct only by coincidence.
-- **Adaptive thresholding deferred.** A μ + Nσ threshold updated online
-  would adapt to per-session noise levels. Worth implementing if the
-  fixed threshold proves brittle across materials. Tracked in the v3
-  pending threads.
-
----
-
-## 4. Buffer size choice
-
-`buffer_size = 20` corresponds to roughly 2 seconds of acquisition at the
-nominal 10 Hz frame rate. Motivation:
-
-- Too small (e.g., 5): the buffer mean tracks sustained transitions
-  quickly enough that the score returns to baseline before the trigger
-  has a chance to fire. Defeats the "magnitude of sustained shift"
-  property that makes buffer-mean useful.
-- Too large (e.g., 200): the reference becomes stale, capturing slow
-  thermal drift as a "change" and inflating the baseline.
-- 20 sits in the regime where reconstruction transitions (typically
-  ~5–15 frames in this dataset) are fully resolved as plateaus while
-  baseline drift stays low.
-
-Not exhaustively tuned. A buffer-size sensitivity sweep would be a useful
-addition to the validation report.
-
----
-
-## 5. Cross-validation against grower observations
-
-Validating that the 3 flagged events correspond to grower-observed
-transitions is the next step and requires either (a) Rahim's session notes
-from 2022-02-04, or (b) a fresh OMBE run where the grower marks transitions
-in real-time and we cross-reference the auto-capture event timestamps.
-Tracked under "lab visit checklist" in `v3_pending_threads`.
-
-Until that cross-validation lands, the detector should be considered
-**algorithmically validated** (it consistently flags large, non-random
-changes in the pixel statistics) but not **semantically validated** (the
-flags have not been confirmed to correspond to real reconstruction
-transitions).
-
----
-
-## 6. Why classical, not learned
-
-The Apr 17 internal meeting decision was to ship the pixel-diff detector
-*before* swapping in any learned model (e.g., Classifier2 confidence
-change, SimCLR embedding distance). Three reasons:
-
-1. **UX-first.** The novel object in this part of the system is the
-   human-AI dialog (the "progress bar" prompt that asks the grower to
-   confirm a save). Building that UX with a deterministic, easily-
-   inspected detector means the grower's trust in the *interaction
-   pattern* doesn't get entangled with their trust in the *model*.
-   Once the dialog feels right, swapping in a smarter detector is
-   a drop-in replacement against the same `ChangeDetector` ABC.
-2. **Failure modes are legible.** When pixel-diff fires incorrectly,
-   the cause is always inspectable: a brightness shift, a screen
-   refresh artifact, a frame drop. When a learned model fires
-   incorrectly, the cause requires a separate explainability step.
-3. **Cross-material portability.** Pixel-diff makes no assumptions
-   about what the RHEED pattern *should* look like. Learned models
-   trained on STO will need re-training or transfer learning for
-   FeSe and other materials. The pixel-diff baseline will work
-   on any material from day one.
-
-This is also the staging path the `auto_capture` module is designed for:
-`IntensityChangeDetector` (Tier 1), `PixelDiffChangeDetector` (Tier 1.5,
-current), `EmbeddingChangeDetector` (Tier 2, planned), and
-`ClassificationChangeDetector` (Tier 3, scaffolded).
-
----
-
-## 7. References to code
+## Code map
 
 | File | Role |
 |---|---|
-| `gui/auto_capture.py` | `ChangeDetector` ABC + 3 implementations + `AutoCaptureEngine` |
-| `gui/growth_app.py` | Wires `AutoCaptureEngine` to camera frames, arms/disarms with session lifecycle |
-| `gui/growth_logger.py` | Schema and CSV writer for `auto_capture_events.csv` |
-| `scripts/rheed_change_detector.py` | Offline detector script — CSV + 1D plot, useful for quick threshold tuning |
-| `scripts/rheed_change_detector_report.py` | Offline detector report — full validation HTML |
+| `gui/auto_capture.py` | Translation registration, residual score, and live temporal gates |
+| `gui/growth_app.py` | Production wiring and operator status text |
+| `gui/growth_logger.py` | Event/context diagnostics and immutable capture provenance |
+| `scripts/replay_translation_change_detector.py` | Read-only ZIP replay and audit outputs |
+| `tests/test_auto_capture.py` | Synthetic invariance/fail-closed tests |
+| `tests/test_growth_logger.py` | Persisted detector-diagnostic tests |
 
-## 8. Open items (tracked elsewhere)
-
-- Buffer-dump on flagged event (save the full ring buffer for pre-event context)
-- Banner UI with countdown (the "progress bar" prompt from the Apr 17 design)
-- Manual pause / emergency stop button
-- Cross-reference event flags against grower-observed transitions
-- Buffer-size sensitivity sweep
-- Adaptive (μ + Nσ) threshold
-
-See `v3_pending_threads.md` (memory) for the active workstream tracker.
+The older `scripts/rheed_change_detector.py` and
+`scripts/rheed_change_detector_report.py` remain legacy pixel-difference
+baselines. They do not describe the current production detector.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline RHEED change-point detector.
+"""Legacy pixel-difference baseline for offline RHEED change analysis.
 
 Reads a directory of RHEED frames in chronological filename order, computes
 a mean-absolute-pixel-difference signal under one of two comparison modes,
@@ -11,11 +11,11 @@ Comparison modes:
     previous    — diff against the immediately preceding frame
                   (catches sharp transitions; the original mode)
     buffer-mean — diff against the mean of the last N frames in a FIFO
-                  buffer (mirrors the PixelDiffChangeDetector in the
-                  live GUI, AI-MBE meeting 2026-04-17 design)
+                  buffer (mirrors the historical PixelDiffChangeDetector)
 
-Tune threshold here against a reference dataset before wiring the same
-algorithm into the live GUI.
+The live GUI now uses ``TranslationInvariantChangeDetector``.  Use
+``replay_translation_change_detector.py`` to audit the production algorithm;
+this script remains useful only as a comparison baseline.
 
 Usage:
     python rheed_change_detector.py <frames_dir> [options]
@@ -119,8 +119,8 @@ def compute_diffs_buffer_mean(
     """Mean absolute pixel difference between frame[i] and the mean of the
     FIFO buffer of the preceding ``buffer_size`` frames.
 
-    Mirrors the PixelDiffChangeDetector in gui/auto_capture.py used by the
-    live GUI. Compared to ``compute_diffs_previous``, this catches sustained
+    Mirrors the historical PixelDiffChangeDetector in gui/auto_capture.py.
+    Compared to ``compute_diffs_previous``, this catches sustained
     *shifts* (full transition magnitude) rather than just instantaneous
     *rate of change* — peaks for the same transition are larger because we
     compare against an older, stable reference.

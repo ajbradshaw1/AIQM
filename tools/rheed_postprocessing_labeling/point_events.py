@@ -27,10 +27,25 @@ import numpy as np
 from PIL import Image
 
 from gui.equalizer_label_contract import frame_rgb_sha256
+from gui.rheed_event_state import (
+    DEFAULT_INITIAL_STATE,
+    EventStateError,
+    SegmentAnchor,
+    replay_event_states,
+)
 from gui.rheed_point_events import (
+    CANDIDATE_DECISIONS,
+    CANDIDATE_SOURCES,
+    LEGACY_SCHEMA_ID,
+    PATTERN_CLARITY_VALUES,
     PointEventIntegrityError as LivePointEventIntegrityError,
+    RECONSTRUCTION_VALUES,
+    SCHEMA_ID as LIVE_SCHEMA_ID,
     _validate_revision_transition as validate_live_revision_transition,
+    deterministic_legacy_event_id as deterministic_live_event_id,
+    make_semantic_label,
     source_row_sha256 as source_identity_sha256,
+    validate_semantic_label,
 )
 
 from .session_archive import (
@@ -45,14 +60,24 @@ from .session_archive import (
 )
 
 
-SCHEMA_VERSION = "rheed-point-events-v1"
+SCHEMA_VERSION = "rheed-point-events-v2"
+LEGACY_SCHEMA_VERSION = LEGACY_SCHEMA_ID
 DOCUMENT_TYPE = "ai4mbe_rheed_point_event_annotations"
+INITIAL_STATE = {
+    "reconstructions": sorted(DEFAULT_INITIAL_STATE.reconstructions),
+    "clarity": DEFAULT_INITIAL_STATE.clarity,
+    "quality": DEFAULT_INITIAL_STATE.quality,
+}
+# Retained only so archived v1 Equalizer evidence can be validated read-only.
 ACTIVE_EQUALIZER_BASES = ("1x1", "Tw(2x1)", "c(6x2)", "RT13")
-SOURCE_TYPES = frozenset({"manual", "auto_capture", "posthoc"})
+SOURCE_TYPES = frozenset({
+    "manual", "auto_capture", "posthoc", "initial_assumption",
+})
 STATUSES = frozenset({"Draft", "Complete"})
 REVISION_ACTIONS = frozenset({
-    "create_posthoc", "edit", "move_anchor", "set_equalizer", "complete",
-    "reopen", "dismiss", "undismiss", "delete", "restore",
+    "create_posthoc", "edit", "add_label", "edit_label", "remove_label",
+    "set_candidate_decision", "move_anchor", "move_representative_anchor",
+    "complete", "reopen", "dismiss", "undismiss", "delete", "restore",
 })
 _EVENT_NAMESPACE = uuid.UUID("51f4c9b1-f062-4b8f-8b9a-527e7899c921")
 
@@ -609,13 +634,12 @@ def _base_source_event(
         },
         "review": {
             "anchor": frame_anchor(review_frame),
+            "representative_anchor": None,
+            "labels": [],
+            "candidate_decision": (
+                "pending" if source == "auto_capture" else "confirmed"
+            ),
             "comment": original_comment,
-            "reviewer": "",
-            "confidence": None,
-            "human_reconstruction": None,
-            "change_from": None,
-            "change_to": None,
-            "equalizer": None,
             "disposition": "active",
             "disposition_reason": "",
         },
@@ -693,6 +717,12 @@ def _anchor_archive_member(
 def _apply_legacy_event_labels(
     events: list[dict[str, Any]], csv_member: CsvMember | None,
 ) -> list[dict[str, Any]]:
+    """Retain old row-style labels as evidence without inventing v2 points.
+
+    ``primary_reconstruction`` and ``change_from/change_to`` do not say which
+    reconstruction appeared or disappeared at one exact instant.  They are
+    therefore offered for manual association, never silently promoted to v2.
+    """
     if csv_member is None:
         return []
     by_index: dict[str, list[dict[str, Any]]] = {}
@@ -702,44 +732,23 @@ def _apply_legacy_event_labels(
     unlinked: list[dict[str, Any]] = []
     for source_sequence, row in enumerate(csv_member.rows, 1):
         candidates = by_index.get(str(row.get("event_idx", "")), [])
-        if len(candidates) != 1:
-            unlinked.append({
-                "source_file": csv_member.member,
-                "source_sequence": source_sequence,
-                "source_row_sha256": _sha256_json(dict(row)),
-                "reason": "event_idx did not uniquely identify one auto-capture event",
-                "event_idx": str(row.get("event_idx", "")),
-            })
-            continue
-        event = candidates[0]
-        event["source"]["legacy_imports"].append({
+        unlinked.append({
             "source_file": csv_member.member,
             "source_file_sha256": csv_member.sha256,
+            "source_sequence": source_sequence,
             "source_row_sha256": _sha256_json(dict(row)),
-            "kind": "events_labels",
+            "reason": (
+                "legacy row label has no unambiguous v2 appeared/disappeared semantics"
+                if len(candidates) == 1
+                else "event_idx did not uniquely identify one auto-capture event"
+            ),
+            "candidate_event_id": (
+                str(candidates[0]["event_id"]) if len(candidates) == 1 else ""
+            ),
+            "event_idx": str(row.get("event_idx", "")),
+            "legacy_row": copy.deepcopy(dict(row)),
+            "read_only": True,
         })
-        review = event["review"]
-        review["comment"] = str(row.get("notes", "") or "")
-        review["reviewer"] = str(row.get("human_labeler", "") or "")
-        review["confidence"] = _float(row.get("human_confidence"))
-        review["human_reconstruction"] = str(
-            row.get("human_primary_reconstruction") or row.get("primary_reconstruction") or ""
-        ) or None
-        review["change_from"] = str(row.get("change_from", "") or "") or None
-        review["change_to"] = str(row.get("change_to", "") or "") or None
-        measurement = _equalizer_from_csv(row)
-        if measurement is not None:
-            try:
-                review["equalizer"] = validate_equalizer_measurement(
-                    measurement, review["anchor"],
-                )
-            except PointEventValidationError:
-                # The legacy row hash remains in source.legacy_imports, but an
-                # incompatible RGB/file hash or incomplete basis set is never
-                # presented as a current valid measurement.
-                review["equalizer"] = None
-        # Legacy mutable CSV rows did not contain an explicit Complete action.
-        event["status"] = "Draft"
     return unlinked
 
 
@@ -751,6 +760,24 @@ def _legacy_live_labels(
     unlinked: list[dict[str, Any]] = []
     if csv_member is None:
         return unlinked
+    # live_labels.csv is an Equalizer-era v1 artifact.  V2 deliberately has
+    # no Equalizer field, so retain every row as read-only evidence instead of
+    # injecting its measurement into a semantic human label.
+    return [
+        {
+            "source_file": csv_member.member,
+            "source_file_sha256": csv_member.sha256,
+            "source_sequence": source_sequence,
+            "source_row_sha256": _sha256_json(dict(row)),
+            "reason": "legacy Equalizer label is read-only in point-events v2",
+            "legacy_row": copy.deepcopy(dict(row)),
+            "read_only": True,
+        }
+        for source_sequence, row in enumerate(csv_member.rows, 1)
+    ]
+
+    # Historical matching implementation kept below as unreachable reference
+    # for v1 forensic review.
     rgb_hashes: dict[str, str] = {}
 
     def decoded_hash(member: str) -> str:
@@ -944,12 +971,20 @@ def _replay_archived_live_journal(
     states: dict[str, dict[str, Any]] = {}
     summary_is_prefix = summary_events == []
     revision_ids: set[str] = set()
+    schemas: set[str] = set()
+    previous_record_hash = ""
     for raw in records:
         record = copy.deepcopy(dict(raw))
-        if record.get("schema") != SCHEMA_VERSION:
+        schema = str(record.get("schema") or "")
+        schemas.add(schema)
+        if schema not in {SCHEMA_VERSION, LEGACY_SCHEMA_VERSION} or len(schemas) > 1:
             raise PointEventValidationError("archived live revision schema is invalid")
         if str(record.get("record_sha256", "")).lower() != _live_record_hash(record):
             raise PointEventValidationError("archived live revision hash mismatch")
+        if schema == SCHEMA_VERSION and str(
+            record.get("previous_record_sha256", "")
+        ) != previous_record_hash:
+            raise PointEventValidationError("archived live global hash chain is broken")
         revision_id = str(record.get("revision_id", ""))
         event_id = str(record.get("event_id", ""))
         try:
@@ -989,6 +1024,7 @@ def _replay_archived_live_journal(
                 f"archived live revision semantics are invalid: {exc}"
             ) from exc
         states[event_id] = copy.deepcopy(after)
+        previous_record_hash = str(record.get("record_sha256", ""))
         if summary_events == [states[key] for key in sorted(states)]:
             summary_is_prefix = True
     return states, summary_is_prefix
@@ -1099,7 +1135,12 @@ def _import_archived_live_events(
     pending_recovered = False
     if pending_member is not None:
         pending = json.loads(read_archived_bytes(session, pending_member).decode("utf-8-sig"))
-        if not isinstance(pending, dict) or pending.get("schema") != SCHEMA_VERSION:
+        journal_schema = str(records[0].get("schema") or "") if records else ""
+        if (
+            not isinstance(pending, dict)
+            or pending.get("schema") not in {SCHEMA_VERSION, LEGACY_SCHEMA_VERSION}
+            or (journal_schema and pending.get("schema") != journal_schema)
+        ):
             raise PointEventValidationError("archived pending live revision is invalid")
         if str(pending.get("record_sha256", "")).lower() != _live_record_hash(pending):
             raise PointEventValidationError("archived pending live revision hash mismatch")
@@ -1131,6 +1172,95 @@ def _import_archived_live_events(
     if summary_member is not None and not summary_is_prefix:
         raise PointEventValidationError(
             "archived point-event summary is not a valid journal prefix"
+        )
+
+    journal_schema = str(records[0].get("schema") or "") if records else ""
+    if journal_schema == LEGACY_SCHEMA_VERSION:
+        # V1 has been fully hash/semantic replay validated above, but its
+        # change_from/change_to and Equalizer review cannot be converted to
+        # v2 without a scientific choice.  Keep the entire chain read-only
+        # and build current editable v2 candidates from the immutable CSVs.
+        metadata = {
+            "member": journal_member, "sha256": journal_sha,
+            "schema": LEGACY_SCHEMA_VERSION,
+            "summary_member": summary_member or "",
+            "summary_sha256": summary_sha,
+            "pending_recovered_in_memory": pending_recovered,
+            "deterministic_csv_fallback_count": len(legacy_events),
+            "authoritative": True, "read_only": True,
+        }
+        evidence = [{
+            "event_id": event_id,
+            "reason": "archived rheed-point-events-v1 state retained read-only",
+            "legacy_state": copy.deepcopy(state),
+            "read_only": True,
+        } for event_id, state in sorted(states.items())]
+        return (
+            [copy.deepcopy(dict(item)) for item in legacy_events],
+            [copy.deepcopy(dict(item)) for item in records],
+            metadata,
+            evidence,
+        )
+
+    if journal_schema == SCHEMA_VERSION:
+        by_source_hash: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+        for candidate in legacy_events:
+            key = (
+                str(candidate["source"]["kind"]),
+                str(candidate["source"].get("source_row_sha256", "")).lower(),
+            )
+            by_source_hash.setdefault(key, []).append(candidate)
+        imported: list[dict[str, Any]] = []
+        consumed: set[str] = set()
+        for event_id, raw_state in states.items():
+            state = copy.deepcopy(raw_state)
+            source = state.get("source", {})
+            kind = str(source.get("kind", ""))
+            fallback: Mapping[str, Any] | None = None
+            if kind in {"manual", "auto_capture", "initial_assumption"}:
+                candidates = by_source_hash.get((
+                    kind, str(source.get("source_row_sha256", "")).lower(),
+                ), [])
+                if len(candidates) != 1:
+                    raise PointEventValidationError(
+                        "archived v2 event does not uniquely match immutable source evidence"
+                    )
+                fallback = candidates[0]
+                consumed.add(str(fallback["event_id"]))
+            elif kind != "posthoc":
+                raise PointEventValidationError("archived v2 event source is invalid")
+            state["review"] = copy.deepcopy(dict(state.get("review", {})))
+            state["review"]["anchor"] = _resolve_live_review_anchor(
+                session, state, fallback,
+            )
+            representative = raw_state.get("review", {}).get("representative_anchor")
+            if representative is not None:
+                representative_state = copy.deepcopy(state)
+                representative_state["review"]["anchor"] = representative
+                state["review"]["representative_anchor"] = _resolve_live_review_anchor(
+                    session, representative_state, None,
+                )
+            for bookkeeping in ("created_at_utc", "updated_at_utc", "revision_number"):
+                state.pop(bookkeeping, None)
+            state["schema"] = SCHEMA_VERSION
+            state["event_id"] = event_id
+            imported.append(validate_event(state))
+        for candidate in legacy_events:
+            if str(candidate["event_id"]) not in consumed:
+                if any(item["event_id"] == candidate["event_id"] for item in imported):
+                    raise PointEventValidationError("v2 fallback event UUID conflicts")
+                imported.append(copy.deepcopy(dict(candidate)))
+        metadata = {
+            "member": journal_member, "sha256": journal_sha,
+            "schema": SCHEMA_VERSION, "summary_member": summary_member or "",
+            "summary_sha256": summary_sha,
+            "pending_recovered_in_memory": pending_recovered,
+            "deterministic_csv_fallback_count": len(legacy_events) - len(consumed),
+            "authoritative": True, "read_only": False,
+        }
+        return (
+            imported, [copy.deepcopy(dict(item)) for item in records],
+            metadata, [],
         )
 
     by_source_hash: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
@@ -1291,12 +1421,79 @@ def _import_archived_live_events(
     )
 
 
-def import_point_events(session: SessionArchive) -> ImportedPointEvents:
-    """Import labelable points and read-only context from one session ZIP."""
+def _initial_assumption_event(session: SessionArchive) -> dict[str, Any]:
+    """Return the deterministic audit item for the explicit initial state."""
+
+    first = session.frames[0]
+    anchor = frame_anchor(first)
+    session_identity = str(session.metadata.get("session_id") or session.sha256)
+    row = {
+        "kind": "initial_assumption", "default": "one_by_one",
+        "capture_sequence": str(first.capture_sequence),
+        "image_sha256": first.frame_sha256,
+    }
+    identifier = deterministic_live_event_id(
+        session_identity=session_identity, source_file="initial_assumption",
+        source_index=0, original_at_utc=first.captured_at_utc,
+        capture_sequence=first.capture_sequence,
+        source_row_hash=source_identity_sha256(
+            row, source_kind="initial_assumption",
+        ),
+    )
+    return {
+        "schema": SCHEMA_VERSION,
+        "event_id": identifier,
+        "source": {
+            "kind": "initial_assumption",
+            "session_identity": session_identity,
+            "source_file": "initial_assumption",
+            "source_index": "0",
+            "source_sequence": 0,
+            "source_event_idx": "0",
+            "source_row_sha256": source_identity_sha256(
+                row, source_kind="initial_assumption",
+            ),
+            "source_row_hash_algorithm": "sha256-canonical-json-row-v1",
+            "source_file_sha256": "",
+            "session_archive_sha256": session.sha256,
+            "original_at_utc": first.captured_at_utc,
+            "original_elapsed_s": first.elapsed_s,
+            "original_anchor": copy.deepcopy(anchor),
+            "original_note": (
+                "Initial state is 1x1 with Bad clarity; grower selects "
+                "initial surface quality."
+            ),
+            "legacy_imports": [],
+        },
+        "review": {
+            "anchor": copy.deepcopy(anchor),
+            "representative_anchor": None,
+            "labels": [],
+            "candidate_decision": "confirmed",
+            "comment": "",
+            "disposition": "active", "disposition_reason": "",
+        },
+        "status": "Draft", "revision_id": "",
+    }
+
+
+def import_point_events(
+    session: SessionArchive,
+    *,
+    include_auto_events: bool = True,
+) -> ImportedPointEvents:
+    """Import labelable points and read-only context from one session ZIP.
+
+    ``include_auto_events=False`` is a reversible review-mode choice.  It does
+    not modify the immutable acquisition archive; it only omits automatic
+    image-change proposals from the generated labeling report.
+    """
 
     if not all(frame.frame_sha256 for frame in session.frames):
         raise ValueError("Frame payload hashes are required before event import")
-    events: list[dict[str, Any]] = []
+    if not session.frames:
+        raise PointEventValidationError("at least one saved frame is required")
+    events: list[dict[str, Any]] = [_initial_assumption_event(session)]
     manual = read_csv_member(session, "manual_events.csv")
     if manual is not None:
         events.extend(
@@ -1323,6 +1520,11 @@ def import_point_events(session: SessionArchive) -> ImportedPointEvents:
     if archived_live is not None:
         events, source_revisions, source_journal, review_conflicts = archived_live
         unlinked.extend(review_conflicts)
+    if not include_auto_events:
+        events = [
+            event for event in events
+            if str(event.get("source", {}).get("kind", "")) != "auto_capture"
+        ]
     events.sort(key=lambda event: (
         float(event["source"].get("original_elapsed_s")) if event["source"].get("original_elapsed_s") is not None else math.inf,
         str(event["source"]["kind"]), str(event["event_id"]),
@@ -1343,8 +1545,8 @@ def make_posthoc_event(
 ) -> dict[str, Any]:
     """Create a Draft at an existing saved frame; UUIDs are intentionally random."""
 
-    reviewer = str(actor or "").strip()
-    if not reviewer:
+    creator = str(actor or "").strip()
+    if not creator:
         raise PointEventValidationError("posthoc event actor is required")
     normalized = validate_review_anchor(anchor)
     created = _utc(at_utc or datetime.now(timezone.utc).isoformat())
@@ -1354,7 +1556,7 @@ def make_posthoc_event(
         "event_id": identifier,
         "source": {
             "kind": "posthoc",
-            "created_at_utc": created, "created_by": reviewer,
+            "created_at_utc": created, "created_by": creator,
             "source_row_sha256": "", "source_file": "",
             "source_index": "", "session_identity": "",
             "original_at_utc": normalized["captured_at_utc"],
@@ -1363,10 +1565,9 @@ def make_posthoc_event(
             "original_note": "", "legacy_imports": [],
         },
         "review": {
-            "anchor": copy.deepcopy(normalized), "comment": "",
-            "reviewer": reviewer, "confidence": None,
-            "human_reconstruction": None, "change_from": None,
-            "change_to": None, "equalizer": None,
+            "anchor": copy.deepcopy(normalized),
+            "representative_anchor": None,
+            "labels": [], "candidate_decision": "confirmed", "comment": "",
             "disposition": "active", "disposition_reason": "",
         },
         "status": "Draft", "revision_id": "",
@@ -1842,6 +2043,689 @@ def replay_revisions(
     return copy.deepcopy(state)
 
 
+# ---------------------------------------------------------------------------
+# V2 semantic model.  These definitions intentionally supersede the v1-era
+# helpers above; the older Equalizer validator remains available solely for
+# forensic validation of archived v1 evidence.
+
+
+def _v2_labels(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise PointEventValidationError("review labels must be an array")
+    result: list[dict[str, str]] = []
+    identifiers: set[str] = set()
+    meanings: set[tuple[str, str, str]] = set()
+    reconstruction_values: set[str] = set()
+    clarity_seen = False
+    quality_seen = False
+    for raw in value:
+        try:
+            label = validate_semantic_label(raw)
+        except (TypeError, ValueError) as exc:
+            raise PointEventValidationError(str(exc)) from exc
+        meaning = (label["kind"], label["change"], label["value"])
+        if label["label_id"] in identifiers:
+            raise PointEventValidationError("semantic label_id is duplicated")
+        if meaning in meanings:
+            raise PointEventValidationError("duplicate semantic label at one event")
+        if label["kind"] == "pattern_clarity":
+            if clarity_seen:
+                raise PointEventValidationError(
+                    "an event can contain only one pattern-clarity change"
+                )
+            clarity_seen = True
+        elif label["kind"] == "surface_quality":
+            if quality_seen:
+                raise PointEventValidationError(
+                    "an event can contain only one surface-quality change"
+                )
+            quality_seen = True
+        elif label["value"] in reconstruction_values:
+            raise PointEventValidationError(
+                "a reconstruction cannot both appear and disappear at one event"
+            )
+        else:
+            reconstruction_values.add(label["value"])
+        identifiers.add(label["label_id"])
+        meanings.add(meaning)
+        result.append(label)
+    return result
+
+
+def completion_errors(event: Mapping[str, Any]) -> list[str]:
+    review = event.get("review")
+    if not isinstance(review, Mapping):
+        return ["review content is missing"]
+    errors: list[str] = []
+    if review.get("disposition") != "active":
+        errors.append("dismissed or deleted events cannot be completed")
+    decision = str(review.get("candidate_decision", ""))
+    source_kind = str(event.get("source", {}).get("kind", ""))
+    if decision not in CANDIDATE_DECISIONS:
+        errors.append("candidate decision is invalid")
+    elif source_kind in CANDIDATE_SOURCES and decision == "pending":
+        errors.append("candidate must be confirmed or rejected")
+    if decision == "rejected":
+        if source_kind not in CANDIDATE_SOURCES:
+            errors.append("only automatic candidates can be rejected")
+    else:
+        try:
+            labels = _v2_labels(review.get("labels"))
+        except PointEventValidationError as exc:
+            errors.append(str(exc))
+        else:
+            if source_kind == "initial_assumption":
+                if len(labels) != 1 or labels[0]["kind"] != "surface_quality":
+                    errors.append(
+                        "initial surface quality must be selected as good or bad"
+                    )
+            elif not labels:
+                errors.append("at least one semantic label is required")
+    return errors
+
+
+def _anchor_frame_index(event: Mapping[str, Any], field: str) -> int | None:
+    anchor = event.get("review", {}).get(field)
+    if not isinstance(anchor, Mapping) or anchor.get("frame_index") in (None, ""):
+        return None
+    return int(anchor["frame_index"])
+
+
+def _owns_state_interval(event: Mapping[str, Any]) -> bool:
+    """Whether ``event`` owns a derived state interval after its boundary."""
+
+    review = event.get("review", {})
+    if not isinstance(review, Mapping) or review.get("disposition") != "active":
+        return False
+    if event.get("source", {}).get("kind") == "initial_assumption":
+        return True
+    return (
+        review.get("candidate_decision") == "confirmed"
+        and bool(review.get("labels"))
+    )
+
+
+def _representative_anchor_identity(anchor: Mapping[str, Any]) -> tuple[int, int, str]:
+    return (
+        int(anchor["frame_index"]),
+        int(anchor["capture_sequence"]),
+        str(anchor["image_sha256"]).lower(),
+    )
+
+
+def interval_errors(
+    event_id: str, state: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    """Validate the one independent Anchor for an event-owned state interval.
+
+    Events on the same saved frame form one atomic boundary and therefore own
+    one following interval together.  A journal may retain the same Anchor on
+    more than one owner for compatibility; identical copies normalize to one
+    interval Anchor, while conflicting copies fail closed.
+    """
+
+    event = state[event_id]
+    review = event["review"]
+    if review.get("candidate_decision") == "rejected":
+        return []
+    if not _owns_state_interval(event):
+        return []
+    boundary = _anchor_frame_index(event, "anchor")
+    if boundary is None:
+        return []  # completion_errors/validate_event reports the missing point
+
+    source_kind = str(event.get("source", {}).get("kind", ""))
+    if source_kind == "initial_assumption":
+        owners = [event]
+    else:
+        owners = [
+            other for other in state.values()
+            if other.get("source", {}).get("kind") != "initial_assumption"
+            and _owns_state_interval(other)
+            and _anchor_frame_index(other, "anchor") == boundary
+        ]
+    raw_anchors = [
+        owner.get("review", {}).get("representative_anchor")
+        for owner in owners
+        if isinstance(owner.get("review", {}).get("representative_anchor"), Mapping)
+    ]
+    anchors = {
+        _representative_anchor_identity(anchor): anchor
+        for anchor in raw_anchors
+    }
+    errors: list[str] = []
+    if not anchors:
+        return ["a representative interval frame is required"]
+    if len(anchors) > 1:
+        return ["events at one state boundary disagree about the interval Anchor"]
+    representative = next(iter(anchors))[0]
+    if representative < boundary:
+        errors.append("representative interval frame must be at or after the event anchor")
+    later: list[int] = []
+    for other_id, other in state.items():
+        if other_id == event_id:
+            continue
+        if other.get("source", {}).get("kind") == "initial_assumption":
+            continue
+        if not _owns_state_interval(other):
+            continue
+        other_boundary = _anchor_frame_index(other, "anchor")
+        if other_boundary is not None and other_boundary > boundary:
+            later.append(other_boundary)
+    if later and representative >= min(later):
+        errors.append("representative interval frame must be before the next semantic event")
+    return errors
+
+
+def _immutable_projection(event: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: copy.deepcopy(event.get(key)) for key in ("event_id", "source")}
+
+
+def _changed_review_fields(
+    before: Mapping[str, Any], after: Mapping[str, Any],
+) -> set[str]:
+    return {key for key in set(before) | set(after) if before.get(key) != after.get(key)}
+
+
+def validate_event(event: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(event, Mapping):
+        raise PointEventValidationError("event must be an object")
+    result = copy.deepcopy(dict(event))
+    if result.get("schema") != SCHEMA_VERSION:
+        raise PointEventValidationError("event schema is invalid")
+    try:
+        uuid.UUID(str(result.get("event_id", "")))
+    except ValueError as exc:
+        raise PointEventValidationError("event_id must be a UUID") from exc
+    source = result.get("source")
+    if not isinstance(source, Mapping):
+        raise PointEventValidationError("source evidence is required")
+    source_kind = str(source.get("kind", ""))
+    if source_kind not in SOURCE_TYPES:
+        raise PointEventValidationError("event source is invalid")
+    if source_kind != "posthoc" and not str(source.get("source_row_sha256", "")):
+        raise PointEventValidationError("imported source row hash is required")
+    review = result.get("review")
+    if not isinstance(review, Mapping):
+        raise PointEventValidationError("review content is required")
+    expected = {
+        "anchor", "representative_anchor", "labels", "candidate_decision",
+        "comment", "disposition", "disposition_reason",
+    }
+    accepted = expected | {"reviewer", "confidence"}
+    if set(review) != expected and set(review) != accepted:
+        raise PointEventValidationError("v2 review fields are invalid")
+    normalized_review = copy.deepcopy(dict(review))
+    # Early, pre-deployment v2 drafts stored these fields per event.  Preserve
+    # their journal evidence, but normalize active state to the one reviewer
+    # kept on the annotation set/session.
+    normalized_review.pop("reviewer", None)
+    normalized_review.pop("confidence", None)
+    normalized_review["anchor"] = validate_review_anchor(review.get("anchor", {}))
+    representative = review.get("representative_anchor")
+    normalized_review["representative_anchor"] = (
+        validate_review_anchor(representative) if representative is not None else None
+    )
+    normalized_review["labels"] = _v2_labels(review.get("labels"))
+    if source_kind == "initial_assumption" and (
+        len(normalized_review["labels"]) > 1
+        or any(
+            label["kind"] != "surface_quality"
+            for label in normalized_review["labels"]
+        )
+    ):
+        raise PointEventValidationError(
+            "initial state accepts only one surface-quality selection"
+        )
+    decision = str(review.get("candidate_decision", ""))
+    if decision not in CANDIDATE_DECISIONS:
+        raise PointEventValidationError("candidate decision is invalid")
+    if source_kind not in CANDIDATE_SOURCES and decision == "rejected":
+        raise PointEventValidationError("human-created events cannot be rejected")
+    if decision == "rejected" and (
+        normalized_review["labels"]
+        or normalized_review["representative_anchor"] is not None
+    ):
+        raise PointEventValidationError(
+            "a rejected candidate cannot retain semantic labels or a representative anchor"
+        )
+    normalized_review["candidate_decision"] = decision
+    disposition = str(review.get("disposition", ""))
+    if disposition not in {"active", "dismissed", "deleted"}:
+        raise PointEventValidationError("review disposition is invalid")
+    if disposition == "deleted" and source_kind != "posthoc":
+        raise PointEventValidationError("source events cannot be deleted")
+    if disposition != "active" and not str(review.get("disposition_reason", "")).strip():
+        raise PointEventValidationError("inactive event requires a reason")
+    result["review"] = normalized_review
+    status = str(result.get("status", ""))
+    if status not in STATUSES:
+        raise PointEventValidationError("event status is invalid")
+    if status == "Complete" and completion_errors(result):
+        raise PointEventValidationError(
+            "Complete event is invalid: " + "; ".join(completion_errors(result))
+        )
+    return result
+
+
+def _validate_revision_transition(
+    before: Mapping[str, Any] | None, after: Mapping[str, Any], *,
+    action: str, actor: str,
+) -> None:
+    if action not in REVISION_ACTIONS:
+        raise PointEventValidationError("revision action is invalid")
+    if not str(actor or "").strip():
+        raise PointEventValidationError("revision actor is required")
+    if before is None:
+        if action != "create_posthoc":
+            raise PointEventValidationError("new events require create_posthoc")
+        review = after["review"]
+        if (
+            after["source"]["kind"] != "posthoc" or after["status"] != "Draft"
+            or review.get("disposition") != "active" or review.get("labels") != []
+            or review.get("candidate_decision") != "confirmed"
+            or review.get("representative_anchor") is not None
+            or after["source"].get("original_anchor") != review.get("anchor")
+        ):
+            raise PointEventValidationError("posthoc create state is invalid")
+        return
+    if _immutable_projection(before) != _immutable_projection(after):
+        raise PointEventValidationError("revision altered immutable source evidence")
+    protected_before = {
+        key: value for key, value in before.items()
+        if key not in {"review", "status", "revision_id"}
+    }
+    protected_after = {
+        key: value for key, value in after.items()
+        if key not in {"review", "status", "revision_id"}
+    }
+    if protected_before != protected_after:
+        raise PointEventValidationError("revision changed protected event metadata")
+    before_review, after_review = before["review"], after["review"]
+    changed = _changed_review_fields(before_review, after_review)
+    before_status, after_status = before["status"], after["status"]
+    if action == "edit":
+        valid = changed <= {"comment"} and after_status == "Draft"
+    elif action in {"add_label", "remove_label", "edit_label"}:
+        valid = (
+            changed == {"labels"}
+            and after_status == "Draft"
+        )
+        old = {item["label_id"]: item for item in before_review["labels"]}
+        new = {item["label_id"]: item for item in after_review["labels"]}
+        if action == "add_label":
+            valid = valid and len(new) == len(old) + 1 and all(new.get(key) == value for key, value in old.items())
+        elif action == "remove_label":
+            valid = valid and len(new) == len(old) - 1 and all(old.get(key) == value for key, value in new.items())
+        else:
+            changed_ids = {key for key in set(old) | set(new) if old.get(key) != new.get(key)}
+            valid = valid and set(old) == set(new) and len(changed_ids) == 1
+    elif action == "set_candidate_decision":
+        valid = (
+            "candidate_decision" in changed
+            and changed <= {"candidate_decision", "labels", "representative_anchor"}
+            and after_status == "Draft"
+        )
+        if after_review["candidate_decision"] == "rejected":
+            valid = (
+                valid and after_review["labels"] == []
+                and after_review["representative_anchor"] is None
+            )
+        else:
+            valid = valid and changed == {"candidate_decision"}
+    elif action == "move_anchor":
+        valid = (
+            "anchor" in changed
+            and changed <= {"anchor", "representative_anchor"}
+            and after_review.get("representative_anchor") is None
+            and after_status == "Draft"
+        )
+    elif action == "move_representative_anchor":
+        valid = changed == {"representative_anchor"} and after_status == "Draft"
+    elif action == "complete":
+        valid = not changed and before_status == "Draft" and after_status == "Complete" and not completion_errors(after)
+    elif action == "reopen":
+        valid = not changed and before_status == "Complete" and after_status == "Draft"
+    elif action == "dismiss":
+        valid = before["source"]["kind"] in {"manual", "auto_capture"} and changed <= {"disposition", "disposition_reason"} and after_review["disposition"] == "dismissed" and bool(str(after_review["disposition_reason"]).strip()) and after_status == "Draft"
+    elif action == "undismiss":
+        valid = before["source"]["kind"] != "posthoc" and before_review["disposition"] == "dismissed" and changed <= {"disposition", "disposition_reason"} and after_review["disposition"] == "active" and after_review["disposition_reason"] == "" and after_status == "Draft"
+    elif action == "delete":
+        valid = before["source"]["kind"] == "posthoc" and changed <= {"disposition", "disposition_reason"} and after_review["disposition"] == "deleted" and bool(str(after_review["disposition_reason"]).strip()) and after_status == "Draft"
+    elif action == "restore":
+        valid = before["source"]["kind"] == "posthoc" and before_review["disposition"] == "deleted" and changed <= {"disposition", "disposition_reason"} and after_review["disposition"] == "active" and after_review["disposition_reason"] == "" and after_status == "Draft"
+    else:
+        valid = False
+    if not valid:
+        raise PointEventValidationError(f"{action} transition is invalid")
+
+
+def make_revision(
+    before: Mapping[str, Any] | None, after: Mapping[str, Any], *,
+    action: str, actor: str, base_revision_id: str = "",
+    at_utc: str | None = None, revision_id: str | None = None,
+) -> dict[str, Any]:
+    actor_text = str(actor or "").strip()
+    if not actor_text:
+        raise PointEventValidationError("revision actor is required")
+    after_copy = validate_event(after)
+    before_copy = validate_event(before) if before is not None else None
+    _validate_revision_transition(before_copy, after_copy, action=action, actor=actor_text)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "revision_id": revision_id or str(uuid.uuid4()),
+        "event_id": after_copy["event_id"], "actor": actor_text,
+        "at_utc": _utc(at_utc or datetime.now(timezone.utc).isoformat()),
+        "action": action, "base_revision_id": str(base_revision_id or ""),
+        "before_sha256": _sha256_json(before_copy) if before_copy is not None else "",
+        "before": before_copy, "after": after_copy,
+    }
+
+
+def revise_event(
+    event: Mapping[str, Any], *, action: str, actor: str,
+    changes: Mapping[str, Any] | None = None, at_utc: str | None = None,
+    state: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    before = validate_event(event)
+    after = copy.deepcopy(before)
+    changes = copy.deepcopy(dict(changes or {}))
+    review = after["review"]
+    if action == "edit":
+        if set(changes) - {"comment"}:
+            raise PointEventValidationError("edit contains a non-editable field")
+        review.update(changes)
+        after["status"] = "Draft"
+    elif action == "add_label":
+        initial = before["source"]["kind"] == "initial_assumption"
+        if set(changes) != {"label"} or not isinstance(changes["label"], Mapping):
+            raise PointEventValidationError("add_label requires one label")
+        supplied = dict(changes["label"])
+        supplied.setdefault("label_id", str(uuid.uuid4()))
+        if initial and supplied.get("kind") != "surface_quality":
+            raise PointEventValidationError(
+                "initial state accepts only a surface-quality selection"
+            )
+        review["labels"] = _v2_labels([*review["labels"], supplied])
+        after["status"] = "Draft"
+    elif action == "edit_label":
+        initial = before["source"]["kind"] == "initial_assumption"
+        if set(changes) != {"label_id", "label"} or not isinstance(changes["label"], Mapping):
+            raise PointEventValidationError("edit_label requires label_id and label")
+        label_id = str(changes["label_id"])
+        supplied = dict(changes["label"])
+        if supplied.get("label_id") not in (None, "", label_id):
+            raise PointEventValidationError("semantic label_id cannot be changed")
+        supplied["label_id"] = label_id
+        if initial and supplied.get("kind") != "surface_quality":
+            raise PointEventValidationError(
+                "initial state accepts only a surface-quality selection"
+            )
+        matches = [index for index, item in enumerate(review["labels"]) if item["label_id"] == label_id]
+        if len(matches) != 1:
+            raise PointEventValidationError("unknown or duplicate semantic label_id")
+        labels = copy.deepcopy(review["labels"])
+        labels[matches[0]] = supplied
+        review["labels"] = _v2_labels(labels)
+        after["status"] = "Draft"
+    elif action == "remove_label":
+        if set(changes) != {"label_id"}:
+            raise PointEventValidationError("remove_label requires label_id")
+        label_id = str(changes["label_id"])
+        labels = [item for item in review["labels"] if item["label_id"] != label_id]
+        if len(labels) != len(review["labels"]) - 1:
+            raise PointEventValidationError("unknown or duplicate semantic label_id")
+        review["labels"] = labels
+        after["status"] = "Draft"
+    elif action == "set_candidate_decision":
+        if set(changes) != {"decision"} or changes["decision"] not in CANDIDATE_DECISIONS:
+            raise PointEventValidationError("candidate decision is invalid")
+        if after["source"]["kind"] not in CANDIDATE_SOURCES and changes["decision"] != "confirmed":
+            raise PointEventValidationError("human-created events are already confirmed")
+        if review["candidate_decision"] == changes["decision"]:
+            raise PointEventValidationError("candidate decision is unchanged")
+        review["candidate_decision"] = changes["decision"]
+        if changes["decision"] == "rejected":
+            # Rejected proposals remain immutable source evidence but cease to
+            # be semantic training targets.  The revision `before` snapshot
+            # retains the grower's prior labels and representative frame.
+            review["labels"] = []
+            review["representative_anchor"] = None
+        after["status"] = "Draft"
+    elif action == "move_anchor":
+        if set(changes) != {"anchor"}:
+            raise PointEventValidationError("move_anchor requires anchor")
+        review["anchor"] = validate_review_anchor(changes["anchor"])
+        # Moving a boundary changes its following state interval.  The old
+        # representative frame is therefore never silently retained.
+        review["representative_anchor"] = None
+        after["status"] = "Draft"
+    elif action == "move_representative_anchor":
+        if set(changes) != {"representative_anchor"}:
+            raise PointEventValidationError("move_representative_anchor requires representative_anchor")
+        review["representative_anchor"] = validate_review_anchor(changes["representative_anchor"])
+        after["status"] = "Draft"
+    elif action == "complete":
+        if changes:
+            raise PointEventValidationError("Complete cannot include edits")
+        candidate_state = dict(state) if state is not None else {}
+        candidate_state[after["event_id"]] = after
+        errors = [
+            *completion_errors(after),
+            *interval_errors(after["event_id"], candidate_state),
+        ]
+        if errors:
+            raise PointEventValidationError("Cannot complete event: " + "; ".join(errors))
+        after["status"] = "Complete"
+    elif action == "reopen":
+        if changes:
+            raise PointEventValidationError("Reopen cannot include edits")
+        after["status"] = "Draft"
+    elif action in {"dismiss", "delete"}:
+        reason = str(changes.get("reason", "")).strip()
+        if set(changes) != {"reason"} or not reason:
+            raise PointEventValidationError(f"{action} reason is required")
+        if action == "dismiss" and after["source"]["kind"] not in {"manual", "auto_capture"}:
+            raise PointEventValidationError("only manual or automatic source events can be dismissed")
+        if action == "delete" and after["source"]["kind"] != "posthoc":
+            raise PointEventValidationError("source events cannot be deleted")
+        review.update({
+            "disposition": "dismissed" if action == "dismiss" else "deleted",
+            "disposition_reason": reason,
+        })
+        after["status"] = "Draft"
+    elif action in {"undismiss", "restore"}:
+        if changes:
+            raise PointEventValidationError(f"{action} cannot include edits")
+        review.update({"disposition": "active", "disposition_reason": ""})
+        after["status"] = "Draft"
+    else:
+        raise PointEventValidationError("create_posthoc is only valid for a new event")
+    revision = make_revision(
+        before, after, action=action, actor=actor,
+        base_revision_id=str(before.get("revision_id", "")), at_utc=at_utc,
+    )
+    after["revision_id"] = revision["revision_id"]
+    revision["after"] = copy.deepcopy(after)
+    return validate_event(after), revision
+
+
+def replay_revisions(
+    initial_events: Iterable[Mapping[str, Any]],
+    revisions: Iterable[Mapping[str, Any]], *, require_integrity: bool = False,
+) -> dict[str, dict[str, Any]]:
+    state: dict[str, dict[str, Any]] = {}
+    for event in initial_events:
+        checked = validate_event(event)
+        if checked["event_id"] in state:
+            raise PointEventValidationError("duplicate initial event_id")
+        state[checked["event_id"]] = checked
+    if sum(item["source"]["kind"] == "initial_assumption" for item in state.values()) != 1:
+        raise PointEventValidationError("exactly one initial 1x1 assumption is required")
+    records = list(revisions)
+    if require_integrity:
+        _validate_record_integrity(records)
+    seen: set[str] = set()
+    for raw in records:
+        if not isinstance(raw, Mapping) or raw.get("schema_version") != SCHEMA_VERSION:
+            raise PointEventValidationError("revision schema is invalid")
+        revision_id = str(raw.get("revision_id", ""))
+        try:
+            uuid.UUID(revision_id)
+        except ValueError as exc:
+            raise PointEventValidationError("revision_id must be a UUID") from exc
+        if revision_id in seen:
+            raise PointEventValidationError("duplicate revision_id")
+        seen.add(revision_id)
+        event_id, action = str(raw.get("event_id", "")), str(raw.get("action", ""))
+        if not _utc(raw.get("at_utc")):
+            raise PointEventValidationError("revision UTC is invalid")
+        if action == "create_posthoc":
+            if event_id in state or raw.get("before") is not None:
+                raise PointEventValidationError("posthoc create conflicts with current state")
+            after = validate_event(raw.get("after", {}))
+            _validate_revision_transition(None, after, action=action, actor=str(raw.get("actor", "")))
+        else:
+            if event_id not in state:
+                raise PointEventValidationError("revision targets an unknown event")
+            before = state[event_id]
+            if str(raw.get("base_revision_id", "")) != str(before.get("revision_id", "")):
+                raise PointEventValidationError("revision base does not match current state")
+            if str(raw.get("before_sha256", "")) != _sha256_json(before):
+                raise PointEventValidationError("revision before hash does not match current state")
+            supplied_before = validate_event(raw.get("before", {}))
+            if supplied_before != before:
+                raise PointEventValidationError("revision before snapshot does not match current state")
+            after = validate_event(raw.get("after", {}))
+            _validate_revision_transition(before, after, action=action, actor=str(raw.get("actor", "")))
+        if after["event_id"] != event_id:
+            raise PointEventValidationError("revision event identity is inconsistent")
+        after["revision_id"] = revision_id
+        state[event_id] = after
+    for event_id, event in state.items():
+        if event["status"] == "Complete":
+            errors = interval_errors(event_id, state)
+            if errors:
+                raise PointEventValidationError("Complete event interval is invalid: " + "; ".join(errors))
+    return copy.deepcopy(state)
+
+
+def derive_state_segments(
+    events: Iterable[Mapping[str, Any]], *, frame_count: int,
+    session_identity: str,
+) -> list[dict[str, Any]]:
+    """Materialize complete interval states from the editable point deltas.
+
+    ``initial_assumption`` is workflow evidence for reviewing the default
+    initial state, not a physical ``1x1 appeared`` transition.  It owns the
+    first interval Anchor while reconstruction and clarity remain fixed at
+    1x1 and Bad.  Its sole optional ``surface_quality`` label selects the
+    initial Good/Bad quality; until selected, quality is unknown.
+
+    The current journal stores a representative Anchor beside its boundary
+    event for revision compatibility.  This function normalizes that storage
+    into one first-class ``anchor`` on each exported state segment.
+    """
+
+    checked = [validate_event(item) for item in events]
+    initial_events = [
+        item for item in checked
+        if item["source"]["kind"] == "initial_assumption"
+    ]
+    if len(initial_events) != 1:
+        raise PointEventValidationError(
+            "exactly one initial 1x1 state review is required"
+        )
+    semantic_events = [
+        item for item in checked
+        if item["source"]["kind"] != "initial_assumption"
+    ]
+    initial_quality = next((
+        label["value"]
+        for label in initial_events[0]["review"]["labels"]
+        if label["kind"] == "surface_quality"
+    ), "unknown")
+    replay_initial_state = {
+        **INITIAL_STATE,
+        "quality": initial_quality,
+    }
+    try:
+        replay = replay_event_states(
+            semantic_events,
+            frame_count=int(frame_count),
+            initial_state=replay_initial_state,
+            session_identity=str(session_identity),
+        )
+    except EventStateError as exc:
+        raise PointEventValidationError(
+            "event-state replay is inconsistent: " + str(exc)
+        ) from exc
+
+    by_id = {item["event_id"]: item for item in checked}
+    result: list[dict[str, Any]] = []
+    for segment in replay.segments:
+        owner_ids = (
+            segment.boundary_event_ids
+            if segment.boundary_event_ids
+            else (initial_events[0]["event_id"],)
+        )
+        owners = [by_id[event_id] for event_id in owner_ids]
+        raw_anchors = [
+            owner["review"].get("representative_anchor")
+            for owner in owners
+            if owner["review"].get("representative_anchor") is not None
+        ]
+        unique_anchors = {
+            (
+                int(anchor["frame_index"]),
+                int(anchor["capture_sequence"]),
+                str(anchor["image_sha256"]).lower(),
+            ): anchor
+            for anchor in raw_anchors
+        }
+        if len(unique_anchors) > 1:
+            raise PointEventValidationError(
+                "events at one state boundary disagree about the interval Anchor"
+            )
+        anchor = copy.deepcopy(next(iter(unique_anchors.values()), None))
+        if anchor is not None:
+            try:
+                replay_event_states(
+                    semantic_events,
+                    frame_count=int(frame_count),
+                    initial_state=replay_initial_state,
+                    session_identity=str(session_identity),
+                    anchors=[SegmentAnchor(
+                        segment_id=segment.segment_id,
+                        frame_index=int(anchor["frame_index"]),
+                        capture_sequence=int(anchor["capture_sequence"]),
+                        image_sha256=str(anchor["image_sha256"]),
+                    )],
+                )
+            except EventStateError as exc:
+                raise PointEventValidationError(
+                    "state-segment Anchor is invalid: " + str(exc)
+                ) from exc
+        complete = bool(anchor) and all(
+            owner["status"] == "Complete" for owner in owners
+        )
+        result.append({
+            "segment_id": segment.segment_id,
+            "start_frame_index": segment.start_frame,
+            "end_frame_index_exclusive": segment.end_frame_exclusive,
+            "frame_count": segment.end_frame_exclusive - segment.start_frame,
+            "state": {
+                "reconstructions": sorted(segment.reconstructions),
+                "clarity": segment.clarity,
+                "quality": segment.quality,
+            },
+            "boundary_event_ids": list(segment.boundary_event_ids),
+            "anchor": anchor,
+            "status": "Complete" if complete else "Draft",
+        })
+    return result
+
+
 def point_event_document(
     *, dataset: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
     reference_events: Sequence[Mapping[str, Any]] = (),
@@ -1852,10 +2736,17 @@ def point_event_document(
     reviewer: str,
 ) -> dict[str, Any]:
     current = replay_revisions(events, revisions)
+    state_segments = derive_state_segments(
+        current.values(),
+        frame_count=int(dataset.get("frame_count", 0)),
+        session_identity=str(dataset.get("dataset_id", "")),
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "document_type": DOCUMENT_TYPE,
         "dataset": copy.deepcopy(dict(dataset)),
+        "initial_state": copy.deepcopy(INITIAL_STATE),
+        "segments": state_segments,
         "annotation_set": {
             "annotation_set_id": str(annotation_set_id),
             "reviewer": str(reviewer),
@@ -1926,23 +2817,37 @@ def validate_point_event_document(
         checked_supplied[item["event_id"]] = item
     if checked_supplied != current:
         raise PointEventValidationError("materialized events do not match revision replay")
+    if document.get("initial_state") != INITIAL_STATE:
+        raise PointEventValidationError("initial 1x1 state was changed or omitted")
+    expected_segments = derive_state_segments(
+        current.values(),
+        frame_count=int(expected_dataset.get("frame_count", 0)),
+        session_identity=str(expected_dataset.get("dataset_id", "")),
+    )
+    if document.get("segments") != expected_segments:
+        raise PointEventValidationError(
+            "materialized state segments do not match point-event replay"
+        )
     # Every review anchor must identify the exact saved frame in this report.
     indices = payload.get("heartbeat_indices", [])
     sequences = payload.get("capture_sequences", [])
     hashes = payload.get("frame_sha256", [])
     times = payload.get("times", [])
     for event in current.values():
-        anchor = event["review"]["anchor"]
-        index = int(anchor["frame_index"]) - 1
-        if index < 0 or index >= len(hashes):
-            raise PointEventValidationError("review anchor lies outside the report")
-        if (
-            int(anchor["heartbeat_idx"]) != int(indices[index])
-            or int(anchor["capture_sequence"]) != int(sequences[index])
-            or str(anchor["image_sha256"]).lower() != str(hashes[index]).lower()
-            or not math.isclose(float(anchor["elapsed_s"]), float(times[index]), abs_tol=0.0015)
-        ):
-            raise PointEventValidationError("review anchor provenance does not match the report")
+        anchors = [event["review"]["anchor"]]
+        if event["review"].get("representative_anchor") is not None:
+            anchors.append(event["review"]["representative_anchor"])
+        for anchor in anchors:
+            index = int(anchor["frame_index"]) - 1
+            if index < 0 or index >= len(hashes):
+                raise PointEventValidationError("review anchor lies outside the report")
+            if (
+                int(anchor["heartbeat_idx"]) != int(indices[index])
+                or int(anchor["capture_sequence"]) != int(sequences[index])
+                or str(anchor["image_sha256"]).lower() != str(hashes[index]).lower()
+                or not math.isclose(float(anchor["elapsed_s"]), float(times[index]), abs_tol=0.0015)
+            ):
+                raise PointEventValidationError("review anchor provenance does not match the report")
     return copy.deepcopy(dict(document))
 
 
@@ -2094,10 +2999,6 @@ class PointEventSidecarStore:
     def apply_revision(self, command: Mapping[str, Any]) -> dict[str, Any]:
         self.ensure_session_verified()
         with self._revision_lock:
-            if str(command.get("action", "")) == "set_equalizer":
-                raise PointEventValidationError(
-                    "set_equalizer requires a server-held Equalizer result"
-                )
             return self._apply_revision_locked(command)
 
     def apply_equalizer_revision(
@@ -2105,20 +3006,11 @@ class PointEventSidecarStore:
         command: Mapping[str, Any],
         measurement: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Persist one trusted coordinator result; browser payload is ignored."""
+        """Reject the removed v1 bridge explicitly."""
 
-        self.ensure_session_verified()
-        with self._revision_lock:
-            if str(command.get("action", "")) != "set_equalizer":
-                raise PointEventValidationError("trusted Equalizer action is invalid")
-            supplied_changes = dict(command.get("changes") or {})
-            if supplied_changes:
-                raise PointEventValidationError(
-                    "browser cannot supply Equalizer measurement fields"
-                )
-            trusted = copy.deepcopy(dict(command))
-            trusted["changes"] = {"equalizer": copy.deepcopy(dict(measurement))}
-            return self._apply_revision_locked(trusted, trusted_equalizer=True)
+        raise PointEventValidationError(
+            "Equalizer is not part of rheed-point-events-v2"
+        )
 
     def import_document(self, document: Mapping[str, Any]) -> dict[str, Any]:
         """Import a static-browser Draft journal through the trusted bridge.
@@ -2166,11 +3058,11 @@ class PointEventSidecarStore:
                     "imported Draft history conflicts with durable sidecar revisions"
                 )
             if any(
-                str(item.get("action", "")) in {"set_equalizer", "complete"}
+                str(item.get("action", "")) == "complete"
                 for item in incoming[len(existing):]
             ):
                 raise PointEventValidationError(
-                    "static Draft imports cannot attest Equalizer or Complete actions"
+                    "static Draft imports cannot attest Complete actions"
                 )
             annotation_set = checked["annotation_set"]
             if existing and str(annotation_set.get("annotation_set_id")) != str(
@@ -2210,7 +3102,7 @@ class PointEventSidecarStore:
             return snapshot
 
     def _apply_revision_locked(
-        self, command: Mapping[str, Any], *, trusted_equalizer: bool = False,
+        self, command: Mapping[str, Any],
     ) -> dict[str, Any]:
         """Apply one browser command and return its durable materialized state."""
 
@@ -2220,7 +3112,7 @@ class PointEventSidecarStore:
         action = str(command.get("action", ""))
         actor = str(command.get("actor", "")).strip()
         changes = copy.deepcopy(dict(command.get("changes") or {}))
-        if action in {"add_event", "create_posthoc"}:
+        if action == "create_posthoc":
             anchor = self._assert_saved_anchor(changes.get("anchor", {}))
             event = make_posthoc_event(anchor, actor=actor)
             revision = make_revision(
@@ -2237,41 +3129,22 @@ class PointEventSidecarStore:
             base = str(command.get("base_revision_id", ""))
             if base != str(current.get("revision_id", "")):
                 raise PointEventValidationError("event changed since it was opened")
-            if action == "complete":
-                trusted_measurement = current.get("review", {}).get("equalizer")
-                trusted_records = self.store.recover()
-                if trusted_measurement is None or not any(
-                    item.get("action") == "set_equalizer"
-                    and item.get("event_id") == event_id
-                    and item.get("after", {}).get("review", {}).get("equalizer")
-                        == trusted_measurement
-                    for item in trusted_records
-                ):
-                    raise PointEventValidationError(
-                        "Complete requires a server-saved Equalizer result"
-                    )
             if action == "move_anchor":
                 changes = {"anchor": self._assert_saved_anchor(changes.get("anchor", {}))}
-            elif action == "set_equalizer" and not trusted_equalizer:
-                raise PointEventValidationError(
-                    "set_equalizer requires a server-held Equalizer result"
-                )
-            elif action == "edit":
-                supplied_anchor = changes.pop("anchor", current["review"]["anchor"])
-                supplied_equalizer = changes.pop(
-                    "equalizer", current["review"].get("equalizer"),
-                )
-                if supplied_anchor != current["review"]["anchor"]:
-                    raise PointEventValidationError(
-                        "use move_anchor to change the review frame"
-                    )
-                if supplied_equalizer != current["review"].get("equalizer"):
-                    raise PointEventValidationError(
-                        "use set_equalizer to change the Equalizer measurement"
-                    )
+            elif action == "move_representative_anchor":
+                changes = {"representative_anchor": self._assert_saved_anchor(
+                    changes.get("representative_anchor", {})
+                )}
             event, revision = revise_event(
                 current, action=action, actor=actor, changes=changes,
+                state=self._state,
             )
+        candidate_state = {**self._state, event["event_id"]: event}
+        derive_state_segments(
+            candidate_state.values(),
+            frame_count=int(self.dataset.get("frame_count", 0)),
+            session_identity=str(self.dataset.get("dataset_id", "")),
+        )
         self._state = self.store.append(
             revision, initial_events=self.initial_events,
         )
@@ -2288,6 +3161,10 @@ class PointEventSidecarStore:
             "ok": True,
             "event": copy.deepcopy(self._state[event["event_id"]]),
             "revision": copy.deepcopy(revision),
+            # The desktop/browser sends the Grower name once as the revision
+            # actor.  Echo the durable session-level identity so the UI can
+            # refresh without inventing a per-event reviewer field.
+            "annotation_set": copy.deepcopy(self._annotation_metadata),
             "unfinished_count": sum(
                 item.get("status") != "Complete"
                 and item.get("review", {}).get("disposition") == "active"
@@ -2327,9 +3204,12 @@ class PointEventSidecarStore:
 
 __all__ = [
     "ACTIVE_EQUALIZER_BASES", "DOCUMENT_TYPE", "ImportedPointEvents",
+    "LEGACY_SCHEMA_VERSION",
     "PointEventSidecarStore", "PointEventValidationError", "RevisionStore",
+    "derive_state_segments",
     "SCHEMA_VERSION", "completion_errors",
     "deterministic_event_id", "frame_anchor", "import_point_events",
+    "interval_errors",
     "make_posthoc_event", "make_revision", "new_posthoc_event_id",
     "point_event_document", "replay_revisions", "revise_event",
     "validate_equalizer_measurement", "validate_event",
