@@ -39,6 +39,16 @@ class ChangeDetector(ABC):
         """
         ...
 
+    @property
+    def last_diagnostics(self) -> dict:
+        """Diagnostics for the most recent score.
+
+        Older/custom detectors are not required to provide diagnostics.  The
+        engine therefore treats an empty mapping as ``not_available`` and
+        preserves the existing scalar-score and Qt-signal contracts.
+        """
+        return {}
+
 
 class IntensityChangeDetector(ChangeDetector):
     """Tier 1: Global mean pixel intensity comparison."""
@@ -173,6 +183,544 @@ class PixelDiffChangeDetector(ChangeDetector):
         if frame.ndim == 2:
             return frame.astype(np.float32)
         return frame[:, :, 1].astype(np.float32)
+
+
+class TranslationInvariantChangeDetector(ChangeDetector):
+    """RHEED structural-change score after bounded translation alignment.
+
+    A small drift of the screen capture or electron-beam image must not be
+    labeled as a reconstruction transition.  This detector estimates only a
+    2-D translation (never scale or rotation), aligns the current frame to a
+    rolling reference, and scores the valid overlap.  Registration uses a
+    down-sampled NumPy phase correlation followed by a bounded integer-pixel
+    normalized-correlation refinement, so it remains suitable for the older
+    CPU-only Ch-MBE workstation.
+
+    The comparison independently normalizes the robust luminance range of the
+    reference and current overlap.  Uniform brightness and contrast changes
+    therefore contribute little, while spatial redistribution of RHEED spots
+    and streaks remains visible.  Scores retain the familiar approximately
+    0--255 pixel-residual scale used by ``PixelDiffChangeDetector``.
+
+    Low-texture frames, insufficient overlap, and translations beyond
+    ``max_shift_px`` fail closed with a zero score.  The reason, estimated
+    shift, overlap, and registration confidence remain available through
+    :attr:`last_diagnostics` for logging and operator review.
+    """
+
+    _EPS = 1e-8
+
+    def __init__(
+        self,
+        buffer_size: int = 20,
+        smooth_window: int = 3,
+        max_shift_px: int = 12,
+        registration_max_dimension: int = 384,
+        min_texture_span: float = 2.0,
+        min_overlap_fraction: float = 0.70,
+        brightness_percentiles: tuple[float, float] = (5.0, 95.0),
+    ):
+        if buffer_size < 1:
+            raise ValueError("buffer_size must be at least 1")
+        if smooth_window < 1:
+            raise ValueError("smooth_window must be at least 1")
+        if max_shift_px < 0:
+            raise ValueError("max_shift_px must be non-negative")
+        if registration_max_dimension < 32:
+            raise ValueError("registration_max_dimension must be at least 32")
+        if min_texture_span < 0:
+            raise ValueError("min_texture_span must be non-negative")
+        if not 0.0 < min_overlap_fraction <= 1.0:
+            raise ValueError("min_overlap_fraction must be in (0, 1]")
+        low_percentile, high_percentile = brightness_percentiles
+        if not 0.0 <= low_percentile < high_percentile <= 100.0:
+            raise ValueError(
+                "brightness_percentiles must be increasing values in [0, 100]"
+            )
+
+        self._buffer_size = int(buffer_size)
+        self._smooth_window = int(smooth_window)
+        self._max_shift_px = int(max_shift_px)
+        self._registration_max_dimension = int(registration_max_dimension)
+        self._min_texture_span = float(min_texture_span)
+        self._min_overlap_fraction = float(min_overlap_fraction)
+        self._brightness_percentiles = (
+            float(low_percentile),
+            float(high_percentile),
+        )
+
+        # Frames in this deque have already been translated into the first
+        # frame's coordinate system.  A validity mask accompanies each frame
+        # so padded borders never enter the rolling reference or score.
+        self._buffer: collections.deque[
+            tuple[np.ndarray, np.ndarray]
+        ] = collections.deque(maxlen=self._buffer_size)
+        self._sum: np.ndarray | None = None
+        self._count: np.ndarray | None = None
+        self._recent_scores: collections.deque[float] = collections.deque(
+            maxlen=self._smooth_window,
+        )
+        self._last_diagnostics: dict = self._diagnostics("uninitialized")
+
+    @property
+    def last_diagnostics(self) -> dict:
+        return dict(self._last_diagnostics)
+
+    def reset(self) -> None:
+        self._buffer.clear()
+        self._sum = None
+        self._count = None
+        self._recent_scores.clear()
+        self._last_diagnostics = self._diagnostics("reset")
+
+    def compute_score(self, frame: np.ndarray) -> float:
+        gray = PixelDiffChangeDetector._to_gray(frame)
+        if gray.ndim != 2 or gray.size == 0:
+            self._recent_scores.clear()
+            self._last_diagnostics = self._diagnostics("invalid_frame")
+            return 0.0
+
+        finite = np.isfinite(gray)
+        if not np.all(finite):
+            if not np.any(finite):
+                self._recent_scores.clear()
+                self._last_diagnostics = self._diagnostics("invalid_frame")
+                return 0.0
+            gray = gray.copy()
+            gray[~finite] = float(np.median(gray[finite]))
+
+        if self._sum is not None and gray.shape != self._sum.shape:
+            self.reset()
+            return self._seed(gray, status="shape_reset")
+        if not self._buffer:
+            return self._seed(gray, status="seed")
+
+        assert self._sum is not None and self._count is not None
+        reference_valid = self._count > 0.0
+        reference = np.zeros_like(self._sum, dtype=np.float32)
+        np.divide(
+            self._sum,
+            self._count,
+            out=reference,
+            where=reference_valid,
+        )
+
+        reference_values = reference[reference_valid]
+        if (
+            reference_values.size < 16
+            or self._texture_span(reference_values) < self._min_texture_span
+            or self._texture_span(gray.ravel()) < self._min_texture_span
+        ):
+            return self._fail_closed("low_texture")
+
+        registration = self._estimate_translation(
+            reference,
+            gray,
+            reference_valid,
+        )
+        if registration["status"] != "ok":
+            return self._fail_closed(
+                registration["status"],
+                shift_y_px=registration["shift_y_px"],
+                shift_x_px=registration["shift_x_px"],
+                registration_confidence=registration[
+                    "registration_confidence"
+                ],
+                phase_peak_prominence=registration[
+                    "phase_peak_prominence"
+                ],
+                overlap_fraction=registration["overlap_fraction"],
+            )
+
+        shift_y = int(registration["shift_y_px"])
+        shift_x = int(registration["shift_x_px"])
+        reference_slice, current_slice = self._overlap_slices(
+            gray.shape,
+            shift_y,
+            shift_x,
+        )
+        reference_overlap = reference[reference_slice]
+        current_overlap = gray[current_slice]
+        valid_overlap = reference_valid[reference_slice]
+        overlap_fraction = float(valid_overlap.sum() / gray.size)
+        if (
+            overlap_fraction < self._min_overlap_fraction
+            or valid_overlap.sum() < 16
+        ):
+            return self._fail_closed(
+                "insufficient_overlap",
+                shift_y_px=shift_y,
+                shift_x_px=shift_x,
+                registration_confidence=registration[
+                    "registration_confidence"
+                ],
+                overlap_fraction=overlap_fraction,
+            )
+
+        reference_values = reference_overlap[valid_overlap]
+        current_values = current_overlap[valid_overlap]
+        reference_normalized = self._robust_normalize(reference_values)
+        current_normalized = self._robust_normalize(current_values)
+        if reference_normalized is None or current_normalized is None:
+            return self._fail_closed(
+                "low_texture",
+                shift_y_px=shift_y,
+                shift_x_px=shift_x,
+                registration_confidence=registration[
+                    "registration_confidence"
+                ],
+                overlap_fraction=overlap_fraction,
+            )
+
+        residual = np.abs(reference_normalized - current_normalized)
+        # Winsorising a tiny fraction prevents one damaged/hot pixel from
+        # dominating an otherwise stable frame without hiding spot changes.
+        if residual.size >= 200:
+            residual = np.minimum(residual, np.percentile(residual, 99.5))
+        raw_score = float(255.0 * np.mean(residual))
+
+        aligned = np.zeros_like(gray, dtype=np.float32)
+        aligned_valid = np.zeros_like(gray, dtype=bool)
+        aligned[reference_slice] = current_overlap
+        aligned_valid[reference_slice] = True
+        self._append_aligned(aligned, aligned_valid)
+
+        self._recent_scores.append(raw_score)
+        smoothed_score = float(np.mean(self._recent_scores))
+        self._last_diagnostics = self._diagnostics(
+            "ok",
+            score=smoothed_score,
+            raw_score=raw_score,
+            shift_y_px=shift_y,
+            shift_x_px=shift_x,
+            registration_confidence=registration[
+                "registration_confidence"
+            ],
+            phase_peak_prominence=registration["phase_peak_prominence"],
+            overlap_fraction=overlap_fraction,
+        )
+        return smoothed_score
+
+    def _seed(self, gray: np.ndarray, *, status: str) -> float:
+        valid = np.ones_like(gray, dtype=bool)
+        self._append_aligned(gray.copy(), valid)
+        self._recent_scores.append(0.0)
+        self._last_diagnostics = self._diagnostics(
+            status,
+            overlap_fraction=1.0,
+        )
+        return 0.0
+
+    def _append_aligned(
+        self,
+        aligned: np.ndarray,
+        valid: np.ndarray,
+    ) -> None:
+        if self._sum is None:
+            self._sum = np.zeros_like(aligned, dtype=np.float32)
+            self._count = np.zeros_like(aligned, dtype=np.float32)
+        assert self._count is not None
+        if len(self._buffer) == self._buffer_size:
+            old_frame, old_valid = self._buffer[0]
+            self._sum[old_valid] -= old_frame[old_valid]
+            self._count[old_valid] -= 1.0
+        self._buffer.append((aligned, valid))
+        self._sum[valid] += aligned[valid]
+        self._count[valid] += 1.0
+
+    def _fail_closed(self, status: str, **diagnostics) -> float:
+        self._recent_scores.clear()
+        self._recent_scores.append(0.0)
+        self._last_diagnostics = self._diagnostics(status, **diagnostics)
+        return 0.0
+
+    def _estimate_translation(
+        self,
+        reference: np.ndarray,
+        current: np.ndarray,
+        reference_valid: np.ndarray,
+    ) -> dict:
+        height, width = reference.shape
+        stride = max(
+            1,
+            int(np.ceil(max(height, width) / self._registration_max_dimension)),
+        )
+        reference_small = reference[::stride, ::stride]
+        current_small = current[::stride, ::stride]
+        valid_small = reference_valid[::stride, ::stride]
+        if valid_small.sum() < 16:
+            return self._registration_result("insufficient_overlap")
+
+        reference_fill = float(np.median(reference_small[valid_small]))
+        registration_reference = np.where(
+            valid_small,
+            reference_small,
+            reference_fill,
+        ).astype(np.float64, copy=False)
+        registration_current = current_small.astype(np.float64, copy=False)
+        registration_reference -= registration_reference.mean()
+        registration_current -= registration_current.mean()
+        reference_std = float(registration_reference.std())
+        current_std = float(registration_current.std())
+        if reference_std < self._EPS or current_std < self._EPS:
+            return self._registration_result("low_texture")
+        registration_reference /= reference_std
+        registration_current /= current_std
+
+        # A Hann window reduces FFT wrap-edge energy.  The score itself is
+        # always computed on the unwindowed, non-wrapped valid overlap.
+        window = np.outer(
+            np.hanning(reference_small.shape[0]),
+            np.hanning(reference_small.shape[1]),
+        )
+        reference_fft = np.fft.fft2(registration_reference * window)
+        current_fft = np.fft.fft2(registration_current * window)
+        cross_power = reference_fft * np.conj(current_fft)
+        magnitude = np.abs(cross_power)
+        cross_power /= np.maximum(magnitude, self._EPS)
+        correlation = np.abs(np.fft.ifft2(cross_power))
+        peak_index = np.unravel_index(np.argmax(correlation), correlation.shape)
+        global_y_small = self._wrapped_shift(
+            peak_index[0], correlation.shape[0]
+        )
+        global_x_small = self._wrapped_shift(
+            peak_index[1], correlation.shape[1]
+        )
+        global_y = global_y_small * stride
+        global_x = global_x_small * stride
+
+        peak_value = float(correlation[peak_index])
+        excluded = correlation.copy()
+        peak_y, peak_x = peak_index
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                excluded[
+                    (peak_y + dy) % excluded.shape[0],
+                    (peak_x + dx) % excluded.shape[1],
+                ] = 0.0
+        second_peak = float(np.max(excluded))
+        phase_prominence = max(
+            0.0,
+            (peak_value - second_peak) / max(peak_value, self._EPS),
+        )
+
+        # Phase peaks can be a few pixels broad for streak-like RHEED images.
+        # Refine a small neighborhood rather than trusting a single FFT bin.
+        tolerance = max(3, (stride + 1) // 2 + 1)
+        global_correlation, global_overlap = self._correlation_at_shift(
+            reference,
+            current,
+            reference_valid,
+            global_y,
+            global_x,
+            sample_stride=stride,
+            required_overlap=0.25,
+        )
+        if (
+            (
+                abs(global_y) > self._max_shift_px + tolerance
+                or abs(global_x) > self._max_shift_px + tolerance
+            )
+            # A structural change can make an unrelated FFT peak the global
+            # maximum.  Require the images to agree strongly *after* applying
+            # that out-of-bounds shift before classifying it as camera drift.
+            and global_correlation >= 0.85
+        ):
+            return self._registration_result(
+                "excessive_shift",
+                shift_y_px=global_y,
+                shift_x_px=global_x,
+                registration_confidence=float(np.clip(
+                    0.75 * ((global_correlation + 1.0) / 2.0)
+                    + 0.25 * phase_prominence,
+                    0.0,
+                    1.0,
+                )),
+                phase_peak_prominence=phase_prominence,
+                overlap_fraction=global_overlap,
+            )
+
+        # Use the strongest *bounded* phase-correlation peak for refinement.
+        # This keeps a true structural change scoreable even when its weak
+        # global FFT maximum happens to be far from the physical drift range.
+        max_small_shift = int(np.ceil(self._max_shift_px / stride))
+        bounded_peak = -np.inf
+        bounded_y_small = 0
+        bounded_x_small = 0
+        for shift_y_small in range(-max_small_shift, max_small_shift + 1):
+            for shift_x_small in range(-max_small_shift, max_small_shift + 1):
+                value = float(correlation[
+                    shift_y_small % correlation.shape[0],
+                    shift_x_small % correlation.shape[1],
+                ])
+                if value > bounded_peak:
+                    bounded_peak = value
+                    bounded_y_small = shift_y_small
+                    bounded_x_small = shift_x_small
+        coarse_y = int(np.clip(
+            bounded_y_small * stride,
+            -self._max_shift_px,
+            self._max_shift_px,
+        ))
+        coarse_x = int(np.clip(
+            bounded_x_small * stride,
+            -self._max_shift_px,
+            self._max_shift_px,
+        ))
+
+        best_shift: tuple[int, int] | None = None
+        best_correlation = -np.inf
+        second_correlation = -np.inf
+        best_overlap = 0.0
+        for shift_y in range(
+            max(-self._max_shift_px, coarse_y - tolerance),
+            min(self._max_shift_px, coarse_y + tolerance) + 1,
+        ):
+            for shift_x in range(
+                max(-self._max_shift_px, coarse_x - tolerance),
+                min(self._max_shift_px, coarse_x + tolerance) + 1,
+            ):
+                candidate_correlation, overlap = self._correlation_at_shift(
+                    reference,
+                    current,
+                    reference_valid,
+                    shift_y,
+                    shift_x,
+                    sample_stride=stride,
+                )
+                if candidate_correlation > best_correlation:
+                    second_correlation = best_correlation
+                    best_correlation = candidate_correlation
+                    best_shift = (shift_y, shift_x)
+                    best_overlap = overlap
+                elif candidate_correlation > second_correlation:
+                    second_correlation = candidate_correlation
+
+        if best_shift is None or not np.isfinite(best_correlation):
+            return self._registration_result("insufficient_overlap")
+        correlation_strength = np.clip((best_correlation + 1.0) / 2.0, 0.0, 1.0)
+        correlation_margin = max(0.0, best_correlation - second_correlation)
+        confidence = float(np.clip(
+            0.65 * correlation_strength
+            + 0.25 * phase_prominence
+            + 0.10 * min(1.0, correlation_margin * 10.0),
+            0.0,
+            1.0,
+        ))
+        return self._registration_result(
+            "ok",
+            shift_y_px=best_shift[0],
+            shift_x_px=best_shift[1],
+            registration_confidence=confidence,
+            phase_peak_prominence=phase_prominence,
+            overlap_fraction=best_overlap,
+        )
+
+    def _correlation_at_shift(
+        self,
+        reference: np.ndarray,
+        current: np.ndarray,
+        reference_valid: np.ndarray,
+        shift_y: int,
+        shift_x: int,
+        *,
+        sample_stride: int,
+        required_overlap: float | None = None,
+    ) -> tuple[float, float]:
+        reference_slice, current_slice = self._overlap_slices(
+            reference.shape,
+            shift_y,
+            shift_x,
+        )
+        reference_values = reference[reference_slice][::sample_stride, ::sample_stride]
+        current_values = current[current_slice][::sample_stride, ::sample_stride]
+        valid = reference_valid[reference_slice][::sample_stride, ::sample_stride]
+        sampled_frame_size = reference[::sample_stride, ::sample_stride].size
+        overlap_fraction = float(valid.sum() / sampled_frame_size)
+        minimum_overlap = (
+            self._min_overlap_fraction
+            if required_overlap is None
+            else required_overlap
+        )
+        if valid.sum() < 16 or overlap_fraction < minimum_overlap:
+            return -np.inf, overlap_fraction
+        a = reference_values[valid].astype(np.float64, copy=False)
+        b = current_values[valid].astype(np.float64, copy=False)
+        a = a - a.mean()
+        b = b - b.mean()
+        denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+        if denominator < self._EPS:
+            return -np.inf, overlap_fraction
+        return float(np.dot(a, b) / denominator), overlap_fraction
+
+    def _texture_span(self, values: np.ndarray) -> float:
+        low, high = np.percentile(values, self._brightness_percentiles)
+        return float(high - low)
+
+    def _robust_normalize(self, values: np.ndarray) -> np.ndarray | None:
+        low, high = np.percentile(values, self._brightness_percentiles)
+        span = float(high - low)
+        if span < self._min_texture_span:
+            return None
+        normalized = (values.astype(np.float32, copy=False) - low) / span
+        return np.clip(normalized, -0.5, 1.5)
+
+    @staticmethod
+    def _wrapped_shift(index: int, size: int) -> int:
+        return int(index - size if index > size // 2 else index)
+
+    @staticmethod
+    def _overlap_slices(
+        shape: tuple[int, int],
+        shift_y: int,
+        shift_x: int,
+    ) -> tuple[tuple[slice, slice], tuple[slice, slice]]:
+        height, width = shape
+        if shift_y >= 0:
+            reference_y = slice(shift_y, height)
+            current_y = slice(0, height - shift_y)
+        else:
+            reference_y = slice(0, height + shift_y)
+            current_y = slice(-shift_y, height)
+        if shift_x >= 0:
+            reference_x = slice(shift_x, width)
+            current_x = slice(0, width - shift_x)
+        else:
+            reference_x = slice(0, width + shift_x)
+            current_x = slice(-shift_x, width)
+        return (
+            (reference_y, reference_x),
+            (current_y, current_x),
+        )
+
+    def _diagnostics(self, status: str, **values) -> dict:
+        diagnostics = {
+            "detector": type(self).__name__,
+            "status": status,
+            "score": 0.0,
+            "raw_score": 0.0,
+            "shift_y_px": 0,
+            "shift_x_px": 0,
+            "registration_confidence": 0.0,
+            "phase_peak_prominence": 0.0,
+            "overlap_fraction": 0.0,
+            "reference_frames": len(self._buffer),
+        }
+        diagnostics.update(values)
+        return diagnostics
+
+    @staticmethod
+    def _registration_result(status: str, **values) -> dict:
+        result = {
+            "status": status,
+            "shift_y_px": 0,
+            "shift_x_px": 0,
+            "registration_confidence": 0.0,
+            "phase_peak_prominence": 0.0,
+            "overlap_fraction": 0.0,
+        }
+        result.update(values)
+        return result
 
 
 # Future Tier 2:
@@ -388,10 +936,18 @@ class AutoCaptureEngine(QObject):
     significant change is detected (after debounce, respecting cooldown)."""
 
     frame_captured = pyqtSignal(np.ndarray, float)  # (frame, change_score)
+    _UNAVAILABLE_SCORE_STATUSES = frozenset({
+        "invalid_frame",
+        "shape_reset",
+        "low_texture",
+        "insufficient_overlap",
+        "excessive_shift",
+        "frame_error",
+    })
 
     def __init__(
         self,
-        threshold: float = 0.20,
+        threshold: float = 2.0,
         cooldown_s: float = 5.0,
         warmup_frames: int = 30,
         context_buffer_size: int = 20,
@@ -400,10 +956,13 @@ class AutoCaptureEngine(QObject):
         adaptive_warmup: int = 20,
         adaptive_floor: float = 1.0,
         suppress_events_during_adaptive_warmup: bool = True,
+        rearm_below_frames: int = 3,
         parent=None,
     ):
         super().__init__(parent)
-        self._detector: ChangeDetector = IntensityChangeDetector()
+        if rearm_below_frames < 1:
+            raise ValueError("rearm_below_frames must be at least 1")
+        self._detector: ChangeDetector = TranslationInvariantChangeDetector()
         self._threshold = threshold
         self._cooldown_s = cooldown_s
         self._warmup_frames = warmup_frames
@@ -413,7 +972,15 @@ class AutoCaptureEngine(QObject):
         self._enabled = False
         self._debounce_count = 0
         self._debounce_required = 3  # consecutive frames above threshold
+        self._rearm_below_required = int(rearm_below_frames)
+        self._below_threshold_count = 0
+        self._trigger_armed = True
         self._latest_score = 0.0
+        self._latest_diagnostics: dict = {
+            "detector": type(self._detector).__name__,
+            "status": "uninitialized",
+            "score": 0.0,
+        }
 
         # Pre-event ring buffer of full-resolution RGB frames. Maintained
         # in parallel with the detector's internal grayscale buffer so that
@@ -489,9 +1056,23 @@ class AutoCaptureEngine(QObject):
     def latest_score(self) -> float:
         return self._latest_score
 
+    @property
+    def latest_diagnostics(self) -> dict:
+        """Registration and score diagnostics for the latest frame.
+
+        Returned defensively so logging/UI code cannot mutate detector state.
+        The existing ``frame_captured(frame, score)`` signal remains unchanged.
+        """
+        return dict(self._latest_diagnostics)
+
     def set_detector(self, detector: ChangeDetector) -> None:
         """Swap in a different detection strategy (Tier 2/3)."""
         self._detector = detector
+        self._latest_diagnostics = {
+            "detector": type(detector).__name__,
+            "status": "detector_changed",
+            "score": 0.0,
+        }
 
     def get_recent_frames(self) -> list[np.ndarray]:
         """Snapshot of the context buffer (oldest → newest), defensively copied.
@@ -515,7 +1096,14 @@ class AutoCaptureEngine(QObject):
         self._frame_count = 0
         self._last_capture_time = 0.0
         self._debounce_count = 0
+        self._below_threshold_count = 0
+        self._trigger_armed = True
         self._latest_score = 0.0
+        self._latest_diagnostics = {
+            "detector": type(self._detector).__name__,
+            "status": "reset",
+            "score": 0.0,
+        }
         self._context_buffer.clear()
         self._baseline_scores.clear()
 
@@ -529,18 +1117,28 @@ class AutoCaptureEngine(QObject):
         # Populate the context buffer regardless of warmup state — when a
         # trigger fires shortly after warmup ends, we want pre-event context
         # from the warmup window itself.
-        self._context_buffer.append(
-            (frame.copy(), dict(capture_metadata or {})),
-        )
+        context_metadata = dict(capture_metadata or {})
+        self._context_buffer.append((frame.copy(), context_metadata))
 
         self._frame_count += 1
         if self._frame_count <= self._warmup_frames:
-            self._detector.compute_score(frame)  # feed baseline
+            detector_score = self._detector.compute_score(frame)  # feed baseline
             self._latest_score = 0.0
+            self._record_diagnostics(
+                context_metadata,
+                detector_score=detector_score,
+                engine_score=0.0,
+                suppressed="fixed_warmup",
+            )
             return
 
         score = self._detector.compute_score(frame)
         self._latest_score = score
+        self._record_diagnostics(
+            context_metadata,
+            detector_score=score,
+            engine_score=score,
+        )
         now = time.time()
 
         # During adaptive warmup, the detector's internal buffer is still
@@ -556,13 +1154,45 @@ class AutoCaptureEngine(QObject):
             and self._suppress_events_during_adaptive_warmup
             and len(self._baseline_scores) < self._adaptive_warmup
         )
+        detector_status = str(
+            self._latest_diagnostics.get("status") or "not_available"
+        )
+        score_available = (
+            detector_status not in self._UNAVAILABLE_SCORE_STATUSES
+        )
+        self._latest_diagnostics["score_available"] = score_available
         if in_adaptive_warmup:
-            self._baseline_scores.append(score)
+            if score_available:
+                self._baseline_scores.append(score)
+                self._latest_diagnostics["suppressed"] = "adaptive_warmup"
+            else:
+                self._latest_diagnostics["suppressed"] = (
+                    "unavailable_for_adaptive_baseline"
+                )
+            self._latest_diagnostics["effective_threshold"] = float(
+                self.effective_threshold
+            )
+            self._latest_diagnostics["trigger_armed"] = self._trigger_armed
+            context_metadata["change_detection"] = dict(
+                self._latest_diagnostics
+            )
             return
 
         threshold = self.effective_threshold
-        if score >= threshold:
-            self._debounce_count += 1
+        self._latest_diagnostics["effective_threshold"] = float(threshold)
+        above_threshold = score_available and score >= threshold
+        self._latest_diagnostics["above_threshold"] = above_threshold
+        if not score_available:
+            self._debounce_count = 0
+            self._below_threshold_count = 0
+            self._latest_diagnostics["suppressed"] = "unavailable_score"
+        elif above_threshold:
+            self._below_threshold_count = 0
+            if self._trigger_armed:
+                self._debounce_count += 1
+            else:
+                self._debounce_count = 0
+                self._latest_diagnostics["suppressed"] = "waiting_for_rearm"
         else:
             self._debounce_count = 0
             # Only non-flagged scores feed the adaptive baseline — events
@@ -570,11 +1200,58 @@ class AutoCaptureEngine(QObject):
             # behind their own peak. The fixed-mode path appends too,
             # which is harmless (the deque is just unused).
             self._baseline_scores.append(score)
+            if not self._trigger_armed:
+                self._below_threshold_count += 1
+                if self._below_threshold_count >= self._rearm_below_required:
+                    self._trigger_armed = True
+                    self._below_threshold_count = 0
+                    self._latest_diagnostics["rearmed"] = True
 
         if (
-            self._debounce_count >= self._debounce_required
+            self._trigger_armed
+            and self._debounce_count >= self._debounce_required
             and (now - self._last_capture_time) >= self._cooldown_s
         ):
             self._last_capture_time = now
             self._debounce_count = 0
+            self._below_threshold_count = 0
+            self._trigger_armed = False
+            self._latest_diagnostics["triggered"] = True
+            self._latest_diagnostics["suppressed"] = ""
+            self._latest_diagnostics["trigger_armed"] = False
+            self._latest_diagnostics["debounce_count"] = 0
+            context_metadata["change_detection"] = dict(
+                self._latest_diagnostics
+            )
             self.frame_captured.emit(frame.copy(), score)
+            return
+
+        self._latest_diagnostics["trigger_armed"] = self._trigger_armed
+        self._latest_diagnostics["debounce_count"] = self._debounce_count
+        self._latest_diagnostics["below_threshold_count"] = (
+            self._below_threshold_count
+        )
+        context_metadata["change_detection"] = dict(
+            self._latest_diagnostics
+        )
+
+    def _record_diagnostics(
+        self,
+        context_metadata: dict,
+        *,
+        detector_score: float,
+        engine_score: float,
+        suppressed: str | None = None,
+    ) -> None:
+        diagnostics = dict(self._detector.last_diagnostics)
+        diagnostics.setdefault("detector", type(self._detector).__name__)
+        diagnostics.setdefault("status", "not_available")
+        diagnostics.setdefault("raw_score", float(detector_score))
+        diagnostics["score"] = float(detector_score)
+        diagnostics["engine_score"] = float(engine_score)
+        if suppressed is not None:
+            diagnostics["suppressed"] = suppressed
+        self._latest_diagnostics = diagnostics
+        # Preserve all caller provenance and add one namespaced diagnostic
+        # object.  The frame_captured Qt signal stays exactly two-argument.
+        context_metadata["change_detection"] = dict(diagnostics)

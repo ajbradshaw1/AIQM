@@ -7,9 +7,11 @@ Run with the GUI environment:
 from __future__ import annotations
 
 import csv
+import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -252,6 +254,34 @@ class RheedQcFlowTests(unittest.TestCase):
         self.window._on_start()
         self.assertIsNone(self.window._latest_classifier)
         self.assertIsNone(self.window.monitor._latest_classifier)
+
+    def test_stop_persists_camera_open_settings_snapshot(self):
+        snapshot = {
+            "read_at_utc": "2026-08-28T12:00:00Z",
+            "access_mode": "full",
+            "gain": 17,
+            "black_level": 35.0,
+        }
+        self.window.camera_worker = types.SimpleNamespace(
+            sensor_settings_at_connect=snapshot,
+        )
+        session_dir = self.window.growth_log.session_dir
+        try:
+            self.window._on_stop()
+        finally:
+            # tearDown closes the real window; do not feed the lightweight
+            # stand-in into the production worker shutdown path.
+            self.window.camera_worker = None
+
+        metadata = json.loads(
+            (session_dir / "session_metadata.json").read_text(
+                encoding="utf-8",
+            ),
+        )
+        self.assertEqual(
+            metadata["camera_sensor_settings_at_connect"],
+            snapshot,
+        )
 
     def test_monitor_emits_three_lightweight_adjustment_events(self):
         payloads: list[dict] = []

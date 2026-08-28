@@ -118,6 +118,46 @@ def parse_elog(
     return names, timestamps, values
 
 
+def _read_latest_complete_record(
+    stream: IO[bytes], *, schema_bytes: int, record_size: int,
+) -> bytes:
+    """Read the last complete record without crossing an append boundary.
+
+    EvapControl appends records to a live file.  Seeking ``-record_size`` from
+    EOF is therefore unsafe: while the next record is only partly written,
+    that slice contains the tail of the previous record followed by the new
+    prefix and still has exactly ``record_size`` bytes.  Use the schema end as
+    the record-grid origin and deliberately ignore any trailing remainder.
+    """
+
+    if record_size <= 0:
+        raise ValueError(f"Invalid .elo record size: {record_size}")
+    try:
+        stream.seek(0, 2)
+        end = stream.tell()
+        body_bytes = end - schema_bytes
+        complete_records = body_bytes // record_size
+        if complete_records < 1:
+            raise ValueError(".elo file has no complete data record")
+        offset = schema_bytes + (complete_records - 1) * record_size
+        stream.seek(offset)
+        record = stream.read(record_size)
+    except (OSError, AttributeError):
+        # Zip streams and other non-seekable readers are already positioned at
+        # the data section after parse_schema().  The same grid/remainder rule
+        # applies after reading the remaining bytes.
+        body = stream.read()
+        complete_records = len(body) // record_size
+        if complete_records < 1:
+            raise ValueError(".elo file has no complete data record")
+        start = (complete_records - 1) * record_size
+        record = body[start : start + record_size]
+    if len(record) != record_size:
+        # A concurrent truncate/replace happened after the size snapshot.
+        raise ValueError(".elo file changed while reading its latest record")
+    return record
+
+
 def latest_value(path: str | Path, var_name: str) -> tuple[datetime.datetime, float]:
     """Return the most recent (timestamp, value) for ``var_name``.
 
@@ -128,14 +168,9 @@ def latest_value(path: str | Path, var_name: str) -> tuple[datetime.datetime, fl
         names, _fmts, schema_bytes = parse_schema(f)
         n_vars = len(names)
         record_size = RECORD_TIMESTAMP_SIZE + n_vars * VALUE_SIZE
-        # Seek to tail; for zip-wrapped files this falls back to streaming.
-        try:
-            f.seek(-record_size, 2)  # 2 = SEEK_END
-            tail = f.read(record_size)
-        except (OSError, AttributeError):
-            # zip stream — read everything to end and slice the tail.
-            blob = f.read()
-            tail = blob[-record_size:]
+        tail = _read_latest_complete_record(
+            f, schema_bytes=schema_bytes, record_size=record_size,
+        )
     if var_name not in names:
         raise KeyError(f"variable {var_name!r} not in {len(names)} schema entries")
     idx = names.index(var_name)
@@ -206,15 +241,12 @@ def latest_record(
         (timestamp, {name: (value, format_string)})
     """
     with _open_elo(path) as f:
-        names, fmts, _ = parse_schema(f)
+        names, fmts, schema_bytes = parse_schema(f)
         n_vars = len(names)
         record_size = RECORD_TIMESTAMP_SIZE + n_vars * VALUE_SIZE
-        try:
-            f.seek(-record_size, 2)
-            tail = f.read(record_size)
-        except (OSError, AttributeError):
-            blob = f.read()
-            tail = blob[-record_size:]
+        tail = _read_latest_complete_record(
+            f, schema_bytes=schema_bytes, record_size=record_size,
+        )
     ts_f = struct.unpack(">d", tail[:RECORD_TIMESTAMP_SIZE])[0]
     ts = LABVIEW_EPOCH + datetime.timedelta(seconds=ts_f)
     wanted = var_names if var_names is not None else names

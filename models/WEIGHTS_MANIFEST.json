@@ -1,0 +1,462 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-08-10T23:29:41Z",
+  "generated_from_commit": "341f37f2f113743467a4094bb0a28c4892a06f58",
+  "note": "The 74 model files remain tracked in this repository. This manifest provides integrity validation and optional recovery from a user-supplied local source. The fetch helper never downloads, deploys, or changes a loader.",
+  "roles": {
+    "shadow_runtime": "Read only by the optional weak-primary four-output shadow route. Execution scope is weak_shadow_only; these files are not deployment-qualified and do not make predictions actionable.",
+    "benchmark": "Research artifacts backing the recorded weak-primary benchmark. Not required by the optional shadow runtime."
+  },
+  "totals": {
+    "files": 74,
+    "bytes": 212477710,
+    "shadow_runtime_files": 37,
+    "shadow_runtime_bytes": 106237487
+  },
+  "files": [
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/encoder/dinov2_vits14_pretrained_zeropad512.pth",
+      "sha256": "b1b92f45758a622c742b546ad6675a65557acc1a0b9f8bdd7adf6d993dd3b649",
+      "size_bytes": 86574035,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_0__pair_2022-02-04__seed_17__lambda_0.1/model.pth",
+      "sha256": "ae1be0184124bd0bdda7605ad11f1c065c145d2bc605c9ddea78a4c81b9e7b2e",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_0__pair_2022-02-04__seed_29__lambda_0.1/model.pth",
+      "sha256": "bd4369c4b9c51ddac9dfcf96b1fdb8c122d26d05eae3b50e4773e034b18d6cda",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_0__pair_2022-02-04__seed_43__lambda_0.1/model.pth",
+      "sha256": "be66d73092ab0bd9c56adeb53e6c8701fc4d058d2483115123d99cd95e813ed0",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_0__pair_2022-02-06__seed_17__lambda_0.1/model.pth",
+      "sha256": "6620ff85e2b0f059da9fb0f5a6b86c0186717a8a0263e1851834e2a31f43d5a5",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_0__pair_2022-02-06__seed_29__lambda_0.1/model.pth",
+      "sha256": "9cb0e268f6f01d939e682604e3362e49900a07114654b78cd52a2128a3ad2a71",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_0__pair_2022-02-06__seed_43__lambda_0.1/model.pth",
+      "sha256": "5b2bd695df94c7a0b9dc8bd44ad2af97d4522d4d57f70c266161ace6d7f7d9d0",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_0__pair_2022-04-11__seed_17__lambda_0.1/model.pth",
+      "sha256": "c62e134293ceee3cbdee202ca3f4731d8dd79187dae58939ca4290f3a8e0ac97",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_0__pair_2022-04-11__seed_29__lambda_0.1/model.pth",
+      "sha256": "39d8344fd44159ab1ae4db698e16eb24ee9d8d5a912b83f43268e9359dac1771",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_0__pair_2022-04-11__seed_43__lambda_0.1/model.pth",
+      "sha256": "579f7e3035d091e48cdcbf0c20f09f0c388b729a0b876c71c834c6e9618f74f2",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_1__pair_2022-02-04__seed_17__lambda_0.1/model.pth",
+      "sha256": "79f48a081f86a1fef7cd9e50eb94b51d057f80bbef0380871b9cdf4c23a6f1bf",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_1__pair_2022-02-04__seed_29__lambda_0.1/model.pth",
+      "sha256": "6fe17b738234dea6d1e9a8a7a6ab1e5c00c0399942a3ef91585edb4c5533e96b",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_1__pair_2022-02-04__seed_43__lambda_0.1/model.pth",
+      "sha256": "c026bf951967b68a44d3a1c9accd8be9c78fa8e19b66c074df04639b095e85c9",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_1__pair_2022-02-06__seed_17__lambda_0.1/model.pth",
+      "sha256": "3394edafcafa2ac37e9eb2cc6d5d1f8550bb418528193007a9f37e2c9984cb73",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_1__pair_2022-02-06__seed_29__lambda_0.1/model.pth",
+      "sha256": "3bb63129c9a48e2e07e4b7b9de4135c2120a4a78f0df4cd3a2d87f757129765a",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_1__pair_2022-02-06__seed_43__lambda_0.1/model.pth",
+      "sha256": "0c59ac9e3bbfc083dcaf018a46f9d34ea96bde47b18c1c6b1ab11216ec15c304",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_1__pair_2022-04-11__seed_17__lambda_0.1/model.pth",
+      "sha256": "b05e2df2997739caa8143e6923f4096d16619fc9fa9a710d2eac86f6f36bcdb5",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_1__pair_2022-04-11__seed_29__lambda_0.1/model.pth",
+      "sha256": "35bc0fef1e7c57a0df38a18ba7344f1b9bfbbe4a872a0487b608e03ddbb2b0bb",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_1__pair_2022-04-11__seed_43__lambda_0.1/model.pth",
+      "sha256": "6da49f147cf248e8cbe3f7ef08ebabc782897d117f7413e611bbcb717d80e1c3",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_2__pair_2022-02-04__seed_17__lambda_0.1/model.pth",
+      "sha256": "e88b7b47e50674390a50733f991a5a73e06db0d20f2a247d45590d2d76f60970",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_2__pair_2022-02-04__seed_29__lambda_0.1/model.pth",
+      "sha256": "001370f33e298e0243880aeec8b27a7faf17ef00876b204bc6e84ce75869ed36",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_2__pair_2022-02-04__seed_43__lambda_0.1/model.pth",
+      "sha256": "7057057e888756c795c0d4310158e93801a12af8f0e63e1567cfe856a93348cd",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_2__pair_2022-02-06__seed_17__lambda_0.1/model.pth",
+      "sha256": "fa309c67aa354faa8562a4e4ce95f1084d5d1fc414f9a9d2817f0e1e72312b79",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_2__pair_2022-02-06__seed_29__lambda_0.1/model.pth",
+      "sha256": "0583cc5a2d2ee9936488081a8211f2fed29c029a6a9d373274c845a6100c4855",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_2__pair_2022-02-06__seed_43__lambda_0.1/model.pth",
+      "sha256": "657e424c8315829cc5145d4061fd9142cc41bb22e4a8604055feaa7c8f4d35ac",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_2__pair_2022-04-11__seed_17__lambda_0.1/model.pth",
+      "sha256": "c7816300df0670863fc19c91ec78ccd7bbf79e77f28b6959a327d115564ef402",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_2__pair_2022-04-11__seed_29__lambda_0.1/model.pth",
+      "sha256": "eea536ede6c36597cb697e3ab94f485fc6944e65fa84fa895768447e42d7dcf0",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_2__pair_2022-04-11__seed_43__lambda_0.1/model.pth",
+      "sha256": "822f7e1679a61a37d4ead2b914e717180a2330829c6b7bf1fd200f2d78a3b3ad",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_3__pair_2022-02-04__seed_17__lambda_0.1/model.pth",
+      "sha256": "fdfdbc59a67373ad442bb319fdcc73f281ae283053388f97d13f761c434f5fda",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_3__pair_2022-02-04__seed_29__lambda_0.1/model.pth",
+      "sha256": "25dce3059b56916217895f8cf0c5b270ad0d8c728795ba8d756feb45b0dc05be",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_3__pair_2022-02-04__seed_43__lambda_0.1/model.pth",
+      "sha256": "dfd66410883423e9f3297a504c1297f726fcf847660557e7cd5ec6c0c757fa72",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_3__pair_2022-02-06__seed_17__lambda_0.1/model.pth",
+      "sha256": "3254f27892dfdf666adcf46d042667a1b3c7e79434bf41aa7dce8cc4648141cd",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_3__pair_2022-02-06__seed_29__lambda_0.1/model.pth",
+      "sha256": "6f7d6147a11ddd87a476dc4ecf4364abdb86fdd0f00198863f1a94618bf5f279",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_3__pair_2022-02-06__seed_43__lambda_0.1/model.pth",
+      "sha256": "cc6df9aa7735ad304aa6817261c2191f0b0d3a44d2d0f33acab496a4e4ae9ccc",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_3__pair_2022-04-11__seed_17__lambda_0.1/model.pth",
+      "sha256": "d6f9df1f5c4a5a559481ec05a111ace6cc9f50e321df1eae9f612031fe0b11ac",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_3__pair_2022-04-11__seed_29__lambda_0.1/model.pth",
+      "sha256": "a6125eb47dafbacff4ff51cb5b0b9c7152faaf90b216a3c9a9bab951692de7a5",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/Classifier2/artifacts/weak_primary_four_class_20260803/full_benchmark/checkpoints/fold_3__pair_2022-04-11__seed_43__lambda_0.1/model.pth",
+      "sha256": "99a8dd7fe421762b78ced1d2609d78d13ddd1f9d2b0eb2b8330531145cc11730",
+      "size_bytes": 546283,
+      "role": "benchmark"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_0__pair_2022-02-04__seed_17__lambda_0.1/model.pth",
+      "sha256": "d44da43cbb12956685026f5a25feb3558d96480f615e56d813be4a8711b56b17",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_0__pair_2022-02-04__seed_29__lambda_0.1/model.pth",
+      "sha256": "9064d40cf86964fe0a66f1ea29f8b99830f95c9e8cb28feb4cdc2766799eeee7",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_0__pair_2022-02-04__seed_43__lambda_0.1/model.pth",
+      "sha256": "4a00fa6b75872d21d41dd70d9df218af23bd3eb58af04b64412c360fa88ebac9",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_0__pair_2022-02-06__seed_17__lambda_0.1/model.pth",
+      "sha256": "5be4a9362c9da44c37bb13065cf568a14bd661b7a7149ad918d90e7418e9fd10",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_0__pair_2022-02-06__seed_29__lambda_0.1/model.pth",
+      "sha256": "470dbec9714b3602cc349458443d8d02ab6b6481b11b41c68ef18e1488f9308e",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_0__pair_2022-02-06__seed_43__lambda_0.1/model.pth",
+      "sha256": "f0cbe6b3461fa5b7d262cd13a5e0e9312d9f0f3ac78ec27f5fcc62d512f4dd4a",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_0__pair_2022-04-11__seed_17__lambda_0.1/model.pth",
+      "sha256": "f7e7e256928279c266c57a11e380dfc55c77c38f37a0b8cf258f9a328a20d718",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_0__pair_2022-04-11__seed_29__lambda_0.1/model.pth",
+      "sha256": "5504c90411fb1a64274847e920ef2654fc006adf5cf523508e73401b7ae6429b",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_0__pair_2022-04-11__seed_43__lambda_0.1/model.pth",
+      "sha256": "2065f115ad26a78f7dd5823281f3356b43cb21e309169cd996b07b15f2c744f5",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_1__pair_2022-02-04__seed_17__lambda_0.1/model.pth",
+      "sha256": "4c813a973795a65a30fbda7030e3719f9372281a5589032fc461fd3a7094ebbc",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_1__pair_2022-02-04__seed_29__lambda_0.1/model.pth",
+      "sha256": "88a14a8fabc84e5e7871a4e19ce7d640aa6c26f9d45da106f14e57e6440fb546",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_1__pair_2022-02-04__seed_43__lambda_0.1/model.pth",
+      "sha256": "ad3ce1e34f729e894d47cc4d009cb46124be6a4717c0c1344ece993a57338597",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_1__pair_2022-02-06__seed_17__lambda_0.1/model.pth",
+      "sha256": "05aeade55275ac2bef86b7562288487e3deee56ea5e1c4144bad7387db6aaba6",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_1__pair_2022-02-06__seed_29__lambda_0.1/model.pth",
+      "sha256": "e543d7875b03524e203311ac171c8cbcb749ae38c0331630a6a20a79b3a8768c",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_1__pair_2022-02-06__seed_43__lambda_0.1/model.pth",
+      "sha256": "1180f88a9e27e4b952dac8592196a080bd20e773188b9760565b797ac42655f9",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_1__pair_2022-04-11__seed_17__lambda_0.1/model.pth",
+      "sha256": "bc582ce5e06f69faea262d56878c5ca6ec5cd23c8e0c04c6b6f7b61a2388da58",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_1__pair_2022-04-11__seed_29__lambda_0.1/model.pth",
+      "sha256": "3947a70dd25ec5a37d9902428909ac0645d84e6a0c928214ce79af35bfa57bba",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_1__pair_2022-04-11__seed_43__lambda_0.1/model.pth",
+      "sha256": "f26f842b3411bbeca5c3171597cf014bc2e84d63710b3f7a24f4337cf87dc1b5",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_2__pair_2022-02-04__seed_17__lambda_0.1/model.pth",
+      "sha256": "5ec1c159f2b697f6d9221dd144d1e42ae9f888b2a7da591c4181dcb9f0f6db0e",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_2__pair_2022-02-04__seed_29__lambda_0.1/model.pth",
+      "sha256": "8659c704750d23aafc4286a644f53877dd4337c6015743182e1ae4f6c93df62a",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_2__pair_2022-02-04__seed_43__lambda_0.1/model.pth",
+      "sha256": "be6b40425ee586fe2fe4c093640939ce75ac443fdfdfe2e751b2e8ae25923793",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_2__pair_2022-02-06__seed_17__lambda_0.1/model.pth",
+      "sha256": "ac0366aada5157e90d77fc5a3e8af8e49e479b30220171b67381ddc97b6d8769",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_2__pair_2022-02-06__seed_29__lambda_0.1/model.pth",
+      "sha256": "75f8e562a1df74971ad2a2b33815fb1fdb9bf9b042c18efa96f5bbf15d8c0b38",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_2__pair_2022-02-06__seed_43__lambda_0.1/model.pth",
+      "sha256": "6152f757d9575615ae822bad43187720acfd64c5066cbfb7594ed1bf64168453",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_2__pair_2022-04-11__seed_17__lambda_0.1/model.pth",
+      "sha256": "ccd897044a8fa146766013d6d6012cab680eb3e457478c9715e07a7221c960f2",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_2__pair_2022-04-11__seed_29__lambda_0.1/model.pth",
+      "sha256": "892da9bfac7813a76a311565c05790784abdbb6ab4f502e9ae9782ccc6a72c6e",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_2__pair_2022-04-11__seed_43__lambda_0.1/model.pth",
+      "sha256": "396dbcc8314e02c8e48936255b810478b19ad735aae5963abcd0bd0f66187fbe",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_3__pair_2022-02-04__seed_17__lambda_0.1/model.pth",
+      "sha256": "57688a1564a9a66a2f41af28532298b4339a6c47f172679a9bf7a415a739292c",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_3__pair_2022-02-04__seed_29__lambda_0.1/model.pth",
+      "sha256": "a7c5ba1e4d127d6aca64742334100a575756d18e18cb8cf696888bedc9b724a6",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_3__pair_2022-02-04__seed_43__lambda_0.1/model.pth",
+      "sha256": "4253774ea06ceb047666dc893968e268508681f147d571dafa904d50ab88ecbf",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_3__pair_2022-02-06__seed_17__lambda_0.1/model.pth",
+      "sha256": "42d1820e41df19edd7a6e9fd382421512a66569139eb710c6be5fe7893e4a335",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_3__pair_2022-02-06__seed_29__lambda_0.1/model.pth",
+      "sha256": "41a93d5fd3ea5857c602f13e61869f9652cbcd71f13c0c3d6d352a9d8945cdc4",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_3__pair_2022-02-06__seed_43__lambda_0.1/model.pth",
+      "sha256": "77aeda02d679f5445ccdbb7c9eebb05864401e41040b5b62a7158b8c0c8e8918",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_3__pair_2022-04-11__seed_17__lambda_0.1/model.pth",
+      "sha256": "12e3e851b40b486a58d9eb008cef31204f44a48a44d663220420cbe89b90d399",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_3__pair_2022-04-11__seed_29__lambda_0.1/model.pth",
+      "sha256": "fa7c5d14b912b70f652604e31e376312e51284bb6482d84648553d5c6f75120e",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/conditional_four_output_heads/fold_3__pair_2022-04-11__seed_43__lambda_0.1/model.pth",
+      "sha256": "1bdf84991a0937d88a20230ebd5db58f963abb1b44b7fae0d4ddfdb2e17b4f57",
+      "size_bytes": 546207,
+      "role": "shadow_runtime"
+    },
+    {
+      "path": "models/weak_primary_lambda_0_1/RHEEDClassify/brightness_robust_four_output_all_extreme/shared_encoder/dinov2_vits14_pretrained_zeropad512.pth",
+      "sha256": "b1b92f45758a622c742b546ad6675a65557acc1a0b9f8bdd7adf6d993dd3b649",
+      "size_bytes": 86574035,
+      "role": "shadow_runtime"
+    }
+  ]
+}

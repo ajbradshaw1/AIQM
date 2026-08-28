@@ -43,7 +43,6 @@ from .rheed_point_events import (
     PointEventError,
     PointEventStore,
     make_review_anchor,
-    sha256_file,
 )
 
 
@@ -107,6 +106,7 @@ RHEED_VIEW_EVENT_TYPES = frozenset({
 class GrowthLogger:
     """Logs sensor data and timestamped entries during a growth session."""
 
+    ACQUISITION_SCHEMA_VERSION = 2
     LIVE_LABEL_TRANSACTION_FILE = ".live_label_transaction.pending.json"
     LIVE_LABEL_TRANSACTION_SCHEMA_VERSION = 1
     CALIBRATION_TRANSACTION_FILE = ".equalizer_calibration.pending.json"
@@ -156,6 +156,7 @@ class GrowthLogger:
         "substrate_temp_pv_C", "substrate_temp_setpoint_C",
         "cell_HTEC2_pv_C",
         "cell_Y_pv_C", "cell_Sr_pv_C", "cell_Eu_pv_C", "cell_Er_pv_C",
+        "cell_Fe_pv_C", "cell_Te_pv_C", "cell_Se_pv_C",
         "plasma_dc_bias_V", "plasma_forward_W", "plasma_reflected_W",
         # ADS union schema (7-cell superset — both chambers).
         # Ch-MBE (mode="ads"): all 7 cells populate per cadence.
@@ -207,6 +208,17 @@ class GrowthLogger:
         "mistral_processing_duration_ms",
         "evap_mode", "evap_worker_to_gui_ms", "evap_valid", "evap_error",
         "evap_capture_at_utc", "evap_processing_duration_ms",
+        # Session-level acquisition provenance. Appended so every historical
+        # field above keeps its name and ordinal position.
+        "sensor_row_idx", "elapsed_monotonic_s", "pyrometer_emissivity",
+        "pressure_source", "rheed_connected", "pyrometer_connected",
+        "mistral_connected", "evap_connected",
+        # Latest EvapControl source attempt, including rejected duplicate or
+        # stale records. These remain separate from evap_source/received above,
+        # which identify the latest accepted sample generation.
+        "evap_attempt_source_at_utc", "evap_source_age_ms",
+        "evap_source_record_advanced", "evap_source_stale",
+        "evap_source_status",
     ]
     COMMIT_FIELDS = [
         "timestamp", "time_display", "elapsed_s", "sample_id", "grower",
@@ -288,6 +300,13 @@ class GrowthLogger:
         "event_state", "state_changed_at",
         "capture_backend", "captured_at_utc", "capture_sequence",
         "frame_age_ms", "source_hwnd", "capture_geometry_id",
+        # Translation-registered detector diagnostics.  Appended so older
+        # readers that consume the legacy prefix remain understandable.
+        "change_detector", "change_detection_status", "raw_change_score",
+        "registered_shift_y_px", "registered_shift_x_px",
+        "registration_confidence", "registration_overlap_fraction",
+        "change_threshold", "change_detector_armed",
+        "change_detection_suppressed", "change_detection_triggered",
     ]
     HEARTBEAT_FIELDS = [
         "timestamp", "elapsed_s", "heartbeat_idx",
@@ -300,6 +319,7 @@ class GrowthLogger:
         "view_segment_id", "visual_history_generation",
         "gun_aligned", "realignment_active",
         "calibration_id", "basis_bundle_id",
+        "sensor_row_idx",
     ]
     SET_CHANGE_FIELDS = [
         "timestamp", "elapsed_s", "event_idx",
@@ -445,6 +465,11 @@ class GrowthLogger:
         "session_id", "view_segment_id", "visual_history_generation",
         "gun_aligned", "realignment_active", "calibration_id",
         "basis_bundle_id",
+        "change_detector", "change_detection_status", "raw_change_score",
+        "registered_shift_y_px", "registered_shift_x_px",
+        "registration_confidence", "registration_overlap_fraction",
+        "change_threshold", "change_detector_armed",
+        "change_detection_suppressed", "change_detection_triggered",
     ]
 
     @staticmethod
@@ -461,6 +486,48 @@ class GrowthLogger:
             "frame_age_ms": frame_age,
             "source_hwnd": metadata.get("source_hwnd", ""),
             "capture_geometry_id": metadata.get("capture_geometry_id", ""),
+        }
+
+    @staticmethod
+    def _change_detection_columns(
+        capture_metadata: Optional[Mapping[str, object]] = None,
+    ) -> dict[str, object]:
+        metadata = capture_metadata or {}
+        raw = metadata.get("change_detection", {})
+        detection = raw if isinstance(raw, Mapping) else {}
+
+        def finite_or_blank(key: str) -> object:
+            value = detection.get(key, "")
+            if value in (None, ""):
+                return ""
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return ""
+            return numeric if math.isfinite(numeric) else ""
+
+        def bool_or_blank(key: str) -> object:
+            value = detection.get(key, "")
+            return value if isinstance(value, bool) else ""
+
+        return {
+            "change_detector": str(detection.get("detector") or ""),
+            "change_detection_status": str(detection.get("status") or ""),
+            "raw_change_score": finite_or_blank("raw_score"),
+            "registered_shift_y_px": finite_or_blank("shift_y_px"),
+            "registered_shift_x_px": finite_or_blank("shift_x_px"),
+            "registration_confidence": finite_or_blank(
+                "registration_confidence"
+            ),
+            "registration_overlap_fraction": finite_or_blank(
+                "overlap_fraction"
+            ),
+            "change_threshold": finite_or_blank("effective_threshold"),
+            "change_detector_armed": bool_or_blank("trigger_armed"),
+            "change_detection_suppressed": str(
+                detection.get("suppressed") or ""
+            ),
+            "change_detection_triggered": bool_or_blank("triggered"),
         }
 
     @staticmethod
@@ -1984,6 +2051,7 @@ class GrowthLogger:
         self._human_labeling_state_trusted = False
         self._sensor_row_counter = 0
         self._session_start: Optional[datetime] = None
+        self._session_start_monotonic_ns: Optional[int] = None
         self._entries: list[dict] = []  # Accumulated entries for export
         self._recover_pending_live_label_transactions()
 
@@ -1995,6 +2063,11 @@ class GrowthLogger:
     @property
     def session_dir(self) -> Optional[Path]:
         return self._session_dir
+
+    @property
+    def latest_sensor_row_idx(self) -> int:
+        """One-based index of the latest successfully written sensor row."""
+        return self._sensor_row_counter
 
     @property
     def point_event_store(self) -> Optional[PointEventStore]:
@@ -2150,6 +2223,7 @@ class GrowthLogger:
         self._rheed_roi_sample_keys.clear()
         self._sensor_row_counter = 0
         self._session_start = datetime.now()
+        self._session_start_monotonic_ns = time.perf_counter_ns()
         self._entries = []
 
     def record_rheed_roi_definition(
@@ -2297,6 +2371,7 @@ class GrowthLogger:
         v_set=None, v_actual=None, i_set=None, i_actual=None,
         chamber_pressure_mbar=None,
         pyro_temp_std=None, pyro_temp_n=None,
+        pyrometer_emissivity=None, pressure_source="none",
         # Elog-direct extensions (Jun 23 2026 — EvapControl mode="elog").
         # All optional; blank in the CSV when None. Order matches
         # EvapControlState field order so the call site can pass through
@@ -2305,6 +2380,7 @@ class GrowthLogger:
         cell_HTEC2_pv_C=None,
         cell_Y_pv_C=None, cell_Sr_pv_C=None,
         cell_Eu_pv_C=None, cell_Er_pv_C=None,
+        cell_Fe_pv_C=None, cell_Te_pv_C=None, cell_Se_pv_C=None,
         plasma_dc_bias_V=None, plasma_forward_W=None,
         plasma_reflected_W=None,
         # ADS-mode extensions (Jul 23 2026 — MistralWorker mode="ads").
@@ -2337,6 +2413,10 @@ class GrowthLogger:
         populated only when EvapControl is in ``elog`` mode (reading the
         .elo binary log directly). In ``screengrab`` mode they default
         to None and the columns are blank.
+
+        ``elapsed_s`` is retained for compatibility with existing exports.
+        ``elapsed_monotonic_s`` is generated here from ``perf_counter_ns``
+        and is the authoritative session duration for ordering and timing.
         """
         if not self._sensor_writer:
             return
@@ -2351,6 +2431,22 @@ class GrowthLogger:
         pyrometer_timing = dict(pyrometer_timing or {})
         mistral_timing = dict(mistral_timing or {})
         evap_timing = dict(evap_timing or {})
+        row_idx = self._sensor_row_counter + 1
+        logged_monotonic_ns = time.perf_counter_ns()
+        elapsed_monotonic_s = None
+        if self._session_start_monotonic_ns is not None:
+            elapsed_monotonic_s = max(
+                0.0,
+                (
+                    logged_monotonic_ns - self._session_start_monotonic_ns
+                ) / 1_000_000_000.0,
+            )
+        pressure_source = str(pressure_source or "none").strip().lower()
+        if pressure_source not in {"evap", "ads", "none"}:
+            log.warning(
+                "Unknown pressure source %r; recording none", pressure_source,
+            )
+            pressure_source = "none"
         self._sensor_writer.writerow({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": f"{elapsed_s:.2f}",
@@ -2371,6 +2467,9 @@ class GrowthLogger:
             "cell_Sr_pv_C":    _f(cell_Sr_pv_C, 1),
             "cell_Eu_pv_C":    _f(cell_Eu_pv_C, 1),
             "cell_Er_pv_C":    _f(cell_Er_pv_C, 1),
+            "cell_Fe_pv_C":    _f(cell_Fe_pv_C, 1),
+            "cell_Te_pv_C":    _f(cell_Te_pv_C, 1),
+            "cell_Se_pv_C":    _f(cell_Se_pv_C, 1),
             "plasma_dc_bias_V":   _f(plasma_dc_bias_V, 1),
             "plasma_forward_W":   _f(plasma_forward_W, 1),
             "plasma_reflected_W": _f(plasma_reflected_W, 1),
@@ -2480,9 +2579,37 @@ class GrowthLogger:
             "evap_processing_duration_ms": _f(
                 evap_timing.get("processing_duration_ms"), 3,
             ),
+            "sensor_row_idx": row_idx,
+            "elapsed_monotonic_s": _f(elapsed_monotonic_s, 6),
+            "pyrometer_emissivity": _f(pyrometer_emissivity, 4),
+            "pressure_source": pressure_source,
+            "rheed_connected": bool(rheed_timing.get("connected", False)),
+            "pyrometer_connected": bool(
+                pyrometer_timing.get("connected", False)
+            ),
+            "mistral_connected": bool(
+                mistral_timing.get("connected", False)
+            ),
+            "evap_connected": bool(evap_timing.get("connected", False)),
+            "evap_attempt_source_at_utc": (
+                evap_timing.get("attempt_source_at_utc") or ""
+            ),
+            "evap_source_age_ms": _f(
+                evap_timing.get("source_age_ms"), 3,
+            ),
+            "evap_source_record_advanced": bool(
+                evap_timing.get("source_record_advanced", False)
+            ),
+            "evap_source_stale": bool(
+                evap_timing.get("source_stale", False)
+            ),
+            "evap_source_status": evap_timing.get(
+                "source_status", "unavailable",
+            ),
         })
         self._sensor_file.flush()
-        self._sensor_row_counter += 1
+        self._sensor_row_counter = row_idx
+        return row_idx
 
     def log_temporal_event(
         self,
@@ -2624,13 +2751,34 @@ class GrowthLogger:
             return ""
         metadata = dict(frame_metadata or {})
         anchor = None
-        frame_hash = ""
+        frame_hash = str(
+            metadata.get("image_sha256")
+            or metadata.get("frame_sha256")
+            or source_row.get("image_sha256")
+            or source_row.get("frame_sha256")
+            or ""
+        ).strip().lower()
+        frame_hash_algorithm = str(
+            metadata.get("image_sha256_algorithm")
+            or metadata.get("frame_sha256_algorithm")
+            or source_row.get("image_sha256_algorithm")
+            or source_row.get("frame_sha256_algorithm")
+            or ""
+        ).strip().lower()
+        if not frame_hash:
+            frame_hash_algorithm = ""
         if frame_path:
             try:
-                frame_hash = sha256_file(frame_path)
+                try:
+                    archive_member = Path(frame_path).relative_to(
+                        self._session_dir
+                    ).as_posix()
+                except ValueError:
+                    archive_member = ""
                 anchor = make_review_anchor(
                     frame_path=frame_path,
                     image_sha256=frame_hash,
+                    image_sha256_algorithm=frame_hash_algorithm,
                     capture_sequence=metadata.get(
                         "capture_sequence", source_row.get("capture_sequence"),
                     ),
@@ -2643,6 +2791,12 @@ class GrowthLogger:
                         "capture_geometry_id",
                         source_row.get("capture_geometry_id", ""),
                     ) or ""),
+                    session_identity=self._session_dir.name,
+                    frame_index=metadata.get(
+                        "frame_index",
+                        source_row.get("frame_index", source_row.get("heartbeat_idx")),
+                    ),
+                    archive_member=archive_member,
                 )
             except (OSError, PointEventError) as exc:
                 log.error("Could not bind saved frame to point event: %s", exc)
@@ -2674,6 +2828,71 @@ class GrowthLogger:
         event_id = str(state["event_id"])
         self._last_point_event_id = event_id
         return event_id
+
+    def ensure_initial_point_event(
+        self,
+        *,
+        frame_path: str,
+        elapsed_s: float,
+        capture_metadata: Optional[Mapping[str, object]] = None,
+    ) -> str:
+        """Create the one pending initial 1x1 assumption on the first frame.
+
+        The default is deliberately an auditable assumption, not a completed
+        human label.  Creating it only after a heartbeat BMP is durable gives
+        the reviewer an exact immutable frame and keeps the source timeline
+        free of invented timestamps.
+        """
+        store = self._rheed_point_event_store
+        if store is None or self._session_dir is None or not frame_path:
+            return ""
+        metadata = dict(capture_metadata or {})
+        try:
+            frame_hash = str(
+                metadata.get("image_sha256")
+                or metadata.get("frame_sha256")
+                or ""
+            ).strip().lower()
+            frame_hash_algorithm = str(
+                metadata.get("image_sha256_algorithm")
+                or metadata.get("frame_sha256_algorithm")
+                or ""
+            ).strip().lower()
+            if not frame_hash:
+                frame_hash_algorithm = ""
+            try:
+                archive_member = Path(frame_path).relative_to(
+                    self._session_dir
+                ).as_posix()
+            except ValueError:
+                archive_member = ""
+            anchor = make_review_anchor(
+                frame_path=frame_path,
+                image_sha256=frame_hash,
+                image_sha256_algorithm=frame_hash_algorithm,
+                capture_sequence=metadata.get("capture_sequence"),
+                captured_at_utc=str(metadata.get("captured_at_utc") or ""),
+                elapsed_s=float(elapsed_s),
+                view_segment_id=metadata.get("view_segment_id"),
+                capture_geometry_id=str(
+                    metadata.get("capture_geometry_id") or ""
+                ),
+                session_identity=self._session_dir.name,
+                frame_index=metadata.get(
+                    "frame_index", metadata.get("heartbeat_idx")
+                ),
+                archive_member=archive_member,
+            )
+            state = store.ensure_initial_assumption(
+                actor="system-initial-assumption",
+                session_identity=self._session_dir.name,
+                first_frame_anchor=anchor,
+                original_at_utc=str(metadata.get("captured_at_utc") or ""),
+            )
+        except (OSError, PointEventError, TypeError, ValueError) as exc:
+            log.error("Could not create initial 1x1 Draft event: %s", exc)
+            return ""
+        return str(state.get("event_id") or "")
 
     def record_manual_event(
         self,
@@ -3599,232 +3818,6 @@ class GrowthLogger:
             log.error("Live-label CSV committed but its append stream is unavailable")
         return idx
 
-    def unfinished_point_events(self) -> list[dict[str, object]]:
-        """Return active Drafts, with newest manual events first.
-
-        The caller still has to present the choice to the grower.  Ordering a
-        default is not permission to silently bind an Equalizer measurement.
-        """
-        store = self._rheed_point_event_store
-        if store is None:
-            return []
-        events = [
-            state for state in store.states.values()
-            if state.get("status") == "Draft"
-            and state.get("review", {}).get("disposition") == "active"
-        ]
-        events.sort(
-            key=lambda state: (
-                state.get("source", {}).get("kind") == "manual",
-                str(state.get("source", {}).get("original_at_utc") or ""),
-                int(state.get("revision_number") or 0),
-            ),
-            reverse=True,
-        )
-        return events
-
-    def attach_live_equalizer_to_point_event(
-        self,
-        event_id: str,
-        *,
-        live_label_index: int,
-        actor: str,
-        calibration: CalibrationRecord,
-        snapshot: RheedFrameSnapshot,
-        equalizer_payload: Mapping[str, object],
-    ) -> dict[str, object]:
-        """Bind one durable live-label image and measurement to one event.
-
-        ``live_labels.csv`` and its exact BMP remain acquisition evidence.  A
-        separate append-only point-event revision moves only the editable
-        review anchor, then records the auxiliary Equalizer fit.  Failure here
-        never rewrites or removes the already-saved live label; the unique
-        capture/hash can be associated during later review.
-        """
-        store = self._rheed_point_event_store
-        if store is None or self._session_dir is None:
-            raise PointEventError("No point-event review store is active")
-        event = store.get(event_id)
-        if event is None:
-            raise PointEventError(f"Unknown point event: {event_id}")
-        actor = str(actor or "").strip()
-        if not actor:
-            raise PointEventError("Select a grower/reviewer before binding Equalizer")
-        # Validate the complete typed context and its still-active journal
-        # record before touching the point-event journal.  A saved live-label
-        # row is evidence, not permission to combine a stale calibration with
-        # another camera frame.
-        try:
-            self._validate_equalizer_context(calibration, snapshot)
-        except (TypeError, ValueError) as exc:
-            raise PointEventError("Equalizer context is not active and compatible") from exc
-        journaled = self.get_calibration(calibration.calibration_id)
-        if (
-            journaled is None
-            or journaled.to_json_dict() != calibration.to_json_dict()
-        ):
-            raise PointEventError("Equalizer calibration is not active in the journal")
-        validated = validate_equalizer_payload(equalizer_payload)
-        csv_path = self._session_dir / "live_labels.csv"
-        try:
-            if self._live_label_file is not None and not self._live_label_file.closed:
-                self._live_label_file.flush()
-            with open(csv_path, newline="", encoding="utf-8") as stream:
-                matches = [
-                    row for row in csv.DictReader(stream)
-                    if str(row.get("label_idx", "")) == str(int(live_label_index))
-                ]
-        except (OSError, TypeError, ValueError) as exc:
-            raise PointEventError("Could not resolve saved live-label evidence") from exc
-        if len(matches) != 1:
-            raise PointEventError("Live-label evidence is missing or ambiguous")
-        row = matches[0]
-
-        # Resolve and validate every immutable identity before appending even
-        # the move_anchor revision.  This keeps all mismatch failures atomic
-        # with respect to the point-event journal.
-        try:
-            row_sequence = int(str(row.get("capture_sequence") or ""))
-        except (TypeError, ValueError) as exc:
-            raise PointEventError("Live-label capture_sequence is invalid") from exc
-        if row_sequence != snapshot.capture_sequence:
-            raise PointEventError("Live-label capture_sequence does not match snapshot")
-
-        row_captured_at = str(row.get("captured_at_utc") or "").strip()
-        if row_captured_at:
-            try:
-                row_captured_at = normalize_utc_timestamp(
-                    row_captured_at,
-                    field_name="live-label captured_at_utc",
-                )
-            except ValueError as exc:
-                raise PointEventError("Live-label captured_at_utc is invalid") from exc
-            if row_captured_at != snapshot.captured_at_utc:
-                raise PointEventError("Live-label captured_at_utc does not match snapshot")
-
-        required_identity = (
-            ("calibration_id", calibration.calibration_id),
-            ("basis_bundle_id", calibration.basis_bundle_id),
-            ("capture_geometry_id", snapshot.capture_geometry_id),
-        )
-        for field, expected in required_identity:
-            if str(row.get(field) or "") != str(expected):
-                raise PointEventError(f"Live-label {field} does not match calibration")
-
-        optional_identity = (
-            ("capture_backend", snapshot.capture_backend),
-            ("source_hwnd", snapshot.source_hwnd),
-            ("session_id", snapshot.session_id),
-            ("view_segment_id", snapshot.view_segment_id),
-            ("visual_history_generation", snapshot.visual_history_generation),
-        )
-        for field, expected in optional_identity:
-            value = str(row.get(field) or "").strip()
-            if value and value != str(expected):
-                raise PointEventError(f"Live-label {field} does not match snapshot")
-
-        try:
-            decoded_active_classes = json.loads(
-                str(row.get("equalizer_active_classes") or ""),
-            )
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise PointEventError("Live-label active classes are invalid") from exc
-        if not isinstance(decoded_active_classes, list):
-            raise PointEventError("Live-label active classes are invalid")
-        row_active_classes = tuple(str(label) for label in decoded_active_classes)
-        if row_active_classes != tuple(calibration.active_classes):
-            raise PointEventError("Live-label active classes do not match calibration")
-
-        try:
-            frame_path = self._resolve_existing_event_frame(
-                self._session_dir, str(row.get("frame_path") or ""),
-            )
-        except ValueError as exc:
-            raise PointEventError("Saved live-label frame is unavailable") from exc
-        if frame_path.suffix.lower() not in {".bmp", ".png"}:
-            raise PointEventError("Saved live-label frame must be BMP or PNG")
-        try:
-            from PIL import Image
-
-            with Image.open(frame_path) as image:
-                decoded_rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
-        except Exception as exc:
-            raise PointEventError("Saved live-label frame cannot be decoded") from exc
-        if decoded_rgb.shape != snapshot.rgb.shape or (
-            decoded_rgb.shape[1] != snapshot.camera_width
-            or decoded_rgb.shape[0] != snapshot.camera_height
-        ):
-            raise PointEventError("Saved live-label frame dimensions do not match snapshot")
-
-        row_hash = str(row.get("equalizer_frame_sha256") or "").strip().lower()
-        if str(row.get("equalizer_frame_sha256_algorithm") or "") != "rgb-array-v1":
-            raise PointEventError("Live-label frame hash algorithm is not rgb-array-v1")
-        if len(row_hash) != 64 or any(ch not in "0123456789abcdef" for ch in row_hash):
-            raise PointEventError("Live-label frame hash is invalid")
-        decoded_hash = frame_rgb_sha256(decoded_rgb)
-        snapshot_hash = frame_rgb_sha256(snapshot.rgb)
-        if row_hash != decoded_hash or row_hash != snapshot_hash:
-            raise PointEventError("Saved live-label pixels do not match frozen snapshot")
-
-        anchor = make_review_anchor(
-            frame_path=frame_path,
-            capture_sequence=row_sequence,
-            captured_at_utc=snapshot.captured_at_utc,
-            elapsed_s=row.get("elapsed_s"),
-            view_segment_id=snapshot.view_segment_id,
-            capture_geometry_id=snapshot.capture_geometry_id,
-        )
-        moved = store.move_review_anchor(
-            event_id,
-            actor=actor,
-            anchor=anchor,
-            base_revision_id=str(event.get("revision_id") or ""),
-        )
-        measurement = {
-            "valid": True,
-            "measurement_type": "equalizer_visual_basis_fit",
-            "measured_at_utc": datetime.now(timezone.utc).isoformat(),
-            "calibration_id": calibration.calibration_id,
-            "basis_bundle_id": calibration.basis_bundle_id,
-            "frame_sha256": anchor["image_sha256"],
-            "frame_sha256_algorithm": "raw-file-bytes-v1",
-            "capture_sequence": snapshot.capture_sequence,
-            "active_classes": list(calibration.active_classes),
-            "weights": {
-                "raw": validated["raw_weights"],
-                "final": validated["final_weights"],
-                "normalized": validated["normalized_weights"],
-            },
-            "fit_mode": validated["fit_mode"],
-            "normalization_applied": validated["normalization_applied"],
-            "fit_residual": validated["residual_rms"],
-            "valid_coverage": validated["valid_coverage"],
-            "confidence": validated["confidence"],
-            "HTR": None,
-            "calibration": {
-                "matrix": calibration.matrix.tolist(),
-                "parity": calibration.parity,
-                "endpoint_order": calibration.endpoint_order,
-                "rotation_deg": calibration.rotation_deg,
-                "scale": calibration.scale,
-                "rms_residual_px": calibration.rms_residual_px,
-                "max_residual_px": calibration.max_residual_px,
-                "valid_coverage": calibration.valid_coverage,
-                "orientation_evidence_kind": (
-                    calibration.orientation_evidence_kind
-                ),
-            },
-            "scientific_meaning": (
-                "visual_basis_fit_not_human_label_not_model_probability"
-            ),
-        }
-        return store.set_equalizer(
-            event_id,
-            actor=actor,
-            equalizer=measurement,
-            base_revision_id=str(moved.get("revision_id") or ""),
-        )
-
     def log_heartbeat(
         self,
         elapsed_s: float,
@@ -3864,6 +3857,7 @@ class GrowthLogger:
             "realignment_active": metadata.get("realignment_active", ""),
             "calibration_id": metadata.get("calibration_id", ""),
             "basis_bundle_id": metadata.get("basis_bundle_id", ""),
+            "sensor_row_idx": self.latest_sensor_row_idx or "",
         })
         self._heartbeat_file.flush()
 
@@ -3925,6 +3919,7 @@ class GrowthLogger:
                 stamp if event_state != EVENT_STATE_PENDING else ""
             ),
             **self._capture_columns(capture_metadata),
+            **self._change_detection_columns(capture_metadata),
         }
         return self._stringify_csv_row(raw, self.AUTO_CAPTURE_FIELDS)
 
@@ -4033,6 +4028,7 @@ class GrowthLogger:
                 "realignment_active": metadata.get("realignment_active", ""),
                 "calibration_id": metadata.get("calibration_id", ""),
                 "basis_bundle_id": metadata.get("basis_bundle_id", ""),
+                **self._change_detection_columns(metadata),
             }
             selected.append((
                 frame,
@@ -4341,8 +4337,8 @@ class GrowthLogger:
     ) -> bool:
         """Update event_state and state_changed_at for an existing event row.
 
-        Called when the grower interacts with the AutoCaptureBanner (Keep
-        Now, Discard) or when the keep-default countdown fires. Rewrites
+        Called when the grower interacts with the AutoCaptureBanner (Confirm
+        or Reject) or when the keep-default countdown fires. Rewrites
         auto_capture_events.csv in place — small file, infrequent updates,
         simple semantics. Returns True if the row was found and updated.
 
@@ -4391,6 +4387,53 @@ class GrowthLogger:
         # (or the rewrite above when found=True).
         self._open_auto_capture_stream_for_append()
         return found and write_ok
+
+    def set_auto_capture_candidate_decision(
+        self,
+        event_idx: int,
+        decision: str,
+        *,
+        actor: str = "grower-live-banner",
+    ) -> bool:
+        """Apply an explicit banner decision to the matching v2 event.
+
+        The legacy CSV keep/discard field remains acquisition evidence. This
+        is the semantic decision path, so the live banner and later Events
+        review always address the same stable event ID.
+        """
+        store = self._rheed_point_event_store
+        if store is None or decision not in {"confirmed", "rejected"}:
+            return False
+        matches = [
+            state for state in store.states.values()
+            if state.get("source", {}).get("kind") == "auto_capture"
+            and str(state.get("source", {}).get("source_index"))
+            == str(event_idx)
+        ]
+        if len(matches) != 1:
+            log.error(
+                "Auto-capture event %s maps to %d point events",
+                event_idx,
+                len(matches),
+            )
+            return False
+        current = matches[0]
+        if current.get("review", {}).get("candidate_decision") == decision:
+            return True
+        try:
+            store.set_candidate_decision(
+                str(current["event_id"]),
+                actor=actor,
+                decision=decision,
+                base_revision_id=str(current.get("revision_id") or ""),
+            )
+        except (PointEventError, OSError, TypeError, ValueError) as exc:
+            log.error(
+                "Auto-capture candidate decision could not be journaled: %s",
+                exc,
+            )
+            return False
+        return True
 
     def read_event_labels(self) -> dict[int, dict]:
         """Load all rows from events_labels.csv keyed by event_idx.
@@ -4854,13 +4897,42 @@ class GrowthLogger:
         if self._session_dir is None:
             return
         now = datetime.now()
+        duration_monotonic_s = None
+        if self._session_start_monotonic_ns is not None:
+            duration_monotonic_s = max(
+                0.0,
+                (
+                    time.perf_counter_ns()
+                    - self._session_start_monotonic_ns
+                ) / 1_000_000_000.0,
+            )
         meta = {
             **metadata,
+            "acquisition_schema_version": self.ACQUISITION_SCHEMA_VERSION,
+            "sensor_log_schema": {
+                "file": "sensor_log.csv",
+                "row_index": "sensor_row_idx",
+                "heartbeat_reference": "heartbeat_log.csv.sensor_row_idx",
+                "legacy_elapsed_field": "elapsed_s",
+                "monotonic_elapsed_field": "elapsed_monotonic_s",
+                "pressure_source_values": ["evap", "ads", "none"],
+            },
+            "clock_basis": {
+                "timestamp": "host_utc_at_sensor_row_write",
+                "elapsed_s": "legacy_gui_wall_clock",
+                "elapsed_monotonic_s": "time.perf_counter_ns",
+                "source_at_utc": "instrument_native_when_available",
+                "received_at_utc": "host_utc_after_source_read",
+            },
             "session_start": self._session_start.isoformat() if self._session_start else None,
             "session_end": now.isoformat(),
             "session_duration_s": (
                 round((now - self._session_start).total_seconds(), 1)
                 if self._session_start else None
+            ),
+            "session_duration_monotonic_s": (
+                round(duration_monotonic_s, 6)
+                if duration_monotonic_s is not None else None
             ),
             "sensor_row_count": self._sensor_row_counter,
             "commit_entry_count": len(self._entries),

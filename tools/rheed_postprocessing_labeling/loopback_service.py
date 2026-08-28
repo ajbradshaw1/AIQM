@@ -5,10 +5,10 @@ desktop labeler, this module serves that same directory from ``127.0.0.1`` and
 adds a small authenticated API for provenance-sensitive actions.  The random
 token is process-local and deliberately never written to the report or disk.
 
-The HTTP worker never opens Qt widgets.  It only enqueues a request; the
-desktop controller receives the callback and performs Equalizer work on the
-Qt main thread.  This split keeps untrusted browser input away from both raw
-ZIP reads and calibration acceptance.
+The HTTP worker never opens Qt widgets.  The current point-event editor uses
+this service only for authenticated revision, import, and recovery operations.
+Historical Equalizer request data structures remain importable by offline
+diagnostic modules, but the point-event control channel rejects those actions.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ import threading
 from pathlib import Path
 from typing import Callable, Mapping
 from urllib.parse import parse_qs, quote, urlsplit
-import uuid
 
 
 MAX_REQUEST_BYTES = 128 * 1024
@@ -56,7 +55,7 @@ class LoopbackReportService:
         self,
         report_path: str | Path,
         *,
-        equalizer_callback: Callable[[EqualizerRequest], None],
+        equalizer_callback: Callable[[EqualizerRequest], None] | None = None,
         revision_callback: Callable[[Mapping[str, object]], Mapping[str, object]]
         | None = None,
         equalizer_revision_callback: Callable[
@@ -65,6 +64,7 @@ class LoopbackReportService:
         import_callback: Callable[[Mapping[str, object]], Mapping[str, object]]
         | None = None,
         state_callback: Callable[[], Mapping[str, object]] | None = None,
+        session_verification_callback: Callable[[], object] | None = None,
     ) -> None:
         report = Path(report_path).expanduser().resolve()
         if not report.is_file() or report.name != "interactive_report.html":
@@ -77,8 +77,14 @@ class LoopbackReportService:
         self._equalizer_revision_callback = equalizer_revision_callback
         self._import_callback = import_callback
         self._state_callback = state_callback
+        self._session_verification_callback = session_verification_callback
         self._lock = threading.RLock()
         self._requests: dict[str, dict[str, object]] = {}
+        self._session_verification = (
+            "pending" if session_verification_callback is not None else "ready"
+        )
+        self._session_verification_error = ""
+        self._session_verification_thread: threading.Thread | None = None
         self._server: _LoopbackHttpServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -116,7 +122,53 @@ class LoopbackReportService:
         self._server = server
         self._thread = thread
         thread.start()
+        self._start_session_verification()
         return self.report_url
+
+    def _start_session_verification(self) -> None:
+        callback = self._session_verification_callback
+        if callback is None or self._session_verification_thread is not None:
+            return
+
+        def verify() -> None:
+            try:
+                callback()
+            except Exception as exc:  # archive/provenance boundary
+                with self._lock:
+                    self._session_verification = "error"
+                    self._session_verification_error = str(exc) or type(exc).__name__
+            else:
+                with self._lock:
+                    self._session_verification = "ready"
+                    self._session_verification_error = ""
+
+        thread = threading.Thread(
+            target=verify,
+            name="rheed-labeler-session-verification",
+            daemon=True,
+        )
+        self._session_verification_thread = thread
+        thread.start()
+
+    def session_verification_status(self) -> tuple[str, str]:
+        """Return the non-blocking source-archive verification state."""
+
+        with self._lock:
+            return (
+                self._session_verification,
+                self._session_verification_error,
+            )
+
+    def _require_verified_session(self) -> None:
+        """Wait for preflight and reject mutations after a failed check."""
+
+        thread = self._session_verification_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join()
+        state, error = self.session_verification_status()
+        if state != "ready":
+            detail = error or "source session verification did not complete"
+            raise RuntimeError(f"Source session verification failed: {detail}")
 
     def stop(self) -> None:
         server, thread = self._server, self._thread
@@ -136,40 +188,10 @@ class LoopbackReportService:
                     })
 
     def enqueue_equalizer(self, payload: Mapping[str, object]) -> dict[str, object]:
-        event_id = str(payload.get("event_id") or "").strip()
-        reviewer = str(payload.get("reviewer") or "").strip()
-        raw_index = payload.get("review_frame_index")
-        if not event_id or len(event_id) > 160 or any(ord(char) < 33 for char in event_id):
-            raise ValueError("event_id is missing or invalid")
-        if not reviewer:
-            raise ValueError("Enter the reviewer before running Equalizer")
-        if type(raw_index) is not int or raw_index < 1:
-            raise ValueError("review_frame_index must be a positive saved-frame ordinal")
-        request = EqualizerRequest(
-            request_id=str(uuid.uuid4()),
-            event_id=event_id,
-            review_frame_index=raw_index,
-            reviewer=reviewer,
+        raise RuntimeError(
+            "Equalizer is a separate diagnostic and is unavailable in "
+            "point-event labeling"
         )
-        with self._lock:
-            self._requests[request.request_id] = {
-                "status": "pending",
-                "event_id": event_id,
-                "review_frame_index": raw_index,
-            }
-            # Bound memory during a long review session.  Never discard a
-            # request that is still pending.
-            completed = [
-                key for key, value in self._requests.items()
-                if value.get("status") != "pending"
-            ]
-            for old in completed[:-128]:
-                self._requests.pop(old, None)
-        try:
-            self._equalizer_callback(request)
-        except Exception as exc:
-            self.fail_equalizer(request.request_id, f"Equalizer request dispatch failed: {exc}")
-        return {"request_id": request.request_id, "status": "pending"}
 
     def equalizer_status(self, request_id: str) -> dict[str, object]:
         with self._lock:
@@ -207,45 +229,13 @@ class LoopbackReportService:
 
     def append_revision(self, payload: Mapping[str, object]) -> dict[str, object]:
         if str(payload.get("action", "")) == "set_equalizer":
-            callback = self._equalizer_revision_callback
-            if callback is None:
-                raise RuntimeError("Trusted Equalizer revision persistence is unavailable")
-            changes = payload.get("changes")
-            if not isinstance(changes, Mapping) or set(changes) != {"equalizer_result_token"}:
-                raise ValueError(
-                    "set_equalizer requires exactly one server-issued result token"
-                )
-            token = str(changes.get("equalizer_result_token", ""))
-            with self._lock:
-                matches = [
-                    state for state in self._requests.values()
-                    if state.get("result_token") == token
-                ]
-                if len(matches) != 1:
-                    raise ValueError("Equalizer result token is invalid")
-                state = matches[0]
-                if state.get("status") != "complete" or state.get("consumed") is True:
-                    raise ValueError("Equalizer result token was already consumed")
-                if str(state.get("event_id", "")) != str(payload.get("event_id", "")):
-                    raise ValueError("Equalizer result belongs to a different event")
-                measurement = state.get("measurement")
-                if not isinstance(measurement, Mapping):
-                    raise ValueError("Server-held Equalizer result is unavailable")
-                trusted_command = dict(payload)
-                trusted_command["changes"] = {}
-                # Serialize redemption with the durable write: the token is
-                # consumed only after the server-owned measurement commits.
-                result = callback(trusted_command, measurement)
-                state["consumed"] = True
-                state["status"] = "consumed"
-                state.pop("measurement", None)
-            canonical = json.loads(json.dumps(result, allow_nan=False))
-            if not isinstance(canonical, dict):
-                raise ValueError("Revision persistence returned an invalid response")
-            return canonical
+            raise ValueError(
+                "Equalizer is not part of rheed-point-events-v3"
+            )
         callback = self._revision_callback
         if callback is None:
             raise RuntimeError("Desktop revision persistence is unavailable")
+        self._require_verified_session()
         result = callback(payload)
         canonical = json.loads(json.dumps(result, allow_nan=False))
         if not isinstance(canonical, dict):
@@ -266,9 +256,20 @@ class LoopbackReportService:
         callback = self._import_callback
         if callback is None:
             raise RuntimeError("Desktop Draft import is unavailable")
+        self._require_verified_session()
         document = payload.get("document")
         if not isinstance(document, Mapping):
             raise ValueError("Draft import requires one annotation document")
+        # The loopback endpoint is a write path.  Old v2 exports may be
+        # validated separately as evidence, but must never reach a current
+        # sidecar callback where they could be rewritten as v3.
+        from .point_events import SCHEMA_VERSION
+
+        if document.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError(
+                "Only rheed-point-events-v3 Drafts are editable; legacy "
+                "point-event documents are read-only evidence"
+            )
         result = callback(document)
         canonical = json.loads(json.dumps(result, allow_nan=False))
         if not isinstance(canonical, dict):
@@ -337,13 +338,18 @@ class _ReportRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/status":
             if not self._api_authorized():
                 return
+            verification, verification_error = (
+                self.service.session_verification_status()
+            )
             self._json(HTTPStatus.OK, {
                 "schema_version": 1,
                 "desktop": True,
-                "equalizer_available": True,
+                "equalizer_available": False,
                 "revision_persistence_available": self.service._revision_callback is not None,
                 "event_state_available": self.service._state_callback is not None,
                 "event_import_available": self.service._import_callback is not None,
+                "session_verification": verification,
+                "session_verification_error": verification_error,
             })
             return
         if parsed.path == "/api/events":

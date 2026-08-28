@@ -28,6 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 _app = QApplication.instance() or QApplication(sys.argv)
@@ -37,7 +38,7 @@ from drivers.evap_control import (  # noqa: E402
 )
 from drivers.config import CHALCOGENIDE_MBE, OXIDE_MBE  # noqa: E402
 from gui.growth_monitor import GrowthMonitor  # noqa: E402
-from gui.state import EvapControlState  # noqa: E402
+from gui.state import EvapControlState, MistralState  # noqa: E402
 from gui.workers import EvapControlWorker  # noqa: E402
 
 
@@ -52,9 +53,17 @@ def _make_evap_state(
     cell_Sr_pv_C: float | None = 550.3,
     cell_Eu_pv_C: float | None = 580.7,
     cell_Er_pv_C: float | None = 610.2,
+    cell_Fe_pv_C: float | None = None,
+    cell_Te_pv_C: float | None = None,
+    cell_Se_pv_C: float | None = None,
     plasma_dc_bias_V: float | None = None,
     plasma_forward_W: float | None = None,
     plasma_reflected_W: float | None = None,
+    attempt_source_at_utc: str | None = None,
+    source_age_ms: float | None = None,
+    source_record_advanced: bool = False,
+    source_stale: bool = False,
+    source_status: str = "unavailable",
 ) -> EvapControlState:
     """Build an EvapControlState for tests. Defaults model a live
     elog-mode session with the plasma source OFF (all plasma_* None —
@@ -72,9 +81,17 @@ def _make_evap_state(
         cell_Sr_pv_C=cell_Sr_pv_C,
         cell_Eu_pv_C=cell_Eu_pv_C,
         cell_Er_pv_C=cell_Er_pv_C,
+        cell_Fe_pv_C=cell_Fe_pv_C,
+        cell_Te_pv_C=cell_Te_pv_C,
+        cell_Se_pv_C=cell_Se_pv_C,
         plasma_dc_bias_V=plasma_dc_bias_V,
         plasma_forward_W=plasma_forward_W,
         plasma_reflected_W=plasma_reflected_W,
+        attempt_source_at_utc=attempt_source_at_utc,
+        source_age_ms=source_age_ms,
+        source_record_advanced=source_record_advanced,
+        source_stale=source_stale,
+        source_status=source_status,
     )
 
 
@@ -90,6 +107,7 @@ def _all_direct_read_displays(monitor: GrowthMonitor):
         monitor.substrate_pv_display,
         monitor.substrate_sp_display,
         *monitor._cell_displays,
+        *monitor._elog_source_displays,
         monitor.plasma_dc_display,
         monitor.plasma_fwd_display,
         monitor.plasma_rfl_display,
@@ -155,6 +173,147 @@ class WorkerModeRoutingTests(unittest.TestCase):
         )
         driver = worker._create_driver()
         self.assertEqual(driver._log_dir, expected)
+
+    def test_elog_mode_passes_chamber_variable_map(self):
+        worker = EvapControlWorker(
+            mode="elog",
+            chamber_config=CHALCOGENIDE_MBE,
+        )
+        driver = worker._create_driver()
+        self.assertEqual(driver._log_dir, CHALCOGENIDE_MBE.evap_log_dir)
+        self.assertEqual(driver._var_map, CHALCOGENIDE_MBE.evap_elog_var_map)
+
+    def test_worker_forwards_chmbe_material_source_values(self):
+        worker = EvapControlWorker(mode="elog", poll_interval=0.0)
+
+        class OneReadDriver:
+            connected = False
+            source_path = r"C:\elog\test.elo"
+            last_source_at_utc = None
+            last_capture_at_utc = None
+            last_capture_monotonic_ns = None
+
+            def connect(self):
+                self.connected = True
+
+            def read(self):
+                worker.running = False
+                return {
+                    "chamber_pressure_mbar": 3.2e-9,
+                    "cell_Fe_pv_C": 1140.1,
+                    "cell_Te_pv_C": 320.2,
+                    "cell_Se_pv_C": 280.3,
+                }
+
+            def disconnect(self):
+                self.connected = False
+
+        worker._create_driver = lambda: OneReadDriver()
+        emitted = []
+        worker.state_updated.connect(
+            emitted.append,
+            Qt.ConnectionType.DirectConnection,
+        )
+        worker.start()
+        self.assertTrue(worker.wait(2000), "fake elog worker did not stop")
+        self.assertTrue(emitted)
+        state = emitted[-1]
+        self.assertEqual(state.cell_Fe_pv_C, 1140.1)
+        self.assertEqual(state.cell_Te_pv_C, 320.2)
+        self.assertEqual(state.cell_Se_pv_C, 280.3)
+
+    def test_elog_duplicate_record_does_not_advance_success_sequence(self):
+        worker = EvapControlWorker(mode="elog", poll_interval=0.0)
+
+        class DuplicateRecordDriver:
+            connected = False
+            source_path = r"C:\elog\test.elo"
+            last_capture_at_utc = None
+            last_capture_monotonic_ns = None
+            source_stale = False
+            read_count = 0
+
+            def connect(self):
+                self.connected = True
+
+            def read(self):
+                self.read_count += 1
+                self.last_source_at_utc = "2026-08-28T12:00:00+00:00"
+                self.last_source_age_ms = 100.0 + self.read_count
+                self.source_record_advanced = self.read_count == 1
+                self.source_status = (
+                    "advanced" if self.source_record_advanced else "unchanged"
+                )
+                if self.read_count == 2:
+                    worker.running = False
+                return {"chamber_pressure_mbar": 3.2e-9}
+
+            def disconnect(self):
+                self.connected = False
+
+        worker._create_driver = DuplicateRecordDriver
+        emitted = []
+        worker.state_updated.connect(
+            emitted.append,
+            Qt.ConnectionType.DirectConnection,
+        )
+        worker.start()
+        self.assertTrue(worker.wait(2000), "fake elog worker did not stop")
+        self.assertEqual(len(emitted), 2)
+        first, duplicate = emitted
+        self.assertTrue(first.valid)
+        self.assertEqual(first.sample_sequence, 1)
+        self.assertFalse(duplicate.valid)
+        self.assertEqual(duplicate.sample_sequence, 1)
+        self.assertEqual(duplicate.received_at_utc, first.received_at_utc)
+        self.assertFalse(duplicate.source_record_advanced)
+        self.assertEqual(duplicate.source_status, "unchanged")
+        self.assertIn("did not advance", duplicate.error)
+
+    def test_elog_stale_first_record_is_not_a_success(self):
+        worker = EvapControlWorker(mode="elog", poll_interval=0.0)
+
+        class StaleRecordDriver:
+            connected = False
+            source_path = r"C:\elog\test.elo"
+            last_capture_at_utc = None
+            last_capture_monotonic_ns = None
+            last_source_at_utc = "2026-08-28T11:59:00+00:00"
+            last_source_age_ms = 60_000.0
+            source_record_advanced = True
+            source_stale = True
+            source_status = "stale"
+
+            def connect(self):
+                self.connected = True
+
+            def read(self):
+                worker.running = False
+                return {"chamber_pressure_mbar": 3.2e-9}
+
+            def disconnect(self):
+                self.connected = False
+
+        worker._create_driver = StaleRecordDriver
+        emitted = []
+        worker.state_updated.connect(
+            emitted.append,
+            Qt.ConnectionType.DirectConnection,
+        )
+        worker.start()
+        self.assertTrue(worker.wait(2000), "fake elog worker did not stop")
+        self.assertEqual(len(emitted), 1)
+        stale = emitted[0]
+        self.assertFalse(stale.valid)
+        self.assertEqual(stale.sample_sequence, 0)
+        self.assertIsNone(stale.received_at_utc)
+        self.assertTrue(stale.source_stale)
+        self.assertEqual(stale.source_age_ms, 60_000.0)
+        self.assertEqual(
+            stale.attempt_source_at_utc,
+            StaleRecordDriver.last_source_at_utc,
+        )
+        self.assertIn("stale", stale.error)
 
     def test_dummy_mode_returns_dummy_evap_control(self):
         worker = EvapControlWorker(mode="dummy")
@@ -409,6 +568,77 @@ class DirectReadTabTests(unittest.TestCase):
         for d in _all_direct_read_displays(self.monitor):
             self.assertEqual(d.value.text(), "---")
         self.assertTrue(self.monitor.plasma_group.isHidden())
+
+
+class ChMbeDirectReadSourceTests(unittest.TestCase):
+    """Verified Ch-MBE elog sources remain distinct from numbered ADS cells."""
+
+    def setUp(self):
+        self.monitor = GrowthMonitor(config=CHALCOGENIDE_MBE)
+
+    def tearDown(self):
+        self.monitor.deleteLater()
+
+    def test_verified_elog_sources_have_independent_displays(self):
+        self.assertEqual(len(self.monitor._elog_source_displays), 3)
+        state = _make_evap_state(
+            cell_Fe_pv_C=1140.1,
+            cell_Te_pv_C=320.2,
+            cell_Se_pv_C=280.3,
+        )
+        self.monitor.update_evap_state(state)
+        self.assertEqual(
+            [d.value.text() for d in self.monitor._elog_source_displays],
+            ["1140.1 °C", "320.2 °C", "280.3 °C"],
+        )
+
+    def test_reset_clears_verified_elog_source_displays(self):
+        self.monitor.update_evap_state(_make_evap_state(
+            cell_Fe_pv_C=1140.1,
+            cell_Te_pv_C=320.2,
+            cell_Se_pv_C=280.3,
+        ))
+        self.monitor.reset_displays()
+        self.assertEqual(
+            [d.value.text() for d in self.monitor._elog_source_displays],
+            ["---", "---", "---"],
+        )
+
+    def test_evap_tick_does_not_clear_ads_owned_numbered_cells(self):
+        self.monitor.update_mistral_state(MistralState(
+            mode="ads",
+            connected=True,
+            valid=True,
+            ads_cells={f"cell{i}_T": 100.0 + i for i in range(1, 8)},
+        ))
+        before = [d.value.text() for d in self.monitor._cell_displays]
+
+        self.monitor.update_evap_state(_make_evap_state(
+            cell_Fe_pv_C=1140.1,
+            cell_Te_pv_C=320.2,
+            cell_Se_pv_C=280.3,
+        ))
+
+        self.assertEqual(
+            [d.value.text() for d in self.monitor._cell_displays],
+            before,
+        )
+        self.assertEqual(before[0], "101.0 °C")
+
+    def test_stale_source_is_explicit_and_values_are_hidden(self):
+        self.monitor.update_evap_state(_make_evap_state(
+            connected=True,
+            cell_Fe_pv_C=1140.1,
+            attempt_source_at_utc="2026-08-28T12:00:00+00:00",
+            source_age_ms=7_000.0,
+            source_record_advanced=False,
+            source_stale=True,
+            source_status="stale",
+        ))
+        # valid=True is deliberately supplied by the compatibility helper;
+        # the explicit stale bit must still dominate the operator-facing text.
+        self.assertIn("STALE", self.monitor._evap_source_status_label.text())
+        self.assertIn("7.0 s old", self.monitor._evap_source_status_label.text())
 
 
 class ContinuousCaptureIndicatorTests(unittest.TestCase):

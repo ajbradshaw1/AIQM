@@ -47,7 +47,6 @@ from gui.equalizer_alignment import (  # noqa: E402
     RheedFrameSnapshot,
 )
 from gui.equalizer_label_contract import build_equalizer_payload  # noqa: E402
-from gui.rheed_point_events import PointEventError  # noqa: E402
 
 
 _TEST_BASIS_BUNDLE = BasisBundle(tuple([
@@ -308,6 +307,46 @@ class CaptureProvenanceTests(unittest.TestCase):
                 row["capture_geometry_id"],
                 "wgc:9001:640x480:roi-full:v1",
             )
+
+    def test_first_saved_heartbeat_creates_one_explicit_initial_1x1_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = GrowthLogger(base_dir=tmp)
+            logger.start_session("INITIAL_ASSUMPTION")
+            metadata = {
+                "capture_backend": "vimba",
+                "captured_at_utc": "2026-08-20T12:00:00.123Z",
+                "capture_sequence": 42,
+                "capture_geometry_id": "vimba:full-frame",
+                "view_segment_id": 0,
+            }
+            frame_path = logger.save_heartbeat_frame(_good_frame())
+            self.assertTrue(frame_path)
+
+            first_id = logger.ensure_initial_point_event(
+                frame_path=frame_path,
+                elapsed_s=1.25,
+                capture_metadata=metadata,
+            )
+            second_id = logger.ensure_initial_point_event(
+                frame_path=frame_path,
+                elapsed_s=1.25,
+                capture_metadata=metadata,
+            )
+
+            self.assertEqual(first_id, second_id)
+            states = logger.point_event_store.states
+            self.assertEqual(list(states), [first_id])
+            state = states[first_id]
+            self.assertEqual(state["source"]["kind"], "initial_assumption")
+            self.assertEqual(state["status"], "Draft")
+            self.assertEqual(state["review"]["candidate_decision"], "confirmed")
+            self.assertEqual(state["review"]["labels"], [])
+            self.assertEqual(
+                state["review"]["anchor"]["capture_sequence"], 42,
+            )
+            self.assertIsNone(state["review"]["representative_anchor"])
+            logger.end_session()
+
     def test_auto_capture_buffer_writes_per_frame_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             logger = GrowthLogger(base_dir=tmp)
@@ -387,6 +426,76 @@ class CaptureProvenanceTests(unittest.TestCase):
                 self.assertEqual(row["calibration_id"], "cal-test-001")
                 self.assertEqual(row["basis_bundle_id"], "basis-test-sha256")
 
+    def test_auto_capture_persists_translation_registration_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = GrowthLogger(base_dir=tmp)
+            logger.start_session("BUFFER_TRANSLATION_DIAGNOSTICS")
+            detection = {
+                "detector": "TranslationInvariantChangeDetector",
+                "status": "ok",
+                "score": 3.1,
+                "raw_score": 18.25,
+                "shift_y_px": -2.5,
+                "shift_x_px": 4.25,
+                "registration_confidence": 0.875,
+                "overlap_fraction": 0.94,
+                "effective_threshold": 2.75,
+                "trigger_armed": False,
+                "suppressed": "",
+                "triggered": True,
+            }
+            metadata = {
+                "capture_backend": "vimba",
+                "captured_at_utc": "2026-08-20T12:00:01.000Z",
+                "capture_sequence": 101,
+                "capture_geometry_id": "vimba:full-frame",
+                "camera_width": 300,
+                "camera_height": 200,
+                "change_detection": detection,
+            }
+
+            result = logger.record_auto_capture_event(
+                event_idx=1,
+                score=3.1,
+                elapsed_s=2.0,
+                frames=[_good_frame()],
+                frame_capture_metadata=[metadata],
+                event_capture_metadata=metadata,
+            )
+            self.assertTrue(result.committed)
+
+            with open(
+                logger.session_dir / "auto_capture_events.csv",
+                newline="",
+                encoding="utf-8",
+            ) as stream:
+                event_row = next(csv.DictReader(stream))
+            with open(
+                logger.session_dir / result.buffer_dir / "capture_manifest.csv",
+                newline="",
+                encoding="utf-8",
+            ) as stream:
+                manifest_row = next(csv.DictReader(stream))
+
+            for row in (event_row, manifest_row):
+                self.assertEqual(
+                    row["change_detector"],
+                    "TranslationInvariantChangeDetector",
+                )
+                self.assertEqual(row["change_detection_status"], "ok")
+                self.assertEqual(float(row["raw_change_score"]), 18.25)
+                self.assertEqual(float(row["registered_shift_y_px"]), -2.5)
+                self.assertEqual(float(row["registered_shift_x_px"]), 4.25)
+                self.assertEqual(float(row["registration_confidence"]), 0.875)
+                self.assertEqual(
+                    float(row["registration_overlap_fraction"]), 0.94,
+                )
+                self.assertEqual(float(row["change_threshold"]), 2.75)
+                self.assertEqual(row["change_detector_armed"], "False")
+                self.assertEqual(row["change_detection_suppressed"], "")
+                self.assertEqual(row["change_detection_triggered"], "True")
+            logger.end_session()
+
     def test_auto_capture_point_event_anchors_unique_trigger_not_last_buffer_frame(self):
         with tempfile.TemporaryDirectory() as tmp:
             logger = GrowthLogger(base_dir=tmp)
@@ -422,6 +531,40 @@ class CaptureProvenanceTests(unittest.TestCase):
             self.assertEqual(state["review"]["anchor"]["capture_sequence"], "201")
             self.assertIn("buf_01_", state["review"]["anchor"]["frame_path"])
             self.assertNotIn("buf_02_", state["review"]["anchor"]["frame_path"])
+            logger.end_session()
+
+    def test_banner_decision_updates_the_same_auto_point_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = GrowthLogger(base_dir=tmp)
+            logger.start_session("BUFFER_DECISION")
+            metadata = {
+                "capture_backend": "vimba",
+                "captured_at_utc": "2026-08-20T12:00:01.000Z",
+                "capture_sequence": 101,
+                "capture_geometry_id": "vimba:full-frame",
+                "camera_width": 300,
+                "camera_height": 200,
+            }
+            result = logger.record_auto_capture_event(
+                event_idx=1, score=2.5, elapsed_s=1.0,
+                frames=[_good_frame()], frame_capture_metadata=[metadata],
+                event_capture_metadata=metadata,
+            )
+
+            event_id = result.point_event_id
+            self.assertTrue(event_id)
+            self.assertEqual(
+                logger.point_event_store.get(event_id)["review"]["candidate_decision"],
+                "pending",
+            )
+            self.assertTrue(logger.set_auto_capture_candidate_decision(1, "rejected"))
+            rejected = logger.point_event_store.get(event_id)
+            self.assertEqual(rejected["event_id"], event_id)
+            self.assertEqual(rejected["review"]["candidate_decision"], "rejected")
+            self.assertTrue(logger.set_auto_capture_candidate_decision(1, "confirmed"))
+            confirmed = logger.point_event_store.get(event_id)
+            self.assertEqual(confirmed["event_id"], event_id)
+            self.assertEqual(confirmed["review"]["candidate_decision"], "confirmed")
             logger.end_session()
 
     def test_auto_capture_point_event_stays_unresolved_without_unique_trigger_frame(self):
@@ -1340,83 +1483,16 @@ class EqualizerLiveLabelTests(unittest.TestCase):
         self.assertGreater(label_idx, 0)
         return event_id, label_idx, payload
 
-    def test_point_event_equalizer_binding_verifies_exact_saved_pixels(self):
-        event_id, label_idx, payload = self._point_event_and_live_label()
+    def test_live_equalizer_label_remains_separate_from_point_event_review(self):
+        event_id, label_idx, _payload = self._point_event_and_live_label()
 
-        updated = self.logger.attach_live_equalizer_to_point_event(
-            event_id,
-            live_label_index=label_idx,
-            actor="reviewer-a",
-            calibration=self.calibration,
-            snapshot=self.snapshot,
-            equalizer_payload=payload,
-        )
-
-        review = updated["review"]
-        self.assertEqual(review["anchor"]["capture_sequence"], 102)
-        self.assertEqual(
-            review["anchor"]["capture_geometry_id"],
-            self.snapshot.capture_geometry_id,
-        )
-        self.assertEqual(
-            review["equalizer"]["frame_sha256"],
-            review["anchor"]["image_sha256"],
-        )
-        self.assertEqual(review["equalizer"]["calibration_id"], "cal-test-001")
-        self.assertEqual(updated["revision_number"], 3)
-
-    def test_point_event_equalizer_metadata_mismatch_adds_no_revision(self):
-        event_id, label_idx, payload = self._point_event_and_live_label()
-        original_row = self._rows()[0]
-        original_state = self.logger.point_event_store.get(event_id)
-        self.logger._close_live_label_stream()
-        cases = (
-            ("capture_sequence", "999", "capture_sequence"),
-            ("captured_at_utc", "2026-07-31T12:00:02Z", "captured_at_utc"),
-            ("calibration_id", "cal-other", "calibration_id"),
-            ("basis_bundle_id", "bundle-other", "basis_bundle_id"),
-            ("capture_geometry_id", "geometry-other", "capture_geometry_id"),
-        )
-        for field, bad_value, message in cases:
-            with self.subTest(field=field):
-                tampered = dict(original_row)
-                tampered[field] = bad_value
-                self.assertTrue(self.logger._atomic_write_csv(
-                    self.csv_path, self.logger.LIVE_LABEL_FIELDS, [tampered],
-                ))
-                with self.assertRaisesRegex(PointEventError, message):
-                    self.logger.attach_live_equalizer_to_point_event(
-                        event_id,
-                        live_label_index=label_idx,
-                        actor="reviewer-a",
-                        calibration=self.calibration,
-                        snapshot=self.snapshot,
-                        equalizer_payload=payload,
-                    )
-                self.assertEqual(
-                    self.logger.point_event_store.get(event_id), original_state,
-                )
-        self.assertTrue(self.logger._atomic_write_csv(
-            self.csv_path, self.logger.LIVE_LABEL_FIELDS, [original_row],
-        ))
-
-    def test_point_event_equalizer_pixel_mismatch_adds_no_revision(self):
-        event_id, label_idx, payload = self._point_event_and_live_label()
-        original_state = self.logger.point_event_store.get(event_id)
-        frame_path = Path(self._rows()[0]["frame_path"])
-        from PIL import Image
-
-        Image.fromarray(np.zeros_like(self.snapshot.rgb)).save(frame_path, format="BMP")
-        with self.assertRaisesRegex(PointEventError, "pixels"):
-            self.logger.attach_live_equalizer_to_point_event(
-                event_id,
-                live_label_index=label_idx,
-                actor="reviewer-a",
-                calibration=self.calibration,
-                snapshot=self.snapshot,
-                equalizer_payload=payload,
-            )
-        self.assertEqual(self.logger.point_event_store.get(event_id), original_state)
+        self.assertGreater(label_idx, 0)
+        state = self.logger.point_event_store.get(event_id)
+        self.assertEqual(state["revision_number"], 1)
+        self.assertNotIn("equalizer", state["review"])
+        self.assertEqual(state["status"], "Draft")
+        self.assertEqual(state["review"]["labels"], [])
+        self.assertIsNone(state["review"]["representative_anchor"])
 
     def test_typed_snapshot_is_saved_with_current_provenance_and_htr_blank(self):
         idx = self.logger.record_live_label(
@@ -1875,6 +1951,34 @@ class ManualEventSchemaTests(unittest.TestCase):
         self.assertEqual(GrowthLogger.MANUAL_EVENT_FIELDS[0], "timestamp")
         self.assertEqual(GrowthLogger.MANUAL_EVENT_FIELDS[1], "elapsed_s")
         self.assertEqual(GrowthLogger.MANUAL_EVENT_FIELDS[2], "event_idx")
+
+
+class ChMbeElogSensorSchemaTests(unittest.TestCase):
+    """Verified Ch-MBE material-source values are preserved in sensor CSV."""
+
+    def test_chmbe_elog_sources_have_dedicated_columns(self):
+        expected = ("cell_Fe_pv_C", "cell_Te_pv_C", "cell_Se_pv_C")
+        for column in expected:
+            self.assertIn(column, GrowthLogger.SENSOR_FIELDS)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = GrowthLogger(base_dir=tmp)
+            logger.start_session("TEST_CHMBE_ELOG")
+            logger.log_sensors(
+                pyro_temp=None,
+                elapsed_s=1.0,
+                cell_Fe_pv_C=1140.1,
+                cell_Te_pv_C=320.2,
+                cell_Se_pv_C=280.3,
+            )
+            logger.end_session()
+
+            with open(logger.session_dir / "sensor_log.csv", newline="") as f:
+                row = next(csv.DictReader(f))
+
+        self.assertEqual(row["cell_Fe_pv_C"], "1140.1")
+        self.assertEqual(row["cell_Te_pv_C"], "320.2")
+        self.assertEqual(row["cell_Se_pv_C"], "280.3")
 
 
 class AdsSensorSchemaTests(unittest.TestCase):

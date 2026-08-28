@@ -96,6 +96,9 @@
       stroke-width: 2px;
       pointer-events: none;
     }
+    #anneal-model-timeline .arp-annotation-track .axis-title {
+      pointer-events: none;
+    }
     #anneal-model-timeline .arp-annotation-track .annotation-hit {
       cursor: crosshair;
     }
@@ -147,6 +150,44 @@
     #anneal-model-timeline .arp-annotation-status.text-destructive {
       color: var(--destructive);
     }
+    #anneal-model-timeline .arp-point-command-bar {
+      display: grid;
+      grid-template-columns: auto minmax(220px, 1fr);
+      gap: 10px;
+      align-items: center;
+      margin: 9px 0;
+      padding: 9px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--background);
+    }
+    #anneal-model-timeline .arp-point-command-bar .arp-annotation-status {
+      min-height: 0;
+      margin: 0;
+      padding: 7px 9px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      font-weight: 500;
+    }
+    #anneal-model-timeline .arp-point-command-bar .arp-annotation-status[data-tone="info"] {
+      color: var(--foreground);
+      border-color: var(--border);
+      background: var(--muted);
+    }
+    #anneal-model-timeline .arp-point-command-bar .arp-annotation-status[data-tone="success"] {
+      color: #166534;
+      border-color: #86efac;
+      background: #f0fdf4;
+    }
+    #anneal-model-timeline .arp-point-command-bar .arp-annotation-status[data-tone="error"] {
+      color: var(--destructive, #b91c1c);
+      border-color: color-mix(in srgb, var(--destructive, #b91c1c) 45%, var(--border));
+      background: color-mix(in srgb, var(--destructive, #b91c1c) 9%, var(--background));
+    }
+    #anneal-model-timeline #arp-point-add[aria-disabled="true"] {
+      opacity: 0.72;
+      cursor: not-allowed;
+    }
     #anneal-model-timeline .arp-point-editor {
       margin: 0 0 18px;
     }
@@ -161,6 +202,15 @@
       border: 1px solid var(--border);
       padding: 10px;
       min-width: 0;
+    }
+    #anneal-model-timeline .arp-point-card.is-new-event {
+      border-color: #22c55e;
+      animation: arp-new-event-pulse 1.4s ease-out;
+    }
+    @keyframes arp-new-event-pulse {
+      0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.48); }
+      55% { box-shadow: 0 0 0 7px rgba(34, 197, 94, 0.16); }
+      100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
     }
     #anneal-model-timeline .arp-point-card h4,
     #anneal-model-timeline .arp-point-queue h4 {
@@ -188,27 +238,29 @@
     }
     #anneal-model-timeline .arp-point-evidence,
     #anneal-model-timeline .arp-point-context,
-    #anneal-model-timeline .arp-point-equalizer {
+    #anneal-model-timeline .arp-point-label-editor {
       border-top: 1px solid var(--border);
       margin-top: 9px;
       padding-top: 8px;
     }
+    #anneal-model-timeline details.arp-point-evidence > summary,
+    #anneal-model-timeline details.arp-point-context > summary {
+      cursor: pointer;
+      color: var(--muted-foreground);
+    }
     #anneal-model-timeline .arp-point-evidence dl,
-    #anneal-model-timeline .arp-point-context dl,
-    #anneal-model-timeline .arp-point-equalizer dl {
+    #anneal-model-timeline .arp-point-context dl {
       display: grid;
       grid-template-columns: minmax(120px, 0.45fr) minmax(0, 1fr);
       gap: 3px 9px;
       margin: 4px 0;
     }
     #anneal-model-timeline .arp-point-evidence dt,
-    #anneal-model-timeline .arp-point-context dt,
-    #anneal-model-timeline .arp-point-equalizer dt {
+    #anneal-model-timeline .arp-point-context dt {
       color: var(--muted-foreground);
     }
     #anneal-model-timeline .arp-point-evidence dd,
-    #anneal-model-timeline .arp-point-context dd,
-    #anneal-model-timeline .arp-point-equalizer dd {
+    #anneal-model-timeline .arp-point-context dd {
       margin: 0;
       overflow-wrap: anywhere;
     }
@@ -219,6 +271,54 @@
       gap: 7px;
       align-items: end;
       margin-top: 9px;
+    }
+    #anneal-model-timeline .arp-point-session-bar,
+    #anneal-model-timeline .arp-point-anchor-panel {
+      display: grid;
+      grid-template-columns: minmax(180px, 0.7fr) minmax(260px, 1.3fr);
+      gap: 10px 16px;
+      align-items: end;
+      margin: 9px 0;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--muted);
+    }
+    #anneal-model-timeline .arp-point-session-bar input {
+      width: 100%;
+    }
+    #anneal-model-timeline #arp-point-grower[aria-invalid="true"] {
+      border-color: var(--destructive, #dc2626);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--destructive, #dc2626) 22%, transparent);
+      background: color-mix(in srgb, var(--destructive, #dc2626) 8%, var(--background));
+    }
+    #anneal-model-timeline .arp-point-quick-labels {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    #anneal-model-timeline .arp-point-semantic-group {
+      display: grid;
+      gap: 5px;
+      padding: 8px 0;
+      border-top: 1px solid var(--border);
+    }
+    #anneal-model-timeline .arp-point-semantic-group:first-of-type {
+      border-top: 0;
+    }
+    #anneal-model-timeline .arp-point-semantic-group .form-select {
+      width: min(100%, 260px);
+    }
+    #anneal-model-timeline .arp-point-anchor-panel[data-has-selection="false"] button {
+      opacity: 0.6;
+    }
+    #anneal-model-timeline .arp-point-track .point-interval {
+      cursor: pointer;
+    }
+    #anneal-model-timeline .arp-point-track .point-interval.is-selected {
+      stroke: var(--foreground);
+      stroke-width: 2.5px;
     }
     #anneal-model-timeline .arp-point-queue-list {
       display: grid;
@@ -247,7 +347,8 @@
     #anneal-model-timeline .arp-point-track .point-review {
       cursor: pointer;
       stroke-width: 2px;
-      fill: none;
+      fill: transparent;
+      pointer-events: all;
     }
     #anneal-model-timeline .arp-point-track .point-link {
       stroke: var(--muted-foreground);
@@ -261,22 +362,87 @@
     #anneal-model-timeline .arp-point-track .point-reference {
       opacity: 0.45;
     }
-    #anneal-model-timeline .arp-point-bridge-note {
-      border-left: 3px solid var(--accent);
-      padding-left: 8px;
+    #anneal-model-timeline .arp-point-track .point-anchor {
+      cursor: grab;
+      fill: var(--accent);
+      stroke: var(--background);
+      stroke-width: 1.5px;
+    }
+    #anneal-model-timeline .arp-point-track .point-anchor.is-invalid,
+    #anneal-model-timeline .arp-point-track .point-review.is-contradictory,
+    #anneal-model-timeline .arp-point-track .point-original.is-contradictory {
+      stroke: var(--destructive, #dc2626);
+      stroke-width: 3px;
+    }
+    #anneal-model-timeline .arp-point-track .point-lane-rule {
+      stroke: var(--border);
+      stroke-dasharray: 2 3;
+      pointer-events: none;
+    }
+    #anneal-model-timeline .arp-point-track .point-lane-label {
+      fill: var(--muted-foreground);
+      font-size: 9px;
+      font-weight: 600;
+    }
+    #anneal-model-timeline .arp-point-track .point-interval {
+      stroke: var(--border);
+      stroke-width: 1px;
+    }
+    #anneal-model-timeline .arp-point-track .point-interval.is-contradictory {
+      fill: color-mix(in srgb, var(--destructive, #dc2626) 20%, transparent);
+      stroke: var(--destructive, #dc2626);
+    }
+    #anneal-model-timeline .arp-point-track .point-interval-label {
+      fill: var(--foreground);
+      font-size: 9px;
+      pointer-events: none;
+    }
+    #anneal-model-timeline .arp-point-state-diagnostic {
       margin: 7px 0;
-      color: var(--muted-foreground);
+      padding: 7px 9px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: var(--muted);
     }
-    #anneal-model-timeline .arp-point-weight-table {
+    #anneal-model-timeline .arp-point-state-diagnostic.is-error {
+      border-color: var(--destructive, #dc2626);
+      color: var(--destructive, #dc2626);
+      background: color-mix(in srgb, var(--destructive, #dc2626) 8%, transparent);
+    }
+    #anneal-model-timeline .arp-point-track .point-anchor:active,
+    #anneal-model-timeline .arp-point-track .point-review:active {
+      cursor: grabbing;
+    }
+    #anneal-model-timeline .arp-point-label-list {
+      display: grid;
+      gap: 6px;
+      margin: 7px 0;
+    }
+    #anneal-model-timeline .arp-point-label-row,
+    #anneal-model-timeline .arp-point-label-add {
+      display: grid;
+      grid-template-columns: minmax(130px, 1fr) minmax(110px, .8fr) minmax(130px, 1fr) auto;
+      gap: 6px;
+      align-items: center;
+    }
+    #anneal-model-timeline .arp-point-label-row[data-kind="pattern_clarity"] {
+      border-left: 3px solid var(--accent);
+      padding-left: 6px;
+    }
+    #anneal-model-timeline .arp-point-label-row select,
+    #anneal-model-timeline .arp-point-label-add select {
       width: 100%;
-      border-collapse: collapse;
-      margin-top: 5px;
+      min-width: 0;
     }
-    #anneal-model-timeline .arp-point-weight-table th,
-    #anneal-model-timeline .arp-point-weight-table td {
-      border-bottom: 1px solid var(--border);
-      padding: 3px 5px;
-      text-align: right;
+    #anneal-model-timeline .arp-point-queue-list .btn[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 14%, var(--background));
+      box-shadow: inset 3px 0 0 var(--accent);
+      font-weight: 600;
+    }
+    #anneal-model-timeline .arp-point-label-empty {
+      color: var(--muted-foreground);
+      padding: 4px 0;
     }
     #anneal-model-timeline .arp-point-weight-table th:first-child,
     #anneal-model-timeline .arp-point-weight-table td:first-child {
@@ -572,6 +738,14 @@
     #anneal-model-timeline .arp-node-time {
       color: var(--muted-foreground);
     }
+    @media (max-width: 1200px) {
+      #anneal-model-timeline .arp-point-workspace {
+        grid-template-columns: 1fr;
+      }
+      #anneal-model-timeline .arp-point-queue {
+        position: static;
+      }
+    }
     @media (max-width: 760px) {
       #anneal-model-timeline .arp-layout {
         grid-template-columns: 1fr;
@@ -585,6 +759,9 @@
       #anneal-model-timeline .arp-display-controls {
         grid-template-columns: 1fr 1fr;
       }
+      #anneal-model-timeline .arp-point-command-bar {
+        grid-template-columns: 1fr;
+      }
       #anneal-model-timeline .arp-display-controls .btn {
         grid-column: 1 / -1;
       }
@@ -594,11 +771,17 @@
       #anneal-model-timeline .arp-annotation-controls .arp-annotation-notes {
         grid-column: 1 / -1;
       }
-      #anneal-model-timeline .arp-point-workspace {
-        grid-template-columns: 1fr;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #anneal-model-timeline .arp-point-card.is-new-event {
+        animation: none;
       }
     }
     @media (max-width: 520px) {
+      #anneal-model-timeline .arp-point-session-bar,
+      #anneal-model-timeline .arp-point-anchor-panel {
+        grid-template-columns: minmax(0, 1fr);
+      }
       #anneal-model-timeline .arp-display-controls {
         grid-template-columns: 1fr;
       }
@@ -625,6 +808,10 @@
       #anneal-model-timeline .arp-point-grid .arp-point-wide {
         grid-column: auto;
       }
+      #anneal-model-timeline .arp-point-label-row,
+      #anneal-model-timeline .arp-point-label-add {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 
@@ -637,7 +824,17 @@
           <h3 id="arp-point-title">RHEED point-event review</h3>
           <output class="arp-annotation-summary text-small" id="arp-point-summary">0 events</output>
         </div>
-        <p class="arp-annotation-note text-small">Original event evidence is immutable. The review point snaps to a saved frame. Equalizer is an auxiliary visual fit and never changes the grower’s reconstruction interpretation or represents a model probability.</p>
+        <p class="arp-annotation-note text-small">Mark only what changes at a point. The timeline immediately rebuilds the reconstruction-presence and pattern-clarity intervals. Every edit is autosaved.</p>
+        <div class="arp-point-session-bar">
+          <label class="arp-point-field text-small" for="arp-point-grower">
+            <span>Grower (enter once for this session)</span>
+            <input class="form-control" id="arp-point-grower" type="text" maxlength="120" autocomplete="name" placeholder="Required for durable revisions">
+          </label>
+          <div class="text-small">
+            <strong>Initial state</strong>
+            <div>1×1 present · clarity unknown (fixed baseline; no change label)</div>
+          </div>
+        </div>
         <div class="arp-annotation-transport">
           <button type="button" class="btn" id="arp-frame-previous-point">← Previous frame</button>
           <button type="button" class="btn" id="arp-frame-next-point">Next frame →</button>
@@ -647,68 +844,67 @@
           </label>
         </div>
         <div class="arp-annotation-track-host" id="arp-point-track-host"></div>
+        <div class="arp-point-command-bar">
+          <button type="button" class="btn btn-primary" id="arp-point-add" aria-disabled="false">Add event at playhead</button>
+          <div class="arp-annotation-status text-small" id="arp-point-status" role="status" aria-live="polite" data-tone="info"></div>
+        </div>
+        <div class="arp-point-anchor-panel" id="arp-point-anchor-panel" data-has-selection="false">
+          <div class="text-small">
+            <strong>Representative frame for the selected interval</strong>
+            <div id="arp-point-anchor-summary">Click a derived state interval on the timeline.</div>
+          </div>
+          <button type="button" class="btn btn-primary" id="arp-point-interval-anchor">Use current frame as this interval’s representative</button>
+        </div>
         <div class="arp-point-workspace">
           <div class="arp-point-card">
             <h4 id="arp-point-editor-heading">Select an event or add one at the playhead</h4>
             <div id="arp-point-empty" class="text-small text-muted">Manual marks and automatic image-change events appear here. RHEED adjustment and image-unusable records are shown on the track as read-only references.</div>
             <div id="arp-point-form" hidden>
+              <div class="arp-point-label-editor text-small">
+                <strong>What changed at this point?</strong>
+                <p class="text-muted">Choose the physical change directly. Multiple reconstruction types may coexist.</p>
+                <div id="arp-point-label-list" class="arp-point-label-list"></div>
+                <div class="arp-point-semantic-group">
+                  <strong>Reconstruction</strong>
+                  <select class="form-select" id="arp-point-reconstruction-choice" aria-label="Reconstruction type"></select>
+                  <div class="arp-point-quick-labels">
+                    <button type="button" class="btn" id="arp-point-reconstruction-appeared">Appeared</button>
+                    <button type="button" class="btn" id="arp-point-reconstruction-disappeared">Disappeared</button>
+                  </div>
+                </div>
+                <div class="arp-point-semantic-group">
+                  <strong>Clarity</strong>
+                  <div class="arp-point-quick-labels">
+                    <button type="button" class="btn" data-point-quick-kind="pattern_clarity" data-point-quick-value="good">Became Good</button>
+                    <button type="button" class="btn" data-point-quick-kind="pattern_clarity" data-point-quick-value="bad">Became Bad</button>
+                  </div>
+                </div>
+              </div>
               <div class="arp-point-grid">
-                <label class="arp-point-field arp-point-wide text-small" for="arp-point-comment">
-                  <span>Review comment (required to Complete)</span>
-                  <textarea class="form-control" id="arp-point-comment" rows="2" maxlength="1000"></textarea>
-                </label>
-                <label class="arp-point-field text-small" for="arp-point-reviewer">
-                  <span>Reviewer (required to Complete)</span>
-                  <input class="form-control" id="arp-point-reviewer" type="text" maxlength="120">
-                </label>
-                <label class="arp-point-field text-small" for="arp-point-confidence">
-                  <span>Review confidence</span>
-                  <input class="form-control" id="arp-point-confidence" type="number" min="0" max="1" step="0.05" placeholder="Optional, 0–1">
-                </label>
-                <label class="arp-point-field text-small" for="arp-point-reconstruction">
-                  <span>Optional human interpretation</span>
-                  <select class="form-select" id="arp-point-reconstruction">
-                    <option value="">Not stated</option>
-                    <option value="none_weak">1×1 / none-weak</option>
-                    <option value="twinned_2x1">Twinned (2×1)</option>
-                    <option value="c_6x2">c(6×2)</option>
-                    <option value="rt13">RT13</option>
-                    <option value="htr">HTR-like</option>
-                    <option value="unknown">Uncertain</option>
+                <label class="arp-point-field text-small" for="arp-point-candidate-decision">
+                  <span>Automatic candidate</span>
+                  <select class="form-select" id="arp-point-candidate-decision">
+                    <option value="pending">Pending review</option>
+                    <option value="confirmed">Confirm change</option>
+                    <option value="rejected">Reject candidate</option>
                   </select>
                 </label>
-                <label class="arp-point-field text-small" for="arp-point-before">
-                  <span>Optional reconstruction before</span>
-                  <select class="form-select" id="arp-point-before"></select>
-                </label>
-                <label class="arp-point-field text-small" for="arp-point-after">
-                  <span>Optional reconstruction after</span>
-                  <select class="form-select" id="arp-point-after"></select>
+                <label class="arp-point-field arp-point-wide text-small" for="arp-point-comment">
+                  <span>Optional note</span>
+                  <textarea class="form-control" id="arp-point-comment" rows="2" maxlength="1000"></textarea>
                 </label>
               </div>
-              <div class="arp-point-evidence text-small">
-                <strong>Immutable live-session evidence</strong>
+              <div class="arp-point-state-diagnostic text-small" id="arp-point-state-diagnostic" role="status"></div>
+              <details class="arp-point-evidence text-small">
+                <summary><strong>Immutable live-session evidence</strong></summary>
                 <dl id="arp-point-evidence"></dl>
-              </div>
-              <div class="arp-point-context text-small">
-                <strong>Read-only instrument context at the original event time</strong>
+              </details>
+              <details class="arp-point-context text-small">
+                <summary><strong>Read-only instrument context at the original event time</strong></summary>
                 <dl id="arp-point-context"></dl>
-              </div>
-              <div class="arp-point-equalizer text-small">
-                <strong>Equalizer auxiliary visual fit</strong>
-                <p class="arp-point-bridge-note" id="arp-point-bridge-note"></p>
-                <dl id="arp-point-equalizer-provenance"></dl>
-                <table class="arp-point-weight-table" aria-label="Equalizer weights">
-                  <thead><tr><th>Basis</th><th>Raw</th><th>Final</th><th>Normalized</th></tr></thead>
-                  <tbody id="arp-point-equalizer-weights"></tbody>
-                </table>
-                <p class="text-muted">Weights are an atomic measurement. To revise them, run the PyQt Equalizer again; individual stages are not editable in the browser.</p>
-                <p class="text-muted">HTR: N/A — no canonical basis; it is always stored as null.</p>
-              </div>
+              </details>
               <div class="arp-point-actions">
-                <button type="button" class="btn btn-primary" id="arp-point-save">Save Draft</button>
-                <button type="button" class="btn" id="arp-point-move">Move review point to playhead</button>
-                <button type="button" class="btn" id="arp-point-equalizer-run">Run Equalizer</button>
+                <button type="button" class="btn" id="arp-point-move">Move event to playhead</button>
                 <button type="button" class="btn" id="arp-point-complete">Complete</button>
                 <button type="button" class="btn" id="arp-point-reopen">Reopen</button>
                 <button type="button" class="btn" id="arp-point-dismiss">Mark not processed</button>
@@ -723,16 +919,12 @@
             <div class="arp-point-queue-list" id="arp-point-all"></div>
           </aside>
         </div>
-        <div class="arp-point-actions">
-          <button type="button" class="btn btn-primary" id="arp-point-add">Add posthoc event at playhead</button>
-        </div>
         <div class="arp-point-export-row">
           <button type="button" class="btn" id="arp-point-export-json">Export point-event JSON</button>
-          <button type="button" class="btn" id="arp-point-export-csv">Export point-event CSV</button>
+          <button type="button" class="btn" id="arp-point-export-csv">Export derived-segment CSV</button>
           <label class="btn" for="arp-point-import">Import point-event JSON</label>
           <input id="arp-point-import" type="file" accept=".json,application/json" hidden>
         </div>
-        <div class="arp-annotation-status text-small" id="arp-point-status" role="status" aria-live="polite"></div>
       </section>
       <section class="arp-annotation-editor" id="arp-legacy-segment-editor" aria-labelledby="arp-annotation-title" hidden>
         <div class="arp-annotation-head">
@@ -925,6 +1117,47 @@
           frameHashBytes.length !== config.count * 32) {
         throw new Error('Packed report arrays do not match the declared frame count');
       }
+      const reviewFrameIndices = config.review_frame_indices === undefined
+        ? Array.from({ length: config.count }, (_, index) => index)
+        : config.review_frame_indices;
+      if (!Array.isArray(reviewFrameIndices) || !reviewFrameIndices.length ||
+          reviewFrameIndices.some((index, position) =>
+            !Number.isInteger(index) || index < 0 || index >= config.count ||
+            (position > 0 && index <= reviewFrameIndices[position - 1]))) {
+        throw new Error('Review-frame indices must be sorted, unique, and inside the report');
+      }
+      const reviewFramePositions = new Map(
+        reviewFrameIndices.map((index, position) => [index, position])
+      );
+
+      function nearestReviewFrameIndex(requestedIndex) {
+        const numericIndex = Number(requestedIndex);
+        const roundedIndex = Number.isFinite(numericIndex)
+          ? Math.max(0, Math.min(config.count - 1, Math.round(numericIndex)))
+          : reviewFrameIndices[0];
+        let low = 0;
+        let high = reviewFrameIndices.length;
+        while (low < high) {
+          const middle = Math.floor((low + high) / 2);
+          if (reviewFrameIndices[middle] < roundedIndex) low = middle + 1;
+          else high = middle;
+        }
+        if (low === 0) return reviewFrameIndices[0];
+        if (low === reviewFrameIndices.length) return reviewFrameIndices[low - 1];
+        const before = reviewFrameIndices[low - 1];
+        const after = reviewFrameIndices[low];
+        return roundedIndex - before <= after - roundedIndex ? before : after;
+      }
+
+      function adjacentReviewFrameIndex(index, direction) {
+        const currentIndex = nearestReviewFrameIndex(index);
+        const currentPosition = reviewFramePositions.get(currentIndex);
+        const nextPosition = Math.max(0, Math.min(
+          reviewFrameIndices.length - 1,
+          currentPosition + (direction < 0 ? -1 : 1)
+        ));
+        return reviewFrameIndices[nextPosition];
+      }
       const startCaptureMs = Date.parse(config.start_capture_utc);
       const tooltip = root.querySelector('#arp-tooltip');
       const selectedCanvas = root.querySelector('#arp-selected-canvas');
@@ -979,8 +1212,12 @@
       const datasetIdentity = config.dataset;
       const annotationStorageKey =
         `ai4mbe.rheed.annotations.${annotationSchema}.${datasetIdentity.dataset_id}.${datasetIdentity.model_context_fingerprint}`;
-      const pointSchema = 'rheed-point-events-v1';
-      const isPointReport = config.annotation_schema === pointSchema || Array.isArray(config.point_events);
+      const pointSchema = 'rheed-point-events-v3';
+      const legacyPointSchemaV2 = 'rheed-point-events-v2';
+      const legacyPointSchemaV1 = 'rheed-point-events-v1';
+      const isPointReport = config.annotation_schema === pointSchema;
+      const isLegacyPointReport = [legacyPointSchemaV2, legacyPointSchemaV1]
+        .includes(config.annotation_schema);
       const legacySegmentEditingEnabled = false;
       const pointEditor = root.querySelector('#arp-point-editor');
       const legacyEditor = root.querySelector('#arp-legacy-segment-editor');
@@ -1000,6 +1237,15 @@
       let pointState = null;
       let pointAnnotationSetId = '';
       let pointRevisionPending = false;
+      let pointGrower = '';
+      let selectedPointSegmentId = '';
+      let pointCommentSaveTimer = null;
+      let pointGrowerSaveTimer = null;
+      let pointAddPending = false;
+      let pointNewEventPulseTimer = null;
+      let pointSessionVerification = pointDesktopSession ? 'pending' : 'ready';
+      let pointSessionVerificationError = '';
+      let pointVerificationPollTimer = null;
 
       function valueAt(model, frameIndex, classIndex) {
         return probabilities[frameIndex * totalColumns + model.offset + classIndex] / 65535;
@@ -1021,7 +1267,10 @@
       }
 
       function frameAsset(index) {
-        return config.image_pattern.replace('{index}', String(index + 1).padStart(4, '0'));
+        const retainedIndex = nearestReviewFrameIndex(index);
+        return config.image_pattern.replace(
+          '{index}', String(retainedIndex + 1).padStart(4, '0')
+        );
       }
 
       function nowUtc() {
@@ -1496,7 +1745,7 @@
           .attr('role', 'img')
           .attr('aria-label', 'Human reconstruction segment annotation track');
         svg.append('title').text('Human reconstruction segments');
-        svg.append('desc').text('Drag an unlabeled portion to choose exact saved-frame bounds, then assign a label.');
+        svg.append('desc').text('Click to move the playhead. Drag to choose saved-frame bounds, then assign a label.');
         const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
         g.append('rect').attr('data-chart-frame', '')
           .attr('width', innerWidth).attr('height', innerHeight).attr('fill', 'none');
@@ -1566,11 +1815,16 @@
           if (event.button !== 0) return;
           const [pointerX] = d3.pointer(event);
           const index = nearestIndex(x.invert(Math.max(0, Math.min(innerWidth, pointerX))));
-          rangeDrag = { pointerId: event.pointerId, startIndex: index };
-          selectedAnnotationId = null;
-          markInIndex = index;
-          markOutIndexExclusive = index + 1;
-          annotationNotes.value = '';
+          rangeDrag = {
+            pointerId: event.pointerId,
+            startIndex: index,
+            startPointerX: pointerX,
+            dragging: false,
+            previousSelectedAnnotationId: selectedAnnotationId,
+            previousMarkInIndex: markInIndex,
+            previousMarkOutIndexExclusive: markOutIndexExclusive,
+            previousNotes: annotationNotes.value,
+          };
           event.currentTarget.setPointerCapture(event.pointerId);
           updateSelected(index);
           refreshOverlay();
@@ -1579,18 +1833,46 @@
           if (!rangeDrag || rangeDrag.pointerId !== event.pointerId) return;
           const [pointerX] = d3.pointer(event);
           const index = nearestIndex(x.invert(Math.max(0, Math.min(innerWidth, pointerX))));
+          if (!rangeDrag.dragging) {
+            if (
+              Math.abs(pointerX - rangeDrag.startPointerX) < 3
+              && index === rangeDrag.startIndex
+            ) return;
+            rangeDrag.dragging = true;
+            selectedAnnotationId = null;
+            annotationNotes.value = '';
+          }
           markInIndex = Math.min(rangeDrag.startIndex, index);
           markOutIndexExclusive = Math.max(rangeDrag.startIndex, index) + 1;
           if (index !== selectedIndex) updateSelected(index);
           refreshOverlay();
         }).on('pointerup pointercancel', event => {
           if (!rangeDrag || rangeDrag.pointerId !== event.pointerId) return;
+          const finishedDrag = rangeDrag;
+          const wasCancelled = event.type === 'pointercancel';
           if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
           }
           rangeDrag = null;
+          if (wasCancelled && finishedDrag.dragging) {
+            selectedAnnotationId = finishedDrag.previousSelectedAnnotationId;
+            markInIndex = finishedDrag.previousMarkInIndex;
+            markOutIndexExclusive = finishedDrag.previousMarkOutIndexExclusive;
+            annotationNotes.value = finishedDrag.previousNotes;
+          }
           refreshOverlay();
-          setAnnotationMessage('Range selected. Choose a human label and add the segment.');
+          if (wasCancelled) {
+            setAnnotationMessage(
+              'Range selection cancelled. Existing In/Out points were preserved.'
+            );
+          } else if (finishedDrag.dragging) {
+            setAnnotationMessage('Range selected. Choose a human label and add the segment.');
+          } else {
+            setAnnotationMessage(
+              `Playhead moved to frame ${selectedIndex + 1}. `
+              + 'Use Mark In/Out, or drag to select a range.'
+            );
+          }
         });
         annotationState = {
           draw: renderAnnotationTrack,
@@ -1776,35 +2058,145 @@
         return `00000000-0000-4000-8000-${Math.random().toString(16).slice(2).padEnd(12, '0').slice(0, 12)}`;
       }
 
-      function pointMessage(message, isError = false) {
+      function pointMessage(message, isError = false, tone = '') {
         const output = root.querySelector('#arp-point-status');
         output.textContent = message;
         output.classList.toggle('text-destructive', isError);
+        output.dataset.tone = isError ? 'error' : (tone || 'info');
+        output.setAttribute('role', isError ? 'alert' : 'status');
+        output.setAttribute('aria-live', isError ? 'assertive' : 'polite');
       }
 
-      function pointFrameIndex(anchor, fallbackIndex = 0) {
+      function pointFrameContext(index) {
+        const contexts = Array.isArray(config.frame_contexts) ? config.frame_contexts : [];
+        const context = contexts[index];
+        return context && typeof context === 'object' ? context : {};
+      }
+
+      function pointSessionIdentityForIndex(index) {
+        const context = pointFrameContext(index);
+        return String(
+          context.session_id || datasetIdentity.acquisition_run ||
+          datasetIdentity.dataset_id || ''
+        );
+      }
+
+      function pointAssertAnchorIdentity(source, index, strictSavedFrame = false) {
+        const context = pointFrameContext(index);
+        const suppliedSession = String(source.session_identity || '');
+        const archiveSha256 = String(datasetIdentity.source_archive_sha256 || '');
+        const compatibleSessions = new Set([
+          pointSessionIdentityForIndex(index),
+          String(context.session_id || ''),
+          String(datasetIdentity.acquisition_run || ''),
+          String(datasetIdentity.dataset_id || ''),
+          archiveSha256,
+          archiveSha256 ? `sha256:${archiveSha256}` : '',
+        ].filter(Boolean));
+        if (suppliedSession && !compatibleSessions.has(suppliedSession)) {
+          throw new Error('Review-anchor session identity does not match this report');
+        }
+        const captureSequence = source.capture_sequence ?? source.captureSequence;
+        if (captureSequence !== undefined && captureSequence !== null &&
+            String(captureSequence) !== '' &&
+            Number(captureSequence) !== Number(sequences[index])) {
+          throw new Error('Review-anchor capture sequence does not match its frame index');
+        }
+        if (!strictSavedFrame) return index;
+        const heartbeatIndex = source.heartbeat_idx ?? source.heartbeatIndex;
+        if (heartbeatIndex !== undefined && heartbeatIndex !== null &&
+            String(heartbeatIndex) !== '' &&
+            Number(heartbeatIndex) !== Number(heartbeats[index])) {
+          throw new Error('Review-anchor heartbeat index does not match its frame index');
+        }
+        const normalizePath = value => String(value || '').replace(/\\/g, '/');
+        const suppliedMember = normalizePath(source.archive_member || source.review_asset);
+        const expectedMembers = new Set([
+          normalizePath(context.archive_member),
+          normalizePath(frameAsset(index)),
+        ].filter(Boolean));
+        if (suppliedMember && expectedMembers.size && !expectedMembers.has(suppliedMember)) {
+          throw new Error('Review-anchor archive member does not match its frame index');
+        }
+        const suppliedPath = normalizePath(source.frame_path);
+        const expectedPaths = [
+          normalizePath(context.frame_path),
+          normalizePath(context.archive_member),
+          normalizePath(frameAsset(index)),
+        ].filter(Boolean);
+        const suppliedName = suppliedPath.split('/').pop().toLowerCase();
+        const pathMatches = expectedPaths.some(expected =>
+          suppliedPath === expected || suppliedName === expected.split('/').pop().toLowerCase()
+        );
+        if (suppliedPath && expectedPaths.length && !pathMatches) {
+          throw new Error('Review-anchor frame path does not match its frame index');
+        }
+        const suppliedHash = String(
+          source.image_sha256 || source.frame_sha256 || source.frameSha256 || ''
+        ).toLowerCase();
+        if (/^[0-9a-f]{64}$/.test(suppliedHash) &&
+            suppliedHash !== frameSha256(index).toLowerCase()) {
+          throw new Error('Review-anchor frame hash does not match its frame index');
+        }
+        return index;
+      }
+
+      function pointFrameIndex(anchor, fallbackIndex = 0, strictSavedFrame = false) {
         const source = anchor || {};
         const requestedIndex = Number(source.frame_index ?? source.frameIndex);
         if (Number.isInteger(requestedIndex) && requestedIndex >= 1 && requestedIndex <= config.count) {
           const index = requestedIndex - 1;
-          const digest = String(source.image_sha256 || source.frame_sha256 || source.frameSha256 || '');
-          if (!digest || digest.toLowerCase() === frameSha256(index).toLowerCase()) return index;
+          return pointAssertAnchorIdentity(source, index, strictSavedFrame);
         }
+        const archiveMember = String(
+          source.archive_member || source.review_asset || source.frame_path || ''
+        ).replace(/\\/g, '/');
+        const captureSequence = source.capture_sequence ?? source.captureSequence;
+        const stableMatches = Array.from({ length: config.count }, (_, index) => index)
+          .filter(index => {
+            if (captureSequence !== undefined && captureSequence !== null &&
+                String(captureSequence) !== '' &&
+                Number(captureSequence) !== Number(sequences[index])) return false;
+            if (!archiveMember) return captureSequence !== undefined &&
+              captureSequence !== null && String(captureSequence) !== '';
+            const context = pointFrameContext(index);
+            const candidates = [
+              frameAsset(index), context.archive_member, context.frame_path,
+            ].map(value => String(value || '').replace(/\\/g, '/')).filter(Boolean);
+            return candidates.some(expected =>
+              archiveMember === expected || archiveMember.endsWith('/' + expected)
+            );
+          });
+        if (stableMatches.length === 1) {
+          return pointAssertAnchorIdentity(source, stableMatches[0], strictSavedFrame);
+        }
+        // Legacy reports can fall back to an already-stored hash, but v2
+        // annotation identity never depends on computing one.
         const digest = String(source.image_sha256 || source.frame_sha256 || source.frameSha256 || '').toLowerCase();
         if (/^[0-9a-f]{64}$/.test(digest)) {
           const matches = Array.from({ length: config.count }, (_, index) => index)
             .filter(index => frameSha256(index).toLowerCase() === digest);
-          if (matches.length === 1) return matches[0];
+          if (matches.length === 1) {
+            return pointAssertAnchorIdentity(source, matches[0], strictSavedFrame);
+          }
         }
         const sequence = Number(source.capture_sequence ?? source.captureSequence);
         if (Number.isFinite(sequence)) {
           const matches = Array.from({ length: config.count }, (_, index) => index)
             .filter(index => Number(sequences[index]) === sequence);
-          if (matches.length === 1) return matches[0];
+          if (matches.length === 1) {
+            return pointAssertAnchorIdentity(source, matches[0], strictSavedFrame);
+          }
         }
         const elapsed = Number(source.elapsed_s ?? source.elapsedS);
-        if (Number.isFinite(elapsed)) return nearestIndex(elapsed);
-        return Math.max(0, Math.min(config.count - 1, Number(fallbackIndex) || 0));
+        if (Number.isFinite(elapsed)) {
+          return pointAssertAnchorIdentity(source, nearestIndex(elapsed), strictSavedFrame);
+        }
+        return pointAssertAnchorIdentity(
+          source,
+          Math.max(0, Math.min(config.count - 1, Number(fallbackIndex) || 0)),
+          strictSavedFrame,
+        );
       }
 
       function normalizePointEqualizer(value, reviewIndex) {
@@ -1856,7 +2248,11 @@
           (typeof raw.source === 'string' ? raw.source : '') || evidence.source || 'posthoc');
         const rawOriginal = sourceRecord.original_anchor || evidence.original_anchor || raw.original_anchor || raw.source_anchor || raw.anchor || {};
         const originalIndex = pointFrameIndex(rawOriginal, fallbackIndex);
-        const reviewIndex = pointFrameIndex(current.anchor || current.review_anchor || raw.review_anchor || rawOriginal, originalIndex);
+        const reviewIndex = pointFrameIndex(
+          current.anchor || current.review_anchor || raw.review_anchor || rawOriginal,
+          originalIndex,
+          true,
+        );
         const originalElapsedRaw = sourceRecord.original_elapsed_s ?? evidence.original_elapsed_s ??
           raw.original_elapsed_s ?? rawOriginal.elapsed_s;
         const originalElapsed = originalElapsedRaw === null || originalElapsedRaw === undefined || originalElapsedRaw === ''
@@ -1963,8 +2359,11 @@
       }
 
       function pointAnchorForIndex(index) {
-        const endpoint = endpointForIndex(index);
+        const resolvedIndex = nearestReviewFrameIndex(index);
+        const endpoint = endpointForIndex(resolvedIndex);
+        const context = pointFrameContext(resolvedIndex);
         return {
+          session_identity: pointSessionIdentityForIndex(resolvedIndex),
           frame_index: endpoint.frame_index,
           heartbeat_idx: endpoint.heartbeat_idx,
           elapsed_s: endpoint.elapsed_s,
@@ -1972,8 +2371,20 @@
           capture_sequence: endpoint.capture_sequence,
           image_sha256: endpoint.frame_sha256,
           image_sha256_algorithm: 'raw-file-bytes-v1',
-          archive_member: endpoint.review_asset,
+          frame_path: String(context.frame_path || ''),
+          archive_member: String(context.archive_member || endpoint.review_asset),
         };
+      }
+
+      function pointAnchorIdentity(anchor) {
+        const source = anchor || {};
+        return [
+          String(source.session_identity || datasetIdentity.dataset_id || ''),
+          String(source.capture_sequence ?? ''),
+          String(source.archive_member || source.frame_path || source.review_asset || '')
+            .replace(/\\/g, '/'),
+          String(source.frame_index ?? source.frameIndex ?? ''),
+        ].join('|');
       }
 
       function pointDocument() {
@@ -2076,6 +2487,8 @@
 
       function pointLoad() {
         pointEvents = pointSeedEvents();
+        pointGrower = String(config.annotation_set?.reviewer ||
+          pointEvents.find(event => event.reviewer.trim())?.reviewer || '');
         pointReferences = (Array.isArray(config.reference_events) ? config.reference_events : [])
           .map((item, index) => normalizePointReference(item, index));
         try {
@@ -2093,6 +2506,7 @@
           pointEvents = parsed.events;
           pointRevisions = parsed.revisions;
           pointAnnotationSetId = parsed.annotationSetId;
+          pointGrower = parsed.grower;
           return true;
         } catch (error) {
           pointStorageAvailable = false;
@@ -2107,6 +2521,14 @@
           selectedPointEventId,
         });
         if (pointHistory.length > 100) pointHistory.shift();
+      }
+
+      function syncSelectedPointEventInterval() {
+        const interval = selectedPointEventId
+          ? pointDerivedStateTimeline(pointEvents).eventInfo
+            .get(selectedPointEventId)?.interval
+          : null;
+        selectedPointSegmentId = interval ? pointIntervalId(interval) : '';
       }
 
       async function pointMutate(action, eventId, updater, serverChanges = null) {
@@ -2127,7 +2549,8 @@
           schema_version: pointSchema,
           revision_id: revisionId,
           base_revision_id: baseRevisionId,
-          actor: updated.reviewer || current.reviewer || 'local-browser-reviewer',
+          actor: pointGrower || updated.reviewer || current.reviewer ||
+            'local-browser-reviewer',
           at_utc: updated.updatedAt,
           action,
           event_id: eventId,
@@ -2168,6 +2591,7 @@
           pointEvents = existing
             ? pointEvents.map(event => event.eventId === revision.event_id ? candidate : event)
             : [...pointEvents, candidate];
+          syncSelectedPointEventInterval();
           pointRevisions.push(revision);
           pointPersist();
           renderPointEditor();
@@ -2204,6 +2628,7 @@
           if (selectedPointEventId === localEventId || revision.action === 'create_posthoc') {
             selectedPointEventId = canonical.eventId;
           }
+          syncSelectedPointEventInterval();
           pointRevisions.push(payload.revision);
           pointPersist();
           return true;
@@ -2550,16 +2975,41 @@
 
       function renderPointEditor() {
         if (!isPointReport) return;
-        const active = pointEvents.filter(event => event.disposition !== 'deleted');
-        const unfinished = active.filter(event => event.status !== 'Complete' && event.disposition === 'active');
+        const reviewable = pointEvents.filter(event =>
+          event.disposition !== 'deleted');
+        const active = reviewable.filter(event =>
+          event.disposition !== 'deleted' && event.source !== 'initial_assumption');
+        const unfinished = reviewable.filter(event =>
+          event.status !== 'Complete' && event.disposition === 'active');
+        const initialAudit = reviewable.find(event =>
+          event.source === 'initial_assumption') || null;
+        const derivedTimeline = pointDerivedStateTimeline(pointEvents);
         root.querySelector('#arp-point-summary').textContent =
-          `${active.length} event${active.length === 1 ? '' : 's'} · ${unfinished.length} unfinished · ${pointReferences.length} read-only reference${pointReferences.length === 1 ? '' : 's'}`;
+          `${active.length} event${active.length === 1 ? '' : 's'} · initial audit ${initialAudit?.status || 'missing'} · ${derivedTimeline.intervals.length} derived interval${derivedTimeline.intervals.length === 1 ? '' : 's'} · ${unfinished.length} unfinished · ${derivedTimeline.contradictionCount} conflict${derivedTimeline.contradictionCount === 1 ? '' : 's'} · ${pointReferences.length} read-only reference${pointReferences.length === 1 ? '' : 's'}`;
+        root.querySelector('#arp-point-grower').value = pointGrower;
         renderPointQueue(root.querySelector('#arp-point-unfinished'), unfinished, 'No unfinished events.');
-        renderPointQueue(root.querySelector('#arp-point-all'), active, 'No point events yet.');
-        const selected = pointEvents.find(event => event.eventId === selectedPointEventId) || null;
+        renderPointQueue(root.querySelector('#arp-point-all'), reviewable, 'No point events yet.');
+        const selected = pointEvents.find(event =>
+          event.eventId === selectedPointEventId && event.disposition !== 'deleted') || null;
         renderPointForm(selected);
+        renderPointAnchorPanel(derivedTimeline);
         renderPointTrack();
-        root.querySelector('#arp-point-add').disabled = pointRevisionPending || (pointDesktopSession && !pointRevisionPersistenceAvailable);
+        const addButton = root.querySelector('#arp-point-add');
+        const addUnavailable = pointDesktopSession && !pointRevisionPersistenceAvailable;
+        const addBusy = pointAddPending || pointRevisionPending;
+        addButton.disabled = false;
+        addButton.setAttribute('aria-disabled', addBusy || addUnavailable ? 'true' : 'false');
+        addButton.setAttribute('aria-busy', pointAddPending ? 'true' : 'false');
+        addButton.textContent = pointAddPending ? 'Adding…' : 'Add event at playhead';
+        addButton.title = pointAddPending
+          ? 'The event is being written to the desktop revision journal.'
+          : (pointRevisionPending
+            ? 'Wait for the current autosave to finish.'
+            : (pointSessionVerification === 'pending'
+              ? 'Source-session verification is running; the first save may wait.'
+              : (addUnavailable
+              ? 'Click for connection details; no event will be created until the desktop service is ready.'
+              : 'Create a Draft event at the current saved frame.')));
         root.querySelector('#arp-point-export-json').disabled = pointRevisionPending || !config.full_assets;
         root.querySelector('#arp-point-export-csv').disabled = pointRevisionPending || !config.full_assets;
         root.querySelector('#arp-point-import').disabled = pointRevisionPending ||
@@ -2576,12 +3026,17 @@
       }
 
       function selectPointEvent(eventId) {
-        const event = pointEvents.find(item => item.eventId === eventId && item.disposition !== 'deleted');
+        const event = pointEvents.find(item => item.eventId === eventId &&
+          item.disposition !== 'deleted');
         if (!event) return;
         selectedPointEventId = eventId;
+        const interval = pointDerivedStateTimeline(pointEvents).eventInfo.get(eventId)?.interval;
+        if (interval) selectedPointSegmentId = pointIntervalId(interval);
         updateSelected(event.reviewIndex);
         renderPointEditor();
-        pointMessage(`Selected ${event.source} event ${event.eventId}.`);
+        pointMessage(event.source === 'initial_assumption'
+          ? 'Selected the initial-state audit item.'
+          : 'Selected event at ' + formatElapsed(times[event.reviewIndex]) + '.');
       }
 
       function pointFormState(event) {
@@ -2772,6 +3227,16 @@
 
       function exportPointJson() {
         if (!config.full_assets) return pointMessage('Open the standalone report to export annotation files.', true);
+        if (!pointGrower.trim()) {
+          const grower = root.querySelector('#arp-point-grower');
+          grower.setAttribute('aria-invalid', 'true');
+          grower.focus();
+          return pointMessage('Export blocked: enter the Grower name first.', true);
+        }
+        const derived = pointDerivedStateTimeline(pointEvents);
+        if (derived.contradictionCount) {
+          return pointMessage('Export blocked: resolve all derived-state or interval-Anchor contradictions first.', true);
+        }
         const runName = String(config.run_name || datasetIdentity.dataset_id || 'rheed').replace(/[^a-zA-Z0-9._-]+/g, '_');
         downloadText(`${runName}_point_events.json`, `${JSON.stringify(pointDocument(), null, 2)}\n`, 'application/json;charset=utf-8');
         pointMessage(`Exported ${pointEvents.length} point events and ${pointRevisions.length} audit revisions.`);
@@ -2826,7 +3291,7 @@
         if (!file) return;
         try {
           const documentValue = JSON.parse(await file.text());
-          const parsed = validatePointDocument(documentValue);
+          const parsed = validatePointDocument(documentValue, true);
           if (pointEvents.length && !window.confirm('Replace the current point-event review state with this file?')) return;
           if (pointDesktopSession) {
             if (!pointRevisionPersistenceAvailable) {
@@ -2896,6 +3361,1787 @@
         initializePointBridge();
       }
 
+      // --- v3 event-presence labeling -------------------------------------
+      const pointReconstructionValues = [
+        ['one_by_one', '1×1'],
+        ['twinned_two_by_one', 'Twinned (2×1)'],
+        ['c_six_by_two', 'c(6×2)'],
+        ['rt13', 'RT13'],
+        ['htr', 'HTR'],
+      ];
+      const pointLabelKinds = new Set(['reconstruction', 'pattern_clarity']);
+      const pointReconstructionSet = new Set(pointReconstructionValues.map(item => item[0]));
+      const pointClaritySet = new Set(['good', 'bad']);
+
+      function pointLabelOptions(kind) {
+        return kind === 'pattern_clarity'
+          ? { changes: [['became', 'became']], values: [['good', 'Good'], ['bad', 'Bad']] }
+          : {
+              changes: [['appeared', 'appeared'], ['disappeared', 'disappeared']],
+              values: pointReconstructionValues,
+            };
+      }
+
+      function normalizePointLabel(raw, strict = false) {
+        const source = raw && typeof raw === 'object' ? raw : {};
+        const kind = String(source.kind || '');
+        const change = String(source.change || '');
+        const value = String(source.value || '');
+        const labelId = String(source.label_id || source.labelId || (strict ? '' : pointUuid()));
+        if (!labelId || labelId.length > 160 || !pointLabelKinds.has(kind)) {
+          throw new Error('Event label has an invalid ID or kind');
+        }
+        const options = pointLabelOptions(kind);
+        if (!options.changes.some(item => item[0] === change) ||
+            !options.values.some(item => item[0] === value)) {
+          throw new Error('Event label has an invalid change or value');
+        }
+        return { label_id: labelId, kind, change, value };
+      }
+
+      function validatePointLabels(labels) {
+        const labelIds = new Set();
+        const meanings = new Set();
+        const reconstructionValues = new Set();
+        let claritySeen = false;
+        labels.forEach(label => {
+          if (labelIds.has(label.label_id)) throw new Error('Event contains duplicate label IDs');
+          const meaning = [label.kind, label.change, label.value].join('\u0000');
+          if (meanings.has(meaning)) throw new Error('That label is already present on this event');
+          if (label.kind === 'pattern_clarity') {
+            if (claritySeen) throw new Error('An event can contain only one Good/Bad clarity change');
+            claritySeen = true;
+          } else {
+            if (reconstructionValues.has(label.value)) {
+              throw new Error('A reconstruction cannot both appear and disappear at one event');
+            }
+            reconstructionValues.add(label.value);
+          }
+          labelIds.add(label.label_id);
+          meanings.add(meaning);
+        });
+        return labels;
+      }
+
+      function pointLabelText(label) {
+        if (label.kind === 'pattern_clarity') {
+          return 'Clarity ' + (label.value === 'good' ? 'Good' : 'Bad');
+        }
+        const name = pointReconstructionValues.find(item => item[0] === label.value)?.[1] || label.value;
+        return (label.change === 'appeared' ? '+' : '−') + name;
+      }
+
+      function pointStateSnapshot(reconstructions, clarity) {
+        return {
+          reconstructions: [...reconstructions].sort(),
+          clarity: clarity || 'unknown',
+        };
+      }
+
+      function pointStateText(state) {
+        const names = (state?.reconstructions || []).map(value =>
+          pointReconstructionValues.find(item => item[0] === value)?.[1] || value);
+        const clarity = state?.clarity === 'good' ? 'Good'
+          : (state?.clarity === 'bad' ? 'Bad' : 'unknown');
+        return (names.length ? names.join(' + ') : 'no reconstruction present') +
+          ' · clarity ' + clarity;
+      }
+
+      function pointSha1Bytes(input) {
+        const paddedLength = Math.ceil((input.length + 9) / 64) * 64;
+        const padded = new Uint8Array(paddedLength);
+        padded.set(input);
+        padded[input.length] = 0x80;
+        const bitLength = BigInt(input.length) * 8n;
+        for (let index = 0; index < 8; index += 1) {
+          padded[paddedLength - 1 - index] =
+            Number((bitLength >> BigInt(index * 8)) & 0xffn);
+        }
+        const words = new Uint32Array(80);
+        const rotateLeft = (value, bits) =>
+          ((value << bits) | (value >>> (32 - bits))) >>> 0;
+        let h0 = 0x67452301;
+        let h1 = 0xefcdab89;
+        let h2 = 0x98badcfe;
+        let h3 = 0x10325476;
+        let h4 = 0xc3d2e1f0;
+        for (let offset = 0; offset < padded.length; offset += 64) {
+          for (let index = 0; index < 16; index += 1) {
+            const position = offset + index * 4;
+            words[index] = ((padded[position] << 24) |
+              (padded[position + 1] << 16) |
+              (padded[position + 2] << 8) | padded[position + 3]) >>> 0;
+          }
+          for (let index = 16; index < 80; index += 1) {
+            words[index] = rotateLeft(
+              words[index - 3] ^ words[index - 8] ^
+              words[index - 14] ^ words[index - 16], 1
+            );
+          }
+          let a = h0;
+          let b = h1;
+          let c = h2;
+          let d = h3;
+          let e = h4;
+          for (let index = 0; index < 80; index += 1) {
+            let f;
+            let k;
+            if (index < 20) {
+              f = (b & c) | ((~b) & d); k = 0x5a827999;
+            } else if (index < 40) {
+              f = b ^ c ^ d; k = 0x6ed9eba1;
+            } else if (index < 60) {
+              f = (b & c) | (b & d) | (c & d); k = 0x8f1bbcdc;
+            } else {
+              f = b ^ c ^ d; k = 0xca62c1d6;
+            }
+            const temporary = (rotateLeft(a, 5) + f + e + k + words[index]) >>> 0;
+            e = d; d = c; c = rotateLeft(b, 30); b = a; a = temporary;
+          }
+          h0 = (h0 + a) >>> 0;
+          h1 = (h1 + b) >>> 0;
+          h2 = (h2 + c) >>> 0;
+          h3 = (h3 + d) >>> 0;
+          h4 = (h4 + e) >>> 0;
+        }
+        const result = new Uint8Array(20);
+        [h0, h1, h2, h3, h4].forEach((value, wordIndex) => {
+          for (let byteIndex = 0; byteIndex < 4; byteIndex += 1) {
+            result[wordIndex * 4 + byteIndex] =
+              (value >>> (24 - byteIndex * 8)) & 0xff;
+          }
+        });
+        return result;
+      }
+
+      function pointSegmentId(startIndex, boundaryEventIds) {
+        const namespaceHex = '877062c884f35bc59bd0e032edcbaeb5';
+        const namespace = Uint8Array.from(
+          namespaceHex.match(/../g).map(value => Number.parseInt(value, 16))
+        );
+        const identity = stableJson({
+          session_identity: String(datasetIdentity.dataset_id || ''),
+          start_frame: startIndex + 1,
+          boundary_event_ids: [...boundaryEventIds].sort(),
+        });
+        const identityBytes = new TextEncoder().encode(identity);
+        const input = new Uint8Array(namespace.length + identityBytes.length);
+        input.set(namespace);
+        input.set(identityBytes, namespace.length);
+        const digest = pointSha1Bytes(input).slice(0, 16);
+        digest[6] = (digest[6] & 0x0f) | 0x50;
+        digest[8] = (digest[8] & 0x3f) | 0x80;
+        const hex = Array.from(digest)
+          .map(value => value.toString(16).padStart(2, '0')).join('');
+        return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+          hex.slice(16, 20), hex.slice(20)].join('-');
+      }
+
+      function pointDerivedStateTimeline(events = pointEvents) {
+        const reconstructions = new Set(['one_by_one']);
+        let clarity = 'unknown';
+        const baseline = pointStateSnapshot(reconstructions, clarity);
+        const eventInfo = new Map();
+        const eligible = [];
+        const initialEvents = [];
+        const initialOwners = events.filter(event => event.source === 'initial_assumption');
+
+        events.forEach(event => {
+          const info = {
+            eventId: event.eventId,
+            eligible: false,
+            reason: '',
+            errors: [],
+            interval: null,
+            stateBefore: null,
+            stateAfter: null,
+          };
+          if (event.disposition !== 'active') {
+            info.reason = (event.disposition || 'inactive') +
+              ' events do not alter derived state';
+          } else if (event.source === 'initial_assumption') {
+            info.eligible = true;
+            info.reason = 'Initial state: 1×1 present, clarity unknown. ' +
+              'This audit item owns the first interval Anchor and is not a change event';
+            info.stateBefore = baseline;
+            info.stateAfter = baseline;
+            initialEvents.push(event);
+          } else if (event.candidateDecision !== 'confirmed') {
+            info.reason = (event.candidateDecision === 'rejected' ? 'Rejected' : 'Pending') +
+              ' candidates do not alter derived state';
+          } else if (!event.labels.length) {
+            info.reason = 'Unlabeled events do not define a derived state interval';
+          } else {
+            info.eligible = true;
+            eligible.push(event);
+          }
+          eventInfo.set(event.eventId, info);
+        });
+
+        eligible.sort((left, right) => left.reviewIndex - right.reviewIndex ||
+          left.eventId.localeCompare(right.eventId));
+        const groups = [];
+        eligible.forEach(event => {
+          let group = groups[groups.length - 1];
+          if (!group || group.frameIndex !== event.reviewIndex) {
+            group = { frameIndex: event.reviewIndex, events: [] };
+            groups.push(group);
+          }
+          group.events.push(event);
+        });
+
+        groups.forEach(group => {
+          const before = pointStateSnapshot(reconstructions, clarity);
+          const appearances = new Map();
+          const disappearances = new Map();
+          const clarityChanges = [];
+          group.events.forEach(event => event.labels.forEach(label => {
+            if (label.kind === 'pattern_clarity') {
+              clarityChanges.push({ event, label });
+              return;
+            }
+            const target = label.change === 'appeared' ? appearances : disappearances;
+            if (!target.has(label.value)) target.set(label.value, []);
+            target.get(label.value).push({ event, label });
+          }));
+
+          const stateErrors = [];
+          const reconstructionValues = new Set([
+            ...appearances.keys(), ...disappearances.keys(),
+          ]);
+          reconstructionValues.forEach(value => {
+            const appeared = appearances.get(value) || [];
+            const disappeared = disappearances.get(value) || [];
+            const display = pointReconstructionValues.find(item => item[0] === value)?.[1] || value;
+            if (appeared.length && disappeared.length) {
+              stateErrors.push(display + ' cannot appear and disappear at the same saved frame');
+            } else if (appeared.length > 1) {
+              stateErrors.push(display + ' is marked appeared more than once at the same saved frame');
+            } else if (disappeared.length > 1) {
+              stateErrors.push(display + ' is marked disappeared more than once at the same saved frame');
+            } else if (appeared.length && reconstructions.has(value)) {
+              stateErrors.push(display + ' cannot appear because it is already present');
+            } else if (disappeared.length && !reconstructions.has(value)) {
+              stateErrors.push(display + ' cannot disappear because it is not present');
+            }
+          });
+          if (clarityChanges.length > 1) {
+            const values = new Set(clarityChanges.map(item => item.label.value));
+            stateErrors.push(values.size > 1
+              ? 'Clarity cannot become both Good and Bad at the same saved frame'
+              : 'Clarity is marked ' + (clarityChanges[0].label.value === 'good' ? 'Good' : 'Bad') +
+                ' more than once at the same saved frame');
+          } else if (clarityChanges.length === 1 && clarityChanges[0].label.value === clarity) {
+            stateErrors.push('Clarity is already ' + (clarity === 'good' ? 'Good' : 'Bad'));
+          }
+          if (!stateErrors.length) {
+            disappearances.forEach((_labels, value) => reconstructions.delete(value));
+            appearances.forEach((_labels, value) => reconstructions.add(value));
+            if (clarityChanges.length === 1) clarity = clarityChanges[0].label.value;
+          }
+          const after = pointStateSnapshot(reconstructions, clarity);
+          const uniqueAnchors = new Map();
+          group.events.forEach(event => {
+            if (!event.representativeAnchor) return;
+            const anchor = event.representativeAnchor;
+            const identity = pointAnchorIdentity(anchor);
+            if (!uniqueAnchors.has(identity)) uniqueAnchors.set(identity, cloneValue(anchor));
+          });
+          const anchorErrors = uniqueAnchors.size > 1
+            ? ['Events at this same-frame boundary select different interval Anchors'] : [];
+          const errors = [...stateErrors, ...anchorErrors];
+          Object.assign(group, {
+            errors,
+            stateErrors,
+            anchorErrors,
+            stateBefore: before,
+            stateAfter: after,
+            anchor: uniqueAnchors.values().next().value || null,
+            anchorOwnerEventId: group.events
+              .filter(event => event.representativeAnchor)
+              .map(event => event.eventId).sort()[0] ||
+              group.events.map(event => event.eventId).sort()[0] || null,
+          });
+          group.events.forEach(event => {
+            const info = eventInfo.get(event.eventId);
+            info.errors = [...errors];
+            info.stateBefore = before;
+            info.stateAfter = after;
+          });
+        });
+
+        const intervals = [];
+        if (!groups.length || groups[0].frameIndex > 0) {
+          const initialAnchors = new Map();
+          initialOwners.forEach(event => {
+            if (!event.representativeAnchor) return;
+            const anchor = event.representativeAnchor;
+            const identity = pointAnchorIdentity(anchor);
+            if (!initialAnchors.has(identity)) initialAnchors.set(identity, cloneValue(anchor));
+          });
+          const initialErrors = initialAnchors.size > 1
+            ? ['Initial-state reviews select different interval Anchors'] : [];
+          const interval = {
+            startIndex: 0,
+            endIndexExclusive: groups.length ? groups[0].frameIndex : times.length,
+            state: baseline,
+            valid: initialErrors.length === 0,
+            errors: initialErrors,
+            eventIds: [],
+            ownerEventIds: initialOwners.map(event => event.eventId),
+            anchor: initialAnchors.values().next().value || null,
+            anchorOwnerEventId: initialOwners
+              .filter(event => event.representativeAnchor)
+              .map(event => event.eventId).sort()[0] ||
+              initialOwners.map(event => event.eventId).sort()[0] || null,
+            status: 'Draft',
+            baseline: true,
+          };
+          intervals.push(interval);
+          initialEvents.forEach(event => {
+            const info = eventInfo.get(event.eventId);
+            info.errors = [...initialErrors];
+            info.interval = interval;
+          });
+        }
+        groups.forEach((group, index) => {
+          const interval = {
+            startIndex: group.frameIndex,
+            endIndexExclusive: index + 1 < groups.length
+              ? groups[index + 1].frameIndex : times.length,
+            state: group.stateAfter,
+            valid: group.errors.length === 0,
+            errors: [...group.errors],
+            eventIds: group.events.map(event => event.eventId).sort(),
+            ownerEventIds: group.events.map(event => event.eventId),
+            anchor: group.anchor,
+            anchorOwnerEventId: group.anchorOwnerEventId,
+            status: 'Draft',
+            baseline: false,
+          };
+          if (interval.endIndexExclusive > interval.startIndex) intervals.push(interval);
+          group.events.forEach(event => {
+            eventInfo.get(event.eventId).interval = interval;
+          });
+        });
+        const byId = new Map(events.map(event => [event.eventId, event]));
+        intervals.forEach(interval => {
+          if (interval.anchor) {
+            const anchorIndex = pointFrameIndex(interval.anchor, interval.startIndex);
+            if (anchorIndex < interval.startIndex ||
+                anchorIndex >= interval.endIndexExclusive) {
+              interval.errors.push('Interval Anchor lies outside ' +
+                pointIntervalText(interval));
+            }
+          }
+          interval.valid = interval.errors.length === 0;
+          interval.status = interval.valid && interval.anchor &&
+            interval.ownerEventIds.length > 0 &&
+            interval.ownerEventIds.every(eventId => byId.get(eventId)?.status === 'Complete')
+            ? 'Complete' : 'Draft';
+          interval.ownerEventIds.forEach(eventId => {
+            const info = eventInfo.get(eventId);
+            if (!info) return;
+            info.errors = [...new Set([...info.errors, ...interval.errors])];
+          });
+        });
+        return {
+          baseline,
+          groups,
+          intervals,
+          eventInfo,
+          contradictionCount: intervals.filter(interval => interval.errors.length).length,
+        };
+      }
+
+      function pointExportSegments(events = pointEvents) {
+        return pointDerivedStateTimeline(events).intervals.map(interval => ({
+          segment_id: pointSegmentId(interval.startIndex, interval.eventIds),
+          start_frame_index: interval.startIndex + 1,
+          end_frame_index_exclusive: interval.endIndexExclusive + 1,
+          frame_count: interval.endIndexExclusive - interval.startIndex,
+          state: {
+            reconstructions: [...interval.state.reconstructions].sort(),
+            clarity: interval.state.clarity,
+          },
+          boundary_event_ids: [...interval.eventIds],
+          anchor: interval.anchor ? cloneValue(interval.anchor) : null,
+          status: interval.status,
+        }));
+      }
+
+      function pointIntervalText(interval) {
+        if (!interval) return 'No derived interval';
+        const endOrdinal = Math.max(interval.startIndex + 1, interval.endIndexExclusive);
+        return 'frames #' + (interval.startIndex + 1) + '–#' + endOrdinal;
+      }
+
+      function normalizePointEvent(raw, fallbackIndex = 0) {
+        const current = raw.current_state || raw.current || raw.review || raw.editable_review || {};
+        const evidence = raw.immutable_evidence || raw.evidence || raw.source_ref || {};
+        const sourceRecord = raw.source && typeof raw.source === 'object' ? raw.source : {};
+        const source = String(sourceRecord.kind || raw.source_kind ||
+          (typeof raw.source === 'string' ? raw.source : '') || evidence.source || 'posthoc');
+        const rawOriginal = sourceRecord.original_anchor || evidence.original_anchor ||
+          raw.original_anchor || raw.source_anchor || raw.anchor || {};
+        const originalIndex = pointFrameIndex(rawOriginal, fallbackIndex);
+        const reviewRaw = current.anchor || current.review_anchor || raw.review_anchor || rawOriginal;
+        const reviewIndex = pointFrameIndex(reviewRaw, originalIndex, true);
+        const representativeRaw = current.representative_anchor || raw.representative_anchor || null;
+        const representativeIndex = representativeRaw
+          ? pointFrameIndex(representativeRaw, reviewIndex, true) : null;
+        const originalElapsedRaw = sourceRecord.original_elapsed_s ?? evidence.original_elapsed_s ??
+          raw.original_elapsed_s ?? rawOriginal.elapsed_s;
+        const originalElapsed = originalElapsedRaw === null || originalElapsedRaw === undefined ||
+          originalElapsedRaw === '' ? null : Number(originalElapsedRaw);
+        const labelsValue = Array.isArray(current.labels) ? current.labels : [];
+        const labels = validatePointLabels(
+          labelsValue.map(item => normalizePointLabel(item))
+        );
+        if (source === 'initial_assumption' && labels.length) {
+          throw new Error('Initial state cannot contain semantic change labels');
+        }
+        const needsDecision = source === 'auto_capture';
+        let candidateDecision = String(current.candidate_decision || raw.candidate_decision ||
+          (needsDecision ? 'pending' : 'confirmed'));
+        if (!['pending', 'confirmed', 'rejected'].includes(candidateDecision)) {
+          candidateDecision = needsDecision ? 'pending' : 'confirmed';
+        }
+        if (candidateDecision === 'rejected' &&
+            (labels.length || representativeRaw !== null)) {
+          throw new Error(
+            'Rejected candidates cannot retain semantic labels or a representative Anchor'
+          );
+        }
+        const immutableEvidence = {
+          source,
+          original_event_at_utc: String(
+            sourceRecord.original_at_utc || sourceRecord.original_event_at_utc ||
+            evidence.original_event_at_utc || raw.original_event_at_utc ||
+            raw.timestamp || rawOriginal.captured_at_utc || ''
+          ),
+          original_anchor: Object.keys(rawOriginal).length
+            ? cloneValue(rawOriginal) : pointAnchorForIndex(originalIndex),
+          original_elapsed_s: Number.isFinite(originalElapsed) ? originalElapsed : null,
+          original_comment: String(sourceRecord.original_note ?? sourceRecord.original_comment ??
+            evidence.original_comment ?? raw.original_comment ?? raw.note ?? ''),
+          source_file: String(sourceRecord.source_file || evidence.source_file || raw.source_file || ''),
+          source_sequence: sourceRecord.source_sequence ?? evidence.source_sequence ??
+            raw.source_sequence ?? raw.event_idx ?? null,
+          source_row_sha256: String(sourceRecord.source_row_sha256 ||
+            evidence.source_row_sha256 || raw.source_row_sha256 || ''),
+          image_sha256: String(rawOriginal.image_sha256 || rawOriginal.frame_sha256 ||
+            sourceRecord.image_sha256 || evidence.image_sha256 || raw.image_sha256 || ''),
+        };
+        const disposition = String(current.disposition || raw.disposition || 'active');
+        return {
+          eventId: String(raw.event_id || raw.eventId || pointUuid()),
+          source,
+          sourceRecord: Object.keys(sourceRecord).length ? cloneValue(sourceRecord) : {
+            kind: source,
+            original_at_utc: immutableEvidence.original_event_at_utc,
+            original_elapsed_s: immutableEvidence.original_elapsed_s,
+            original_anchor: cloneValue(immutableEvidence.original_anchor),
+            original_note: immutableEvidence.original_comment,
+            source_file: immutableEvidence.source_file,
+            source_sequence: immutableEvidence.source_sequence,
+            source_row_sha256: immutableEvidence.source_row_sha256,
+            legacy_imports: [],
+          },
+          immutableEvidence,
+          reviewIndex,
+          reviewAnchor: current.anchor && typeof current.anchor === 'object'
+            ? cloneValue(current.anchor) : pointAnchorForIndex(reviewIndex),
+          representativeIndex,
+          representativeAnchor: representativeRaw ? cloneValue(representativeRaw) : null,
+          labels,
+          candidateDecision,
+          comment: String(current.comment ?? raw.comment ?? ''),
+          reviewer: String(current.reviewer ?? raw.reviewer ?? ''),
+          confidence: current.confidence ?? raw.confidence ?? '',
+          status: String(current.status || raw.status || 'Draft') === 'Complete' ? 'Complete' : 'Draft',
+          disposition: ['active', 'dismissed', 'deleted'].includes(disposition) ? disposition : 'active',
+          dispositionReason: String(current.disposition_reason || raw.disposition_reason || ''),
+          createdAt: String(raw.created_at_utc || current.created_at_utc || nowUtc()),
+          updatedAt: String(current.updated_at_utc || raw.updated_at_utc || nowUtc()),
+          context: cloneValue(raw.instrument_context || current.instrument_context || {}),
+          lastRevisionId: String(raw.revision_id || current.revision_id || raw.last_revision_id || ''),
+        };
+      }
+
+      function pointEventSnapshot(event) {
+        if (!event) return null;
+        return {
+          schema: pointSchema,
+          event_id: event.eventId,
+          source: cloneValue(event.sourceRecord),
+          review: {
+            anchor: cloneValue(event.reviewAnchor),
+            representative_anchor: event.candidateDecision !== 'rejected' && event.representativeAnchor
+              ? cloneValue(event.representativeAnchor) : null,
+            labels: event.candidateDecision === 'rejected' ? [] : cloneValue(event.labels),
+            candidate_decision: event.candidateDecision,
+            comment: event.comment,
+            disposition: event.disposition,
+            disposition_reason: event.dispositionReason,
+          },
+          status: event.status,
+          revision_id: event.lastRevisionId || '',
+        };
+      }
+
+      function pointDocument() {
+        if (!pointAnnotationSetId) pointAnnotationSetId = pointUuid();
+        return {
+          schema_version: pointSchema,
+          document_type: 'ai4mbe_rheed_point_event_annotations',
+          exported_at_utc: nowUtc(),
+          dataset: cloneValue(datasetIdentity),
+          initial_state: {
+            reconstructions: ['one_by_one'],
+            clarity: 'unknown',
+          },
+          segments: pointExportSegments(pointEvents),
+          annotation_set: {
+            annotation_set_id: pointAnnotationSetId,
+            reviewer: pointGrower,
+            model_outputs_visible: true,
+            eligible_for_gold: false,
+          },
+          review_mode: {
+            model_outputs_visible: true,
+            eligible_for_blind_gold: false,
+            label_semantics: 'reconstruction_presence_and_pattern_clarity_changes',
+          },
+          events: pointEvents.map(pointEventSnapshot),
+          reference_events: cloneValue(pointReferences.map(reference => reference.raw)),
+          unlinked_legacy_labels: cloneValue(config.unlinked_legacy_labels || []),
+          source_revisions: cloneValue(config.source_event_revisions || []),
+          source_journal: config.source_event_journal == null
+            ? null : cloneValue(config.source_event_journal),
+          revisions: cloneValue(pointRevisions),
+        };
+      }
+
+      function pointSeedEvents() {
+        return (Array.isArray(config.point_events) ? config.point_events : [])
+          .map((item, index) => normalizePointEvent(item, index));
+      }
+
+      function pointSemanticCompletionProblems(event, requireDesktop = true, events = pointEvents) {
+        const problems = [];
+        if (event.disposition !== 'active') problems.push('an active event');
+        if (!pointGrower.trim()) problems.push('the session Grower name');
+        const isInitial = event.source === 'initial_assumption';
+        const needsDecision = event.source === 'auto_capture';
+        if (needsDecision && event.candidateDecision === 'pending') {
+          problems.push('Confirm or Reject the candidate');
+        }
+        if (isInitial && event.candidateDecision !== 'confirmed') {
+          problems.push('the fixed initial-state audit decision');
+        }
+        if (event.candidateDecision !== 'rejected') {
+          if (!isInitial && !event.labels.length) problems.push('at least one event label');
+          if (event.candidateDecision === 'confirmed' && (isInitial || event.labels.length)) {
+            const derived = pointDerivedStateTimeline(events).eventInfo.get(event.eventId);
+            if (!derived || !derived.eligible || !derived.interval) {
+              problems.push('a valid derived state interval');
+            } else if (derived.errors.length) {
+              problems.push('resolve state contradiction: ' + derived.errors.join('; '));
+            } else if (!derived.interval.anchor) {
+              problems.push('one representative Anchor for the following interval');
+            } else {
+              const anchorIndex = pointFrameIndex(
+                derived.interval.anchor, derived.interval.startIndex
+              );
+              if (anchorIndex < derived.interval.startIndex ||
+                  anchorIndex >= derived.interval.endIndexExclusive) {
+                problems.push('an Anchor inside its derived interval (' +
+                  pointIntervalText(derived.interval) + ')');
+              }
+            }
+          }
+        }
+        if (requireDesktop && !pointBridgeAvailable) {
+          problems.push('the desktop Labeler connection');
+        }
+        return problems;
+      }
+
+      function pointCompletionProblems(event) {
+        return pointSemanticCompletionProblems(event, true);
+      }
+
+      function validatePointDocument(documentValue, requireGrower = false) {
+        if (!documentValue || documentValue.schema_version !== pointSchema ||
+            documentValue.document_type !== 'ai4mbe_rheed_point_event_annotations') {
+          throw new Error('Expected ' + pointSchema + ' point-event JSON');
+        }
+        const importedDataset = documentValue.dataset || {};
+        for (const key of ['dataset_id', 'ordered_frame_fingerprint', 'model_context_fingerprint']) {
+          if (String(importedDataset[key] || '') !== String(datasetIdentity[key] || '')) {
+            throw new Error('Dataset provenance mismatch: ' + key);
+          }
+        }
+        if (stableJson(documentValue.source_revisions || []) !==
+              stableJson(config.source_event_revisions || []) ||
+            stableJson(documentValue.source_journal ?? null) !==
+              stableJson(config.source_event_journal ?? null)) {
+          throw new Error('Archived live revision provenance was changed or omitted');
+        }
+        if (!Array.isArray(documentValue.events)) throw new Error('events must be an array');
+        const importedGrower = String(documentValue.annotation_set?.reviewer || '').trim();
+        if (requireGrower && !importedGrower) {
+          throw new Error('Grower is required before importing point-event JSON');
+        }
+        const imported = documentValue.events.map((item, index) => {
+          const rawLabels = item && item.review && item.review.labels;
+          if (!Array.isArray(rawLabels)) throw new Error('Event labels must be an array');
+          rawLabels.forEach(label => normalizePointLabel(label, true));
+          return normalizePointEvent(item, index);
+        });
+        const ids = new Set();
+        imported.forEach(event => {
+          if (!event.eventId || event.eventId.length > 200 || ids.has(event.eventId)) {
+            throw new Error('Invalid or duplicate event_id: ' + event.eventId);
+          }
+          ids.add(event.eventId);
+          const rawItem = itemForEvent(documentValue.events, event.eventId);
+          const reviewAnchor = rawItem.review?.anchor || {};
+          const reviewHash = String(reviewAnchor.image_sha256 || reviewAnchor.frame_sha256 || '');
+          if (reviewHash && reviewHash.toLowerCase() !== frameSha256(event.reviewIndex).toLowerCase()) {
+            throw new Error('Review-anchor frame hash mismatch for ' + event.eventId);
+          }
+          if (event.representativeAnchor) {
+            const anchorHash = String(event.representativeAnchor.image_sha256 ||
+              event.representativeAnchor.frame_sha256 || '');
+            if (anchorHash && anchorHash.toLowerCase() !==
+                frameSha256(event.representativeIndex).toLowerCase()) {
+              throw new Error('Representative-anchor frame hash mismatch for ' + event.eventId);
+            }
+          }
+          if (event.status === 'Complete') {
+            const problems = pointSemanticCompletionProblems(event, false, imported);
+            if (problems.length) {
+              throw new Error('Complete event is missing ' + problems.join(', '));
+            }
+          }
+        });
+        const seeds = pointSeedEvents().filter(event => event.source !== 'posthoc');
+        seeds.forEach(seed => {
+          const candidate = imported.find(event => event.eventId === seed.eventId);
+          if (!candidate) throw new Error('Source event is missing: ' + seed.eventId);
+          if (stableJson(candidate.sourceRecord) !== stableJson(seed.sourceRecord)) {
+            throw new Error('Immutable source evidence changed for ' + seed.eventId);
+          }
+        });
+        const expectedInitialState = {
+          reconstructions: ['one_by_one'],
+          clarity: 'unknown',
+        };
+        if (stableJson(documentValue.initial_state) !== stableJson(expectedInitialState)) {
+          throw new Error('Initial 1×1 state was changed or omitted');
+        }
+        const expectedSegments = pointExportSegments(imported);
+        if (stableJson(documentValue.segments) !== stableJson(expectedSegments)) {
+          throw new Error('Materialized state segments do not match point-event replay');
+        }
+        return {
+          events: imported,
+          revisions: Array.isArray(documentValue.revisions)
+            ? cloneValue(documentValue.revisions) : [],
+          annotationSetId: String(documentValue.annotation_set?.annotation_set_id || pointUuid()),
+          grower: importedGrower,
+        };
+      }
+
+      function pointRevisionChanges(revision, override) {
+        if (override && typeof override === 'object') return cloneValue(override);
+        const review = revision.after?.review || {};
+        if (revision.action === 'create_posthoc') return { anchor: review.anchor };
+        if (revision.action === 'edit') return { comment: review.comment };
+        if (revision.action === 'move_anchor') return { anchor: review.anchor };
+        if (revision.action === 'move_representative_anchor') {
+          return { representative_anchor: review.representative_anchor };
+        }
+        if (revision.action === 'add_label' || revision.action === 'edit_label') {
+          return cloneValue(override || {});
+        }
+        if (revision.action === 'remove_label') return cloneValue(override || {});
+        if (revision.action === 'set_candidate_decision') {
+          return { decision: review.candidate_decision };
+        }
+        if (revision.action === 'dismiss' || revision.action === 'delete') {
+          return { reason: review.disposition_reason };
+        }
+        return {};
+      }
+
+      function applyPointBridgeStatus(status) {
+        pointSessionVerification = String(status.session_verification || 'ready');
+        pointSessionVerificationError = String(status.session_verification_error || '');
+        pointRevisionPersistenceAvailable = status.revision_persistence_available === true &&
+          pointSessionVerification !== 'error';
+        pointBridgeAvailable = status.desktop === true && pointRevisionPersistenceAvailable &&
+          status.event_state_available === true;
+      }
+
+      function schedulePointVerificationPoll() {
+        if (pointVerificationPollTimer) window.clearTimeout(pointVerificationPollTimer);
+        pointVerificationPollTimer = window.setTimeout(pollPointSessionVerification, 600);
+      }
+
+      async function pollPointSessionVerification() {
+        pointVerificationPollTimer = null;
+        if (!pointDesktopSession || pointSessionVerification !== 'pending') return;
+        try {
+          const response = await fetch(pointBridgeEndpoint('/api/status'), { cache: 'no-store' });
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          applyPointBridgeStatus(await response.json());
+          renderPointEditor();
+          if (pointSessionVerification === 'pending') {
+            if (!pointAddPending) {
+              pointMessage('Verifying source session in background; first save may wait.');
+            }
+            schedulePointVerificationPoll();
+          } else if (pointSessionVerification === 'error') {
+            pointMessage('Source session verification failed: ' +
+              (pointSessionVerificationError || 'unknown verification error') +
+              '. No event was saved.', true);
+          } else {
+            const output = root.querySelector('#arp-point-status');
+            if (!pointAddPending && /^Verifying source session/.test(output.textContent)) {
+              pointMessage('Source session verified. Desktop autosave is ready.');
+            }
+          }
+        } catch (error) {
+          if (!pointAddPending) {
+            pointMessage('Could not refresh source-session verification: ' + error.message +
+              '. Retrying…', true);
+          }
+          schedulePointVerificationPoll();
+        }
+      }
+
+      async function initializePointBridge() {
+        if (!isPointReport || location.protocol === 'file:' || pointBridgeToken.length < 16) return;
+        try {
+          const response = await fetch(pointBridgeEndpoint('/api/status'), { cache: 'no-store' });
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          const status = await response.json();
+          applyPointBridgeStatus(status);
+          if (status.event_state_available === true) {
+            const stateResponse = await fetch(pointBridgeEndpoint('/api/events'), { cache: 'no-store' });
+            if (!stateResponse.ok) throw new Error('event state returned HTTP ' + stateResponse.status);
+            const state = await stateResponse.json();
+            const events = Array.isArray(state.events) ? state.events : Object.values(state.events || {});
+            pointEvents = events.map((event, index) => normalizePointEvent(event, index));
+            if (Array.isArray(state.revisions)) pointRevisions = cloneValue(state.revisions);
+            if (state.annotation_set?.annotation_set_id) {
+              pointAnnotationSetId = String(state.annotation_set.annotation_set_id);
+            }
+            if (state.annotation_set?.reviewer) {
+              pointGrower = String(state.annotation_set.reviewer);
+            }
+            selectedPointEventId = pointEvents.some(event => event.eventId === selectedPointEventId)
+              ? selectedPointEventId : null;
+            pointPersist();
+          }
+          renderPointEditor();
+          if (pointSessionVerification === 'pending') {
+            pointMessage('Verifying source session in background; first save may wait.');
+            schedulePointVerificationPoll();
+          } else if (pointSessionVerification === 'error') {
+            pointMessage('Source session verification failed: ' +
+              (pointSessionVerificationError || 'unknown verification error') +
+              '. No event can be saved.', true);
+          } else if (pointBridgeAvailable) {
+            pointMessage('Desktop Labeler connected; durable event revisions and Complete are available.');
+          } else {
+            pointMessage('Desktop event persistence is unavailable. Changes were not applied.', true);
+          }
+        } catch (error) {
+          pointBridgeAvailable = false;
+          pointRevisionPersistenceAvailable = false;
+          renderPointEditor();
+          pointMessage('Desktop Labeler connection failed: ' + error.message +
+            '. Reopen the report through the Labeler before durable editing.', true);
+        }
+      }
+
+      function pointSetSelectOptions(select, choices, value) {
+        select.replaceChildren();
+        choices.forEach(([key, title]) => {
+          const option = document.createElement('option');
+          option.value = key;
+          option.textContent = title;
+          select.append(option);
+        });
+        if (value && choices.some(item => item[0] === value)) select.value = value;
+      }
+
+      function refreshPointLabelAddControls() {
+        pointSetSelectOptions(
+          root.querySelector('#arp-point-reconstruction-choice'),
+          pointReconstructionValues
+        );
+      }
+
+      async function addQuickPointLabel(kind, change, value) {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event || event.source === 'initial_assumption') return;
+        if (!pointGrower.trim()) {
+          return pointMessage('Enter the Grower name once before labeling.', true);
+        }
+        const existing = event.labels.find(label => label.kind === kind &&
+          (kind !== 'reconstruction' || label.value === value));
+        if (existing && existing.change === change && existing.value === value) return;
+        const canonical = normalizePointLabel({
+          label_id: existing?.label_id || pointUuid(), kind, change, value,
+        }, true);
+        const action = existing ? 'edit_label' : 'add_label';
+        try {
+          validatePointLabels(existing
+            ? event.labels.map(label => label.label_id === existing.label_id ? canonical : label)
+            : [...event.labels, canonical]);
+        } catch (error) {
+          return pointMessage(error.message, true);
+        }
+        const changed = await pointMutate(action, event.eventId, target => {
+          target.labels = existing
+            ? target.labels.map(label => label.label_id === existing.label_id
+              ? canonical : label)
+            : [...target.labels, canonical];
+          pointReopenIfComplete(target);
+        }, existing ? {
+          label_id: existing.label_id,
+          label: { kind: canonical.kind, change: canonical.change, value: canonical.value },
+        } : {
+          label: { kind: canonical.kind, change: canonical.change, value: canonical.value },
+        });
+        if (changed) pointMessage(pointLabelText(canonical) + ' autosaved.');
+      }
+
+      async function editPointLabel(eventId, labelId, labelValue) {
+        const event = pointEvents.find(item => item.eventId === eventId);
+        if (!event) return;
+        if (event.source === 'initial_assumption') {
+          return pointMessage('The initial 1×1 state is fixed; it is not a change event.', true);
+        }
+        const canonical = normalizePointLabel({ ...labelValue, label_id: labelId }, true);
+        try {
+          validatePointLabels(event.labels.map(label =>
+            label.label_id === labelId ? canonical : label));
+        } catch (error) {
+          renderPointEditor();
+          return pointMessage(error.message, true);
+        }
+        const changed = await pointMutate('edit_label', eventId, target => {
+          target.labels = target.labels.map(label =>
+            label.label_id === labelId ? canonical : label);
+          pointReopenIfComplete(target);
+        }, { label_id: labelId, label: {
+          kind: canonical.kind, change: canonical.change, value: canonical.value,
+        } });
+        if (changed) pointMessage('Event label updated.');
+      }
+
+      async function removePointLabel(eventId, labelId) {
+        const event = pointEvents.find(item => item.eventId === eventId);
+        if (!event) return;
+        if (event.source === 'initial_assumption') {
+          return pointMessage('The initial 1×1 state is fixed; it has no change labels.', true);
+        }
+        const changed = await pointMutate('remove_label', eventId, target => {
+          target.labels = target.labels.filter(label => label.label_id !== labelId);
+          pointReopenIfComplete(target);
+        }, { label_id: labelId });
+        if (changed) pointMessage('Event label removed; the event is now Draft.');
+      }
+
+      function renderPointLabelList(event, disabled) {
+        const host = root.querySelector('#arp-point-label-list');
+        host.replaceChildren();
+        if (!event.labels.length) {
+          const empty = document.createElement('div');
+          empty.className = 'arp-point-label-empty';
+          empty.textContent = event.candidateDecision === 'rejected'
+            ? 'Rejected candidates do not require semantic labels.'
+            : 'No changes labeled yet.';
+          host.append(empty);
+          return;
+        }
+        event.labels.forEach(label => {
+          const row = document.createElement('div');
+          row.className = 'arp-point-label-row';
+          row.dataset.kind = label.kind;
+          row.dataset.pointLabelId = label.label_id;
+          const kind = document.createElement('select');
+          kind.className = 'form-select';
+          kind.dataset.pointLabelField = 'kind';
+          kind.setAttribute('aria-label', 'Label kind');
+          pointSetSelectOptions(kind, [
+            ['reconstruction', 'Reconstruction type'],
+            ['pattern_clarity', 'Pattern clarity'],
+          ], label.kind);
+          const change = document.createElement('select');
+          change.className = 'form-select';
+          change.dataset.pointLabelField = 'change';
+          change.setAttribute('aria-label', 'Label change');
+          const value = document.createElement('select');
+          value.className = 'form-select';
+          value.dataset.pointLabelField = 'value';
+          value.setAttribute('aria-label', 'Label value');
+          const populate = (nextKind, preferredChange, preferredValue) => {
+            const options = pointLabelOptions(nextKind);
+            pointSetSelectOptions(change, options.changes, preferredChange);
+            pointSetSelectOptions(value, options.values, preferredValue);
+          };
+          populate(label.kind, label.change, label.value);
+          const save = async () => editPointLabel(event.eventId, label.label_id, {
+            kind: kind.value, change: change.value, value: value.value,
+          });
+          kind.addEventListener('change', async () => {
+            populate(kind.value);
+            await save();
+          });
+          change.addEventListener('change', save);
+          value.addEventListener('change', save);
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.className = 'btn';
+          remove.dataset.pointLabelRemove = '';
+          remove.textContent = 'Remove';
+          remove.setAttribute('aria-label', 'Remove ' + pointLabelText(label));
+          remove.addEventListener('click', () => removePointLabel(event.eventId, label.label_id));
+          [kind, change, value, remove].forEach(control => { control.disabled = disabled; });
+          row.append(kind, change, value, remove);
+          host.append(row);
+        });
+      }
+
+      function renderPointForm(event) {
+        const form = root.querySelector('#arp-point-form');
+        const empty = root.querySelector('#arp-point-empty');
+        if (!event) {
+          form.hidden = true;
+          empty.hidden = false;
+          root.querySelector('#arp-point-editor-heading').textContent =
+            'Select an event or add one at the playhead';
+          return;
+        }
+        form.hidden = false;
+        empty.hidden = true;
+        const isInitial = event.source === 'initial_assumption';
+        const sourceTitle = isInitial
+          ? 'Initial state: 1×1 present, clarity unknown' : event.source.replaceAll('_', ' ');
+        root.querySelector('#arp-point-editor-heading').textContent = isInitial
+          ? sourceTitle + ' · ' + event.status
+          : 'Event at ' + formatElapsed(times[event.reviewIndex]) + ' · ' + event.status;
+        root.querySelector('#arp-point-comment').value = event.comment;
+        const decision = root.querySelector('#arp-point-candidate-decision');
+        const needsDecision = event.source === 'auto_capture';
+        decision.closest('label').hidden = !needsDecision;
+        decision.value = event.candidateDecision;
+        const original = event.immutableEvidence.original_anchor || {};
+        const derivedTimeline = pointDerivedStateTimeline(pointEvents);
+        const derived = derivedTimeline.eventInfo.get(event.eventId);
+        const derivedState = derived?.stateAfter ? pointStateText(derived.stateAfter)
+          : 'Does not alter state';
+        const derivedInterval = derived?.interval ? pointIntervalText(derived.interval)
+          : 'No derived interval';
+        pointAddDefinitionList(root.querySelector('#arp-point-evidence'), [
+          ['Event ID', event.eventId],
+          ['Source', sourceTitle],
+          ...(isInitial ? [[
+            'Initial state', '1×1 present · clarity unknown · fixed starting state',
+          ]] : []),
+          ['Original event time', event.immutableEvidence.original_event_at_utc ||
+            original.captured_at_utc],
+          ['Original event elapsed', event.immutableEvidence.original_elapsed_s === null
+            ? null : formatElapsed(event.immutableEvidence.original_elapsed_s)],
+          ['Original frame', original.frame_index !== null &&
+            original.frame_index !== undefined && original.frame_index !== ''
+            ? 'saved frame #' + original.frame_index +
+              (original.capture_sequence == null ? '' :
+                ' · capture #' + original.capture_sequence)
+            : 'separate or unresolved source image'],
+          ['Original frame SHA-256', event.immutableEvidence.image_sha256 ||
+            original.frame_sha256],
+          ['Original note', event.immutableEvidence.original_comment],
+          ['Review event point', '#' + (event.reviewIndex + 1) + ' · ' +
+            formatElapsed(times[event.reviewIndex]) + ' · ' +
+            frameSha256(event.reviewIndex)],
+          ['Derived state after this point', derivedState],
+          ['Derived state interval', derivedInterval],
+        ]);
+        const diagnostic = root.querySelector('#arp-point-state-diagnostic');
+        diagnostic.classList.toggle('is-error', Boolean(derived?.errors?.length));
+        diagnostic.dataset.stateValid = derived?.errors?.length ? 'false' : 'true';
+        diagnostic.dataset.intervalStartIndex = derived?.interval
+          ? String(derived.interval.startIndex) : '';
+        diagnostic.dataset.intervalEndIndexExclusive = derived?.interval
+          ? String(derived.interval.endIndexExclusive) : '';
+        if (derived?.errors?.length) {
+          diagnostic.textContent = 'State contradiction — ' + derived.errors.join('; ') +
+            '. This same-frame change is not applied, and Complete is disabled.';
+        } else if (derived?.eligible && derived.interval) {
+          diagnostic.textContent = 'Derived interval ' + derivedInterval + ': ' +
+            derivedState + '. The Anchor must remain inside this interval.';
+        } else {
+          diagnostic.textContent = derived?.reason ||
+            'This event does not currently define a derived state interval.';
+        }
+        const context = pointSensorContext(event);
+        const contextHost = root.querySelector('#arp-point-context');
+        contextHost.dataset.lookupElapsedS = context.lookup_elapsed_s === null
+          ? '' : String(context.lookup_elapsed_s);
+        contextHost.dataset.matchedElapsedS = context.matched_elapsed_s === null
+          ? '' : String(context.matched_elapsed_s);
+        const formatAge = value => value === null || value === undefined ||
+          !Number.isFinite(Number(value)) ? null : Number(value).toFixed(1) + ' ms';
+        pointAddDefinitionList(contextHost, [
+          ['Temperature', context.temperature_c === null ? null :
+            Number(context.temperature_c).toFixed(1) + ' °C'],
+          ['Voltage', context.voltage_v === null ? null :
+            Number(context.voltage_v).toFixed(3) + ' V'],
+          ['Current', context.current_a === null ? null :
+            Number(context.current_a).toFixed(3) + ' A'],
+          ['Pyrometer data age', formatAge(context.ages.pyrometer)],
+          ['MISTRAL data age', formatAge(context.ages.mistral)],
+          ['EvapControl data age', formatAge(context.ages.evap)],
+          ['RHEED data age', formatAge(context.ages.rheed)],
+          ['Maximum data age', formatAge(context.max_data_age_ms)],
+        ]);
+        const durableUnavailable = pointDesktopSession &&
+          !pointRevisionPersistenceAvailable;
+        const disabled = pointRevisionPending || durableUnavailable;
+        root.querySelector('.arp-point-label-editor').hidden = isInitial;
+        renderPointLabelList(event, disabled);
+        root.querySelector('#arp-point-reconstruction-choice').disabled = disabled || isInitial;
+        root.querySelector('#arp-point-reconstruction-appeared').disabled = disabled || isInitial;
+        root.querySelector('#arp-point-reconstruction-disappeared').disabled = disabled || isInitial;
+        root.querySelectorAll('[data-point-quick-kind]').forEach(control => {
+          control.disabled = disabled || isInitial;
+        });
+        decision.disabled = disabled;
+        root.querySelector('#arp-point-complete').disabled = pointRevisionPending ||
+          pointCompletionProblems(event).length > 0 || event.status === 'Complete';
+        root.querySelector('#arp-point-reopen').disabled = pointRevisionPending ||
+          event.status !== 'Complete';
+        root.querySelector('#arp-point-move').disabled = disabled;
+        root.querySelector('#arp-point-dismiss').disabled = disabled;
+        root.querySelector('#arp-point-delete').disabled = disabled;
+        root.querySelector('#arp-point-comment').disabled = disabled;
+        root.querySelector('#arp-point-dismiss').hidden =
+          event.source === 'posthoc' || isInitial;
+        root.querySelector('#arp-point-delete').hidden = event.source !== 'posthoc';
+      }
+
+      function renderPointQueue(host, events, emptyText) {
+        host.replaceChildren();
+        const derivedTimeline = pointDerivedStateTimeline(pointEvents);
+        if (!events.length) {
+          const empty = document.createElement('span');
+          empty.className = 'text-muted text-small';
+          empty.textContent = emptyText;
+          host.append(empty);
+          return;
+        }
+        [...events].sort((a, b) => a.reviewIndex - b.reviewIndex ||
+          a.eventId.localeCompare(b.eventId)).forEach(event => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'btn';
+          button.dataset.pointEventListId = event.eventId;
+          button.setAttribute('aria-pressed',
+            event.eventId === selectedPointEventId ? 'true' : 'false');
+          const label = document.createElement('span');
+          const semantics = event.source === 'initial_assumption'
+            ? 'Initial state: 1×1 present, clarity unknown'
+            : (event.candidateDecision === 'rejected'
+              ? 'Rejected candidate'
+              : (event.labels.map(pointLabelText).join(' · ') || 'Unlabeled'));
+          label.textContent = formatElapsed(times[event.reviewIndex]) + ' · ' +
+            semantics;
+          const status = document.createElement('span');
+          status.className = 'arp-point-status-pill';
+          const derived = derivedTimeline.eventInfo.get(event.eventId);
+          status.textContent = derived?.errors?.length
+            ? 'Conflict'
+            : (event.disposition === 'active' ? event.status : event.disposition);
+          if (derived?.errors?.length) status.title = derived.errors.join('; ');
+          button.append(label, status);
+          button.addEventListener('click', () => selectPointEvent(event.eventId));
+          host.append(button);
+        });
+      }
+
+      async function movePointReviewAnchorTo(eventId, index) {
+        const retainedIndex = nearestReviewFrameIndex(index);
+        const event = pointEvents.find(item => item.eventId === eventId);
+        if (!event || event.reviewIndex === retainedIndex) return false;
+        const previous = event.reviewIndex;
+        const changed = await pointMutate('move_anchor', eventId, target => {
+          target.reviewIndex = retainedIndex;
+          target.reviewAnchor = pointAnchorForIndex(retainedIndex);
+          target.representativeIndex = null;
+          target.representativeAnchor = null;
+          pointReopenIfComplete(target);
+        });
+        if (changed) {
+          pointMessage('Event moved from frame #' + (previous + 1) +
+            ' to #' + (retainedIndex + 1) + '.');
+        }
+        return changed;
+      }
+
+      async function moveRepresentativeAnchorTo(eventId, index) {
+        const retainedIndex = nearestReviewFrameIndex(index);
+        const event = pointEvents.find(item => item.eventId === eventId);
+        if (!event) return false;
+        const derived = pointDerivedStateTimeline(pointEvents).eventInfo.get(eventId);
+        if (!derived?.eligible || !derived.interval) {
+          renderPointEditor();
+          pointMessage(derived?.reason ||
+            'Confirm and label this event before choosing its interval Anchor.', true);
+          return false;
+        }
+        if (derived.errors.length) {
+          renderPointEditor();
+          pointMessage('Resolve the state contradiction before choosing an Anchor: ' +
+            derived.errors.join('; '), true);
+          return false;
+        }
+        if (retainedIndex < derived.interval.startIndex ||
+            retainedIndex >= derived.interval.endIndexExclusive) {
+          renderPointEditor();
+          pointMessage('Anchor blocked: choose a saved frame inside ' +
+            pointIntervalText(derived.interval) + '.', true);
+          return false;
+        }
+        const ownerEventId = derived.interval.anchorOwnerEventId;
+        const owner = pointEvents.find(item => item.eventId === ownerEventId);
+        if (!owner) {
+          renderPointEditor();
+          pointMessage('Anchor blocked: this interval has no editable boundary owner.', true);
+          return false;
+        }
+        const changed = await pointMutate('move_representative_anchor', ownerEventId, target => {
+          target.representativeIndex = retainedIndex;
+          target.representativeAnchor = pointAnchorForIndex(retainedIndex);
+          pointReopenIfComplete(target);
+        });
+        if (changed) {
+          pointMessage('The interval Anchor was set to frame #' + (retainedIndex + 1) + '.');
+        }
+        return changed;
+      }
+
+      function pointIntervalId(interval) {
+        return pointSegmentId(interval.startIndex, interval.eventIds);
+      }
+
+      function selectedPointInterval(derivedTimeline = pointDerivedStateTimeline(pointEvents)) {
+        let interval = derivedTimeline.intervals.find(item =>
+          pointIntervalId(item) === selectedPointSegmentId);
+        if (!interval) {
+          interval = derivedTimeline.intervals.find(item =>
+            selectedIndex >= item.startIndex && selectedIndex < item.endIndexExclusive) ||
+            derivedTimeline.intervals[0] || null;
+          selectedPointSegmentId = interval ? pointIntervalId(interval) : '';
+        }
+        return interval;
+      }
+
+      function renderPointAnchorPanel(derivedTimeline) {
+        const panel = root.querySelector('#arp-point-anchor-panel');
+        const summary = root.querySelector('#arp-point-anchor-summary');
+        const button = root.querySelector('#arp-point-interval-anchor');
+        const interval = selectedPointInterval(derivedTimeline);
+        panel.dataset.hasSelection = interval ? 'true' : 'false';
+        if (!interval) {
+          summary.textContent = 'Click a derived state interval on the timeline.';
+          button.disabled = true;
+          return;
+        }
+        const inside = selectedIndex >= interval.startIndex &&
+          selectedIndex < interval.endIndexExclusive;
+        const anchorIndex = interval.anchor
+          ? pointFrameIndex(interval.anchor, interval.startIndex) : null;
+        summary.textContent = pointIntervalText(interval) + ' · ' +
+          pointStateText(interval.state) + ' · representative: ' +
+          (anchorIndex === null ? 'not chosen' : 'frame #' + (anchorIndex + 1)) +
+          (inside ? '' : ' · scrub into this interval to choose a frame');
+        button.disabled = pointRevisionPending || !pointGrower.trim() ||
+          !inside || !interval.valid || !interval.anchorOwnerEventId ||
+          (pointDesktopSession && !pointRevisionPersistenceAvailable);
+      }
+
+      async function setSelectedIntervalAnchor() {
+        const interval = selectedPointInterval();
+        if (!interval) return pointMessage('Select a derived state interval first.', true);
+        if (selectedIndex < interval.startIndex ||
+            selectedIndex >= interval.endIndexExclusive) {
+          return pointMessage('Scrub to a frame inside ' + pointIntervalText(interval) + '.', true);
+        }
+        await moveRepresentativeAnchorTo(interval.anchorOwnerEventId, selectedIndex);
+      }
+
+      function renderPointTrack() {
+        const host = root.querySelector('#arp-point-track-host');
+        host.replaceChildren();
+        const width = Math.max(320, Math.floor(host.getBoundingClientRect().width));
+        const height = 238;
+        // Keep the same horizontal plot margins as every model panel so the
+        // saved-frame playheads remain pixel-aligned across all timelines.
+        const margin = { top: 12, right: 12, bottom: 38, left: 64 };
+        const innerWidth = width - margin.left - margin.right;
+        const innerHeight = height - margin.top - margin.bottom;
+        const eventLaneY = 32;
+        const stateLaneY = 78;
+        const stateLaneHeight = 48;
+        const anchorLaneY = 162;
+        const extent = d3.extent(times);
+        const padding = Math.max(1, (extent[1] - extent[0]) * 0.005);
+        const x = d3.scaleLinear()
+          .domain([extent[0] - padding, extent[1] + padding])
+          .range([0, innerWidth]);
+        const svg = d3.select(host).append('svg')
+          .attr('class', 'arp-chart arp-point-track')
+          .attr('viewBox', '0 0 ' + width + ' ' + height)
+          .attr('role', 'img')
+          .attr('aria-label', 'RHEED event points, derived state intervals, and interval anchors');
+        svg.append('title').text('RHEED event-presence review');
+        svg.append('desc').text(
+          'Three lanes separate event points, cumulative derived state intervals, and draggable representative interval anchors.'
+        );
+        const g = svg.append('g')
+          .attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+        g.append('rect').attr('data-chart-frame', '')
+          .attr('width', innerWidth).attr('height', innerHeight).attr('fill', 'none');
+        g.append('rect').attr('data-point-track-hit', '')
+          .attr('width', innerWidth).attr('height', innerHeight)
+          .attr('fill', 'transparent').style('cursor', 'crosshair')
+          .on('click', pointerEvent => {
+            const pointerX = d3.pointer(pointerEvent)[0];
+            updateSelected(nearestIndex(x.invert(
+              Math.max(0, Math.min(innerWidth, pointerX)))));
+          });
+        [60, 142].forEach(y => {
+          g.append('line').attr('class', 'point-lane-rule')
+            .attr('x1', 0).attr('x2', innerWidth).attr('y1', y).attr('y2', y);
+        });
+        [
+          ['Event points', eventLaneY],
+          ['Derived state intervals', stateLaneY + stateLaneHeight / 2],
+          ['Interval anchors', anchorLaneY],
+        ].forEach(([label, y]) => {
+          svg.append('text').attr('class', 'point-lane-label')
+            .attr('x', 4).attr('y', margin.top + Number(y) + 3).text(label);
+        });
+        pointReferences.forEach(reference => {
+          const cx = x(times[reference.index]);
+          const line = g.append('line').attr('class', 'point-reference')
+            .attr('x1', cx).attr('x2', cx).attr('y1', 3)
+            .attr('y2', innerHeight - 3)
+            .attr('stroke', 'var(--muted-foreground)')
+            .attr('stroke-dasharray', '2 2');
+          line.append('title').text('Read-only ' + reference.kind + ': ' + reference.label);
+        });
+        const visible = pointEvents.filter(event =>
+          event.disposition !== 'deleted' && event.source !== 'initial_assumption');
+        const derivedTimeline = pointDerivedStateTimeline(pointEvents);
+        derivedTimeline.intervals.forEach(interval => {
+          const start = x(times[interval.startIndex]);
+          const end = interval.endIndexExclusive < times.length
+            ? x(times[interval.endIndexExclusive]) : innerWidth;
+          if (end > start) {
+            const stateText = pointStateText(interval.state);
+            const segmentId = pointSegmentId(interval.startIndex, interval.eventIds);
+            const band = g.append('rect')
+              .attr('class', 'point-interval' +
+                (interval.valid ? '' : ' is-contradictory') +
+                (segmentId === selectedPointSegmentId ? ' is-selected' : ''))
+              .attr('data-point-role', 'derived-state-interval')
+              .attr('data-segment-id', segmentId)
+              .attr('data-start-index', interval.startIndex)
+              .attr('data-end-index-exclusive', interval.endIndexExclusive)
+              .attr('data-state-reconstructions', interval.state.reconstructions.join('|'))
+              .attr('data-state-clarity', interval.state.clarity)
+              .attr('data-state-valid', interval.valid ? 'true' : 'false')
+              .attr('data-state-text', stateText)
+              .attr('data-boundary-event-ids', interval.eventIds.join('|'))
+              .attr('data-segment-status', interval.status)
+              .attr('data-anchor-frame-index', interval.anchor?.frame_index ?? '')
+              .attr('data-baseline', interval.baseline ? 'true' : 'false')
+              .attr('x', start).attr('width', end - start)
+              .attr('y', stateLaneY).attr('height', stateLaneHeight)
+              .attr('fill', interval.valid ? 'var(--viz-series-2)' : null)
+              .attr('opacity', interval.valid ? 0.14 : 1)
+              .on('click', clickEvent => {
+                clickEvent.stopPropagation();
+                selectedPointSegmentId = segmentId;
+                const pointerX = d3.pointer(clickEvent)[0];
+                updateSelected(nearestIndex(x.invert(
+                  Math.max(0, Math.min(innerWidth, pointerX)))));
+                renderPointEditor();
+              });
+            const detail = pointIntervalText(interval) + ': ' + stateText +
+              (interval.errors.length ? ' — CONTRADICTION: ' + interval.errors.join('; ') : '');
+            band.append('title').text(detail);
+            if (end - start > 74) {
+              g.append('text').attr('class', 'point-interval-label')
+                .attr('x', start + 6).attr('y', stateLaneY + stateLaneHeight / 2 + 3)
+                .text(stateText);
+            }
+          }
+        });
+        const indexFromDrag = dragEvent => nearestIndex(x.invert(
+          Math.max(0, Math.min(innerWidth, dragEvent.x))));
+        visible.forEach((event, index) => {
+          const lane = eventLaneY + ((index % 3) - 1) * 11;
+          const derived = derivedTimeline.eventInfo.get(event.eventId);
+          const contradictory = Boolean(derived?.errors?.length);
+          const originalElapsed = Number(event.immutableEvidence.original_anchor?.elapsed_s);
+          const originalX = x(Number.isFinite(originalElapsed)
+            ? originalElapsed
+            : times[pointFrameIndex(event.immutableEvidence.original_anchor,
+              event.reviewIndex)]);
+          const reviewX = x(times[event.reviewIndex]);
+          if (Math.abs(reviewX - originalX) > 1) {
+            g.append('line').attr('class', 'point-link')
+              .attr('x1', originalX).attr('x2', reviewX)
+              .attr('y1', lane).attr('y2', lane);
+          }
+          const color = event.candidateDecision === 'rejected'
+            ? 'var(--muted-foreground)'
+            : (event.status === 'Complete' ? 'var(--viz-series-2)' : 'var(--viz-series-5)');
+          const original = g.append('circle')
+            .attr('class', 'point-original' +
+              (event.eventId === selectedPointEventId ? ' point-selected' : '') +
+              (contradictory ? ' is-contradictory' : ''))
+            .attr('data-point-event-id', event.eventId)
+            .attr('data-point-role', 'original')
+            .attr('cx', originalX).attr('cy', lane).attr('r', 5)
+            .attr('fill', color)
+            .on('click', clickEvent => {
+              clickEvent.stopPropagation();
+              selectPointEvent(event.eventId);
+            });
+          original.append('title').text('Original ' + event.source + ' event' +
+            (contradictory ? ' — CONTRADICTION: ' + derived.errors.join('; ') : ''));
+          const review = g.append('path')
+            .attr('class', 'point-review' +
+              (event.eventId === selectedPointEventId ? ' point-selected' : '') +
+              (contradictory ? ' is-contradictory' : ''))
+            .attr('data-point-event-id', event.eventId)
+            .attr('data-point-role', 'review')
+            .attr('d', d3.symbol().type(d3.symbolDiamond).size(120)())
+            .attr('transform', 'translate(' + reviewX + ',' + lane + ')')
+            .attr('stroke', color)
+            .call(d3.drag()
+              .on('drag', dragEvent => {
+                const px = Math.max(0, Math.min(innerWidth, dragEvent.x));
+                review.attr('transform', 'translate(' + px + ',' + lane + ')');
+              })
+              .on('end', dragEvent => {
+                const target = indexFromDrag(dragEvent);
+                selectedPointEventId = event.eventId;
+                updateSelected(target);
+                movePointReviewAnchorTo(event.eventId, target);
+              }))
+            .on('click', clickEvent => {
+              clickEvent.stopPropagation();
+              selectPointEvent(event.eventId);
+            });
+          review.append('title').text(
+            'Drag event boundary · frame #' + (event.reviewIndex + 1) +
+            (contradictory ? ' · CONTRADICTION: ' + derived.errors.join('; ') : ''));
+        });
+        derivedTimeline.intervals.forEach(interval => {
+          if (!interval.anchor || !interval.anchorOwnerEventId) return;
+          const anchorIndex = pointFrameIndex(interval.anchor, interval.startIndex);
+          const anchorX = x(times[anchorIndex]);
+          const anchorValid = Boolean(interval.valid &&
+            anchorIndex >= interval.startIndex &&
+            anchorIndex < interval.endIndexExclusive);
+          const anchor = g.append('path')
+            .attr('class', 'point-anchor' + (anchorValid ? '' : ' is-invalid'))
+            .attr('data-point-event-id', interval.anchorOwnerEventId)
+            .attr('data-point-role', 'representative-anchor')
+            .attr('data-segment-id', pointSegmentId(interval.startIndex, interval.eventIds))
+            .attr('data-interval-start-index', interval.startIndex)
+            .attr('data-interval-end-index-exclusive', interval.endIndexExclusive)
+            .attr('data-anchor-valid', anchorValid ? 'true' : 'false')
+            .attr('d', d3.symbol().type(d3.symbolStar).size(140)())
+            .attr('transform', 'translate(' + anchorX + ',' + anchorLaneY + ')')
+            .call(d3.drag()
+              .on('drag', dragEvent => {
+                const px = Math.max(0, Math.min(innerWidth, dragEvent.x));
+                anchor.attr('transform', 'translate(' + px + ',' + anchorLaneY + ')');
+              })
+              .on('end', dragEvent => {
+                const target = indexFromDrag(dragEvent);
+                selectedPointEventId = interval.anchorOwnerEventId;
+                selectedPointSegmentId = pointIntervalId(interval);
+                updateSelected(target);
+                moveRepresentativeAnchorTo(interval.anchorOwnerEventId, target);
+              }))
+            .on('click', clickEvent => {
+              clickEvent.stopPropagation();
+              selectPointEvent(interval.anchorOwnerEventId);
+              selectedPointSegmentId = pointIntervalId(interval);
+              updateSelected(anchorIndex);
+            });
+          anchor.append('title').text(
+            'Interval Anchor · frame #' + (anchorIndex + 1) +
+            (anchorValid ? ' · inside ' + pointIntervalText(interval)
+              : ' · INVALID for ' + pointIntervalText(interval)));
+        });
+        const playhead = g.append('line').attr('class', 'annotation-playhead')
+          .attr('y1', 0).attr('y2', innerHeight)
+          .attr('x1', x(times[selectedIndex])).attr('x2', x(times[selectedIndex]));
+        g.append('g').attr('transform', 'translate(0,' + innerHeight + ')')
+          .call(d3.axisBottom(x).ticks(width < 500 ? 4 : 7)
+            .tickFormat(value => (value / 60).toFixed(0)));
+        svg.append('text').attr('class', 'axis-title').attr('data-axis', 'x')
+          .attr('x', margin.left + innerWidth / 2).attr('y', height - 3)
+          .attr('text-anchor', 'middle').text('Elapsed time (min)');
+        pointState = {
+          draw: renderPointTrack,
+          updateSelection: () => {
+            playhead
+              .attr('x1', x(times[selectedIndex]))
+              .attr('x2', x(times[selectedIndex]));
+            // The representative-Anchor action is playhead-sensitive.  Keep
+            // its enabled state and interval summary in sync when scrubbing;
+            // moving only the SVG playhead leaves a stale button state.
+            renderPointAnchorPanel(pointDerivedStateTimeline(pointEvents));
+          },
+        };
+      }
+
+      function pointFormState() {
+        return {
+          comment: root.querySelector('#arp-point-comment').value,
+          reviewer: pointGrower,
+          confidence: null,
+        };
+      }
+
+      async function savePointDraft(silent = false) {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event) return false;
+        const next = pointFormState();
+        const before = JSON.stringify({
+          comment: event.comment,
+          reviewer: pointGrower,
+          confidence: null,
+        });
+        if (before === JSON.stringify(next)) {
+          if (!silent) pointMessage('Draft already matches the saved review state.');
+          return true;
+        }
+        const changed = await pointMutate('edit', event.eventId, target => {
+          Object.assign(target, next);
+          pointReopenIfComplete(target);
+        });
+        if (changed && !silent) pointMessage('Note autosaved.');
+        return changed;
+      }
+
+      function schedulePointCommentAutosave() {
+        if (pointCommentSaveTimer) window.clearTimeout(pointCommentSaveTimer);
+        pointCommentSaveTimer = window.setTimeout(() => {
+          pointCommentSaveTimer = null;
+          savePointDraft(true);
+        }, 350);
+      }
+
+      function schedulePointGrowerAutosave() {
+        const growerInput = root.querySelector('#arp-point-grower');
+        pointGrower = growerInput.value.trim();
+        growerInput.setAttribute('aria-invalid', pointGrower ? 'false' : 'true');
+        if (pointGrowerSaveTimer) window.clearTimeout(pointGrowerSaveTimer);
+        pointGrowerSaveTimer = window.setTimeout(() => {
+          pointGrowerSaveTimer = null;
+          pointPersist();
+          renderPointEditor();
+          const status = root.querySelector('#arp-point-status');
+          if (pointAddPending || status.dataset.tone === 'success') return;
+          pointMessage(pointGrower ? 'Grower saved for this session.' :
+            'Enter the Grower name before labeling.', !pointGrower);
+        }, 350);
+      }
+
+      function requirePointGrower(actionText) {
+        if (pointGrower.trim()) return pointGrower.trim();
+        const growerInput = root.querySelector('#arp-point-grower');
+        growerInput.setAttribute('aria-invalid', 'true');
+        growerInput.focus();
+        growerInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        pointMessage('Enter the Grower name above before ' + actionText + '.', true);
+        return '';
+      }
+
+      function revealNewPointEvent() {
+        const card = root.querySelector('.arp-point-card');
+        const reconstructionChoice = root.querySelector('#arp-point-reconstruction-choice');
+        if (!card || !reconstructionChoice) return;
+        if (pointNewEventPulseTimer) window.clearTimeout(pointNewEventPulseTimer);
+        card.classList.remove('is-new-event');
+        void card.offsetWidth;
+        card.classList.add('is-new-event');
+        pointNewEventPulseTimer = window.setTimeout(() => {
+          card.classList.remove('is-new-event');
+          pointNewEventPulseTimer = null;
+        }, 1800);
+        window.requestAnimationFrame(() => {
+          card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          if (!reconstructionChoice.disabled) {
+            reconstructionChoice.focus({ preventScroll: true });
+          }
+        });
+      }
+
+      async function addPointEvent() {
+        if (pointAddPending || pointRevisionPending) {
+          return pointMessage('Wait for the pending desktop revision.', true);
+        }
+        const actor = requirePointGrower('adding an event');
+        if (!actor) return;
+        if (pointSessionVerification === 'error') {
+          return pointMessage('Source session verification failed: ' +
+            (pointSessionVerificationError || 'unknown verification error') +
+            '. No event was created.', true);
+        }
+        if (pointDesktopSession && !pointRevisionPersistenceAvailable) {
+          return pointMessage('Desktop revision service is unavailable; no event was created.', true);
+        }
+        const event = normalizePointEvent({
+          schema: pointSchema,
+          event_id: pointUuid(),
+          source: {
+            kind: 'posthoc',
+            created_at_utc: nowUtc(),
+            created_by: actor,
+            source_row_sha256: '',
+            source_file: '',
+            source_index: '',
+            session_identity: '',
+            original_at_utc: formatUtc(selectedIndex),
+            original_elapsed_s: Number(times[selectedIndex]),
+            original_anchor: pointAnchorForIndex(selectedIndex),
+            original_note: '',
+            legacy_imports: [],
+          },
+          review: {
+            anchor: pointAnchorForIndex(selectedIndex),
+            representative_anchor: null,
+            labels: [],
+            candidate_decision: 'confirmed',
+            comment: '',
+            reviewer: actor,
+            confidence: null,
+            disposition: 'active',
+            disposition_reason: '',
+          },
+          status: 'Draft',
+          revision_id: '',
+        }, selectedIndex);
+        const revisionId = pointUuid();
+        event.lastRevisionId = revisionId;
+        const revision = {
+          schema_version: pointSchema,
+          revision_id: revisionId,
+          base_revision_id: '',
+          actor,
+          at_utc: nowUtc(),
+          before_sha256: '',
+          action: 'create_posthoc',
+          event_id: event.eventId,
+          before: null,
+          after: pointEventSnapshot(event),
+        };
+        pointAddPending = true;
+        renderPointEditor();
+        pointMessage('Adding a Draft event at saved frame #' + (selectedIndex + 1) +
+          (pointSessionVerification === 'pending'
+            ? '… verifying the source session first; this save may wait.' : '…'));
+        let changed = false;
+        try {
+          changed = await commitPointRevision(revision, event);
+          if (changed && !pointDesktopSession) selectedPointEventId = event.eventId;
+        } finally {
+          pointAddPending = false;
+          renderPointEditor();
+        }
+        if (!changed) return;
+        pointMessage('Event added and autosaved at saved frame #' +
+          (selectedIndex + 1) + '. Choose what changed below.', false, 'success');
+        revealNewPointEvent();
+      }
+
+      async function movePointReviewAnchor() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event) return;
+        if (event.reviewIndex === selectedIndex) {
+          return pointMessage('The event is already on this saved frame.');
+        }
+        await movePointReviewAnchorTo(event.eventId, selectedIndex);
+      }
+
+      async function movePointRepresentativeAnchor() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event) return;
+        if (event.candidateDecision === 'rejected') {
+          return pointMessage('Rejected candidates do not define a stable interval.', true);
+        }
+        await moveRepresentativeAnchorTo(event.eventId, selectedIndex);
+      }
+
+      async function addPointLabel() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event) return;
+        if (event.source === 'initial_assumption') {
+          return pointMessage('The initial 1×1 state is fixed; it is not a change event.', true);
+        }
+        const label = normalizePointLabel({
+          label_id: pointUuid(),
+          kind: root.querySelector('#arp-point-label-kind').value,
+          change: root.querySelector('#arp-point-label-change').value,
+          value: root.querySelector('#arp-point-label-value').value,
+        }, true);
+        try {
+          validatePointLabels([...event.labels, label]);
+        } catch (error) {
+          return pointMessage(error.message, true);
+        }
+        const changed = await pointMutate('add_label', event.eventId, target => {
+          target.labels.push(label);
+          pointReopenIfComplete(target);
+        }, { label: { kind: label.kind, change: label.change, value: label.value } });
+        if (changed) pointMessage('Added ' + pointLabelText(label) + '.');
+      }
+
+      async function setPointCandidateDecision() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event) return;
+        if (event.source !== 'auto_capture') {
+          renderPointEditor();
+          return pointMessage('Only automatic change candidates have a review decision.', true);
+        }
+        const decision = root.querySelector('#arp-point-candidate-decision').value;
+        if (decision === event.candidateDecision) return;
+        const changed = await pointMutate('set_candidate_decision', event.eventId, target => {
+          target.candidateDecision = decision;
+          if (decision === 'rejected') {
+            target.labels = [];
+            target.representativeIndex = null;
+            target.representativeAnchor = null;
+          }
+          pointReopenIfComplete(target);
+        }, { decision });
+        if (changed) {
+          pointMessage(decision === 'rejected'
+            ? 'Candidate rejected; source evidence was preserved and physical target labels were cleared.'
+            : (decision === 'confirmed'
+              ? 'Candidate confirmed as a real change.'
+              : 'Candidate returned to Pending review.'));
+        }
+      }
+
+      async function completePointEvent() {
+        const event = pointEvents.find(item => item.eventId === selectedPointEventId);
+        if (!event) return;
+        if (!(await savePointDraft(true))) return;
+        const updated = pointEvents.find(item => item.eventId === selectedPointEventId);
+        const problems = pointCompletionProblems(updated);
+        if (problems.length) {
+          return pointMessage('Cannot Complete: requires ' + problems.join(', ') + '.', true);
+        }
+        const changed = await pointMutate('complete', updated.eventId,
+          target => { target.status = 'Complete'; });
+        if (changed) pointMessage('Event explicitly marked Complete.');
+      }
+
+      function exportPointCsv() {
+        if (!config.full_assets) {
+          return pointMessage('Open the standalone report to export annotation files.', true);
+        }
+        const derived = pointDerivedStateTimeline(pointEvents);
+        if (derived.contradictionCount) {
+          return pointMessage('CSV export blocked: resolve all derived-state or interval-Anchor contradictions first.', true);
+        }
+        const headers = [
+          'schema_version','dataset_id','source_archive_sha256',
+          'ordered_frame_fingerprint','model_context_fingerprint',
+          'segment_id','start_frame_index','end_frame_index_exclusive',
+          'frame_count','reconstruction_presence','clarity',
+          'anchor_frame_index','anchor_frame_sha256','anchor_capture_sequence',
+          'status','boundary_event_ids',
+        ];
+        const rows = pointExportSegments(pointEvents).map(segment => ({
+            schema_version: pointSchema,
+            dataset_id: datasetIdentity.dataset_id,
+            source_archive_sha256: datasetIdentity.source_archive_sha256 || '',
+            ordered_frame_fingerprint: datasetIdentity.ordered_frame_fingerprint || '',
+            model_context_fingerprint: datasetIdentity.model_context_fingerprint || '',
+            segment_id: segment.segment_id,
+            start_frame_index: segment.start_frame_index,
+            end_frame_index_exclusive: segment.end_frame_index_exclusive,
+            frame_count: segment.frame_count,
+            reconstruction_presence: segment.state.reconstructions.join('|'),
+            clarity: segment.state.clarity,
+            anchor_frame_index: segment.anchor?.frame_index ?? '',
+            anchor_frame_sha256: segment.anchor?.image_sha256 ||
+              segment.anchor?.frame_sha256 || '',
+            anchor_capture_sequence: segment.anchor?.capture_sequence ?? '',
+            status: segment.status,
+            boundary_event_ids: segment.boundary_event_ids.join('|'),
+          }));
+        const csv = [headers.join(','), ...rows.map(row =>
+          headers.map(header => csvValue(row[header])).join(','))].join('\r\n');
+        const runName = String(config.run_name || datasetIdentity.dataset_id || 'rheed')
+          .replace(/[^a-zA-Z0-9._-]+/g, '_');
+        downloadText(runName + '_derived_state_segments.csv', '\ufeff' + csv + '\r\n',
+          'text/csv;charset=utf-8');
+        pointMessage('Exported ' + rows.length + ' derived state intervals as training CSV.');
+      }
+
+      function initializePointEditor() {
+        pointEditor.hidden = !isPointReport;
+        legacyEditor.hidden = isPointReport;
+        if (!isPointReport) {
+          legacyEditor.querySelector('#arp-annotation-title').textContent =
+            isLegacyPointReport
+              ? 'Legacy point events — read-only'
+              : 'Legacy reconstruction segments — read-only';
+          legacyEditor.querySelector('.arp-annotation-note').textContent =
+            config.annotation_schema === legacyPointSchemaV2
+              ? 'This rheed-point-events-v2 report may contain deprecated surface_quality evidence. It is preserved read-only and is never reinterpreted as v3 pattern clarity. Rebuild the report for a separate v3 annotation sidecar.'
+              : 'This older report remains viewable for compatibility. Editing and automatic conversion to the current event-presence schema are disabled.';
+          legacyEditor.querySelectorAll('button,input,select')
+            .forEach(control => { control.disabled = true; });
+          legacyEditor.style.pointerEvents = 'none';
+          return;
+        }
+        root.querySelector('#arp-frame-scrubber-point').max = String(config.count - 1);
+        refreshPointLabelAddControls();
+        const restored = pointLoad();
+        if (restored) {
+          pointMessage('Restored ' + pointEvents.length +
+            ' point events from browser autosave.');
+        } else if (pointStorageAvailable) {
+          pointMessage('Browser Draft autosave is active. Export JSON for a durable collaborative record.');
+        } else {
+          pointMessage('Browser autosave is unavailable. Export JSON before closing.', true);
+        }
+        renderPointEditor();
+        initializePointBridge();
+      }
+
       function applyDisplayFilter() {
         const filter = `brightness(${displayBrightness}%) contrast(${displayContrast}%)`;
         [selectedCanvas, selectedImage, zoomImage].forEach(element => {
@@ -2961,7 +5207,7 @@
       }
 
       function updateSelected(index) {
-        selectedIndex = Math.max(0, Math.min(config.count - 1, Math.round(index)));
+        selectedIndex = nearestReviewFrameIndex(index);
         const temp = temperatures[selectedIndex] === -32768 ? 'N/A' : `${(temperatures[selectedIndex] / 10).toFixed(1)} °C`;
         root.querySelector('#arp-selected-meta').textContent =
           `${formatElapsed(times[selectedIndex])} elapsed · ${formatUtc(selectedIndex)} · heartbeat #${heartbeats[selectedIndex]} · capture #${sequences[selectedIndex]} · ${temp}`;
@@ -3213,21 +5459,33 @@
       frameScrubber.addEventListener('input', event => {
         updateSelected(Number(event.currentTarget.value));
       });
-      root.querySelector('#arp-frame-previous').addEventListener('click', () => updateSelected(selectedIndex - 1));
-      root.querySelector('#arp-frame-next').addEventListener('click', () => updateSelected(selectedIndex + 1));
+      root.querySelector('#arp-frame-previous').addEventListener('click', () =>
+        updateSelected(adjacentReviewFrameIndex(selectedIndex, -1)));
+      root.querySelector('#arp-frame-next').addEventListener('click', () =>
+        updateSelected(adjacentReviewFrameIndex(selectedIndex, 1)));
       root.querySelector('#arp-frame-scrubber-point').addEventListener('input', event => {
         updateSelected(Number(event.currentTarget.value));
       });
-      root.querySelector('#arp-frame-previous-point').addEventListener('click', () => updateSelected(selectedIndex - 1));
-      root.querySelector('#arp-frame-next-point').addEventListener('click', () => updateSelected(selectedIndex + 1));
+      root.querySelector('#arp-frame-previous-point').addEventListener('click', () =>
+        updateSelected(adjacentReviewFrameIndex(selectedIndex, -1)));
+      root.querySelector('#arp-frame-next-point').addEventListener('click', () =>
+        updateSelected(adjacentReviewFrameIndex(selectedIndex, 1)));
       root.querySelector('#arp-point-add').addEventListener('click', addPointEvent);
-      root.querySelector('#arp-point-save').addEventListener('click', () => savePointDraft(false));
-      ['#arp-point-comment', '#arp-point-reviewer', '#arp-point-confidence', '#arp-point-reconstruction',
-        '#arp-point-before', '#arp-point-after'].forEach(selector => {
-        root.querySelector(selector).addEventListener('change', () => savePointDraft(true));
-      });
+      root.querySelector('#arp-point-comment').addEventListener('input', schedulePointCommentAutosave);
+      root.querySelector('#arp-point-grower').addEventListener('input', schedulePointGrowerAutosave);
       root.querySelector('#arp-point-move').addEventListener('click', movePointReviewAnchor);
-      root.querySelector('#arp-point-equalizer-run').addEventListener('click', runPointEqualizer);
+      root.querySelector('#arp-point-interval-anchor').addEventListener('click', setSelectedIntervalAnchor);
+      root.querySelector('#arp-point-reconstruction-appeared').addEventListener('click', () =>
+        addQuickPointLabel('reconstruction', 'appeared',
+          root.querySelector('#arp-point-reconstruction-choice').value));
+      root.querySelector('#arp-point-reconstruction-disappeared').addEventListener('click', () =>
+        addQuickPointLabel('reconstruction', 'disappeared',
+          root.querySelector('#arp-point-reconstruction-choice').value));
+      root.querySelectorAll('[data-point-quick-kind]').forEach(button => {
+        button.addEventListener('click', () => addQuickPointLabel(
+          button.dataset.pointQuickKind, 'became', button.dataset.pointQuickValue));
+      });
+      root.querySelector('#arp-point-candidate-decision').addEventListener('change', setPointCandidateDecision);
       root.querySelector('#arp-point-complete').addEventListener('click', completePointEvent);
       root.querySelector('#arp-point-reopen').addEventListener('click', reopenPointEvent);
       root.querySelector('#arp-point-dismiss').addEventListener('click', dismissPointEvent);
@@ -3293,19 +5551,26 @@
 
       root.ownerDocument.addEventListener('keydown', event => {
         const target = event.target;
-        if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) return;
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        const isEditingTarget = target && (
+          target.tagName === 'SELECT'
+          || target.tagName === 'TEXTAREA'
+          || (target.tagName === 'INPUT' && target.type !== 'range')
+          || target.isContentEditable
+        );
+        if (isEditingTarget) return;
         if (event.key === 'ArrowLeft') {
           event.preventDefault();
-          updateSelected(selectedIndex - 1);
+          updateSelected(adjacentReviewFrameIndex(selectedIndex, -1));
         } else if (event.key === 'ArrowRight') {
           event.preventDefault();
-          updateSelected(selectedIndex + 1);
+          updateSelected(adjacentReviewFrameIndex(selectedIndex, 1));
         } else if (event.key === 'Home') {
           event.preventDefault();
-          updateSelected(0);
+          updateSelected(reviewFrameIndices[0]);
         } else if (event.key === 'End') {
           event.preventDefault();
-          updateSelected(config.count - 1);
+          updateSelected(reviewFrameIndices[reviewFrameIndices.length - 1]);
         } else if (event.key.toLowerCase() === 'i') {
           event.preventDefault();
           markAnnotationIn();

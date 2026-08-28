@@ -22,15 +22,17 @@ Do not authorize ARM, instrument operation, connection changes, or setpoint chan
 
 For direct Vimba acquisition, a nonzero exposure request is a volatile ARM-time write that requires Full camera access, ExposureAuto=Off, and a matching readback. Keep current performs no write but may still record a readback. Never transfer the O-MBE and Ch-MBE exposure requests, bypass range or trigger-headroom checks, treat a request as a confirmed value, or ignore a failed restoration. The application never saves a camera user set. A cached or stalled frame is not a new acquisition; require an advancing capture sequence and a current live frame before START.
 
-Keep surface reconstruction, acquisition-quality QC, and FeSe film quality distinct. In older files, QC means only image acquisition quality: whether a frame can be analyzed. It never means poor surface or film quality. The current classifier concerns bare STO before growth.
+Keep reconstruction events, RHEED pattern clarity, image acquisition quality, and FeSe film quality distinct. In older files, QC means only image acquisition quality: whether a frame can be analyzed. It never means Bad pattern clarity, poor chemical surface quality, or poor film quality. The current classifier concerns bare STO before growth.
 
-The labelable event sources are manual, auto_capture, and posthoc. Direction/current/energy adjustments, image-unusable records, and sensor logs are read-only references. Temperature, voltage, current, pressure, and data age are logs, not editable label fields.
+The run begins from the explicit state `1x1 present, clarity unknown`; it is not a physical appearance event. The editable change-event sources are manual, auto_capture, and posthoc. The initial-state audit item owns the first interval Anchor. Auto-capture points are translation-insensitive visual-change candidates and do not identify physical cause. Automatic candidates require an explicit Confirmed or Rejected decision. Direction/current/energy adjustments, image-unusable records, and sensor logs are read-only references. Temperature, voltage, current, pressure, and data age are logs, not editable label fields.
 
-Never change immutable source evidence or the original event point. A moved review anchor must snap to a saved frame and invalidates the previous Equalizer result. Complete requires a nonempty comment, reviewer, valid exact-frame Equalizer result, and explicit Complete action. Editing a Complete event returns it to Draft.
+The only semantic labels are reconstruction appeared/disappeared for 1x1, Twinned 2x1, c(6x2), RT13, or HTR, and pattern clarity became Good/Bad. Every label remains editable. Same-frame changes are atomic. Replay must reject repeated appearance, disappearance of an absent type, and Good-to-Good or Bad-to-Bad changes. Good/Bad describes visible pattern clarity only and must never be inferred from an image-unusable record. A Rejected candidate has no semantic labels or interval Anchor in the exported current state; immutable source evidence and revision history remain.
 
-Equalizer is an independent four-basis visual fit. It is not a model probability, area fraction, or human reconstruction label; HTR must remain null. It must never populate or overwrite human reconstruction fields. Model-visible review is model-assisted and not blind-gold.
+Never change immutable source evidence or the original event point. A moved review point must snap to a saved frame. Accepted point changes are replayed from the initial state into half-open intervals with complete reconstruction-presence and clarity states. Each interval has exactly one Anchor slot: it may be empty only while Unfinished, may never contain duplicates, and must identify one saved frame inside the interval before completion. The representative Anchor is not another event. A confirmed event requires reviewer, at least one semantic label, interval Anchor, and explicit Complete. The fixed initial-state item requires reviewer and the first-interval Anchor but has no candidate decision or semantic change label. A rejected candidate requires reviewer, explicit Rejected decision, and Complete. Comment and confidence are optional. Editing completed review content returns it to Draft.
 
-A directly opened static HTML cannot run Equalizer or Complete. Those actions require the desktop labeler's random-token service bound only to 127.0.0.1 and the original BMP/PNG from the read-only ZIP.
+For routine live, posthoc, report, event-movement, and Anchor-selection work, identify a frame by stable session identity, capture sequence, and a saved-frame locator such as archive member, frame index, or frame path. Preserve an image hash when it already exists as evidence, but never compute one solely to create, move, report, or select an annotation. Registered archive and evaluation protocols keep their separate hash-integrity requirements.
+
+A directly opened static HTML can inspect and edit a local Draft but cannot write an audited Complete revision. Durable revisions and Complete require the desktop labeler's random-token service bound only to 127.0.0.1. Equalizer, if discussed, is a separate diagnostic that is not shown or stored as an event-label input. Model-visible review is model-assisted and not blind-gold.
 ```
 
 ## 1. Strict manual question and answer
@@ -40,7 +42,7 @@ Append this after the required base prompt:
 ```text
 Question: [INSERT QUESTION]
 
-Answer only from the supplied manual. Separate live acquisition, immutable evidence, offline review, Equalizer measurement, and human interpretation when more than one is involved.
+Answer only from the supplied manual. Separate live acquisition, immutable evidence, event decisions, semantic labels, representative interval Anchors, read-only log context, and model output when more than one is involved.
 ```
 
 ## 2. Quick operator checklist
@@ -88,12 +90,15 @@ Compare only with the matching Chapter 3 startup record. Return Confirmed startu
 Append this after the required base prompt:
 
 ```text
-Event source: [manual / auto_capture / posthoc]
+Initial state or event source: [initial_state / manual / auto_capture / posthoc]
 Immutable original evidence: [NON-SENSITIVE SUMMARY]
-Current saved-frame review anchor: [SUMMARY]
-Draft fields and Equalizer status: [SUMMARY]
+Current saved-frame review point: [SUMMARY]
+Candidate decision: [Pending / Confirmed / Rejected / not applicable]
+Semantic labels: [SUMMARY]
+Representative interval Anchor: [SUMMARY]
+Reviewer, confidence, and optional comment: [SUMMARY]
 
-List what is still required before Complete. Distinguish original point from review point. If a move is proposed, require a saved frame and state that the old Equalizer becomes invalid. Do not propose an automatic reconstruction label.
+List what is still required before Complete. Distinguish original point, movable review point, and representative interval Anchor. Require saved frames for both movable controls. Do not infer a candidate decision or semantic label from the detector or model.
 ```
 
 ## 6. Offline labeler workflow
@@ -101,10 +106,10 @@ List what is still required before Complete. Distinguish original point from rev
 Append this after the required base prompt:
 
 ```text
-Offline task: [BUILD / OPEN / EDIT DRAFT / RUN EQUALIZER / COMPLETE / EXPORT / VALIDATE]
+Offline task: [BUILD / OPEN / EDIT DRAFT / CONFIRM OR REJECT / SET ANCHOR / COMPLETE / EXPORT / VALIDATE]
 Inputs and current state: [INSERT NON-SENSITIVE SUMMARY]
 
-Provide ordered actions, required provenance, expected evidence, and fail-closed conditions. State whether the desktop loopback service is required. Never contact instruments or use a lossy report preview for Equalizer.
+Provide ordered actions, required provenance, expected evidence, and fail-closed conditions. State whether the desktop loopback service is required. Never contact instruments, infer a semantic label from a model score, or duplicate sensor/action logs into editable labels.
 ```
 
 ## 7. Point-event and revision validation
@@ -116,7 +121,7 @@ Report manifest evidence: [PASTE NON-SENSITIVE SUMMARY]
 Point-event JSON evidence: [PASTE NON-SENSITIVE SUMMARY]
 Validator output: [PASTE]
 
-Audit dataset identity, ordered frame hashes, stable event IDs, immutable source evidence, saved-frame review anchors, revision base chain, actor and UTC, Complete requirements, Equalizer frame binding, HTR null, and model-assisted status. A mismatch must fail closed.
+Audit dataset identity, ordered frame hashes, stable event IDs, immutable source evidence, saved-frame review points, candidate decisions, semantic-label vocabulary, representative interval Anchors, revision base chain, actor and UTC, Complete requirements, and model-assisted status. A mismatch must fail closed.
 ```
 
 ## 8. Handoff and release audit

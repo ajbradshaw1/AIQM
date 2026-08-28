@@ -1,9 +1,9 @@
-# O-MBE and Ch-MBE GUI and RHEED Point-event Review
+# O-MBE and Ch-MBE GUI and RHEED Point-event Annotation
 
 ## English Operator Manual
 
-- Manual version: **v2.0 source draft**
-- Issued: **2026-08-17**
+- Manual version: **v2.1**
+- Issued: **2026-08-20**
 - Scope: Windows O-MBE and Ch-MBE workstations and the shared offline RHEED post-processing labeler
 
 This Markdown manual is the searchable companion to the English PDF manual. The screenshots below are from the actual applications using generated demonstration inputs. They contain no experimental data and do not define operating permission or setpoints.
@@ -29,16 +29,18 @@ This Markdown manual is the searchable companion to the English PDF manual. The 
 
 - Growth Monitor acquires data and creates the immutable session evidence.
 - The offline labeler reviews completed sessions as editable point events.
-- Equalizer is an auxiliary visual fit, not a human label or model probability.
+- Event labels record reconstruction appearances/disappearances and pattern-clarity changes.
 
-The live and offline paths share event identities but have different authority. During an experiment, **MARK EVENT** records what happened without interrupting the grower. After the experiment, the labeler shows that same event in the **Unfinished** queue so the grower can select a better saved frame, add a comment, run Equalizer, and explicitly complete the review.
+The live and offline paths share event identities but have different authority. During an experiment, **MARK EVENT** records what happened without interrupting the grower. After the experiment, the labeler shows that same event in the **Unfinished** queue so the grower can move the review point to a better saved frame, add or revise concise labels, select an interval Anchor, identify the reviewer, and explicitly complete the review. Comments are useful but optional.
 
 The current classifier concerns the bare STO surface before growth. Keep these concepts separate:
 
-- **Human reconstruction interpretation:** what a reviewer believes the surface pattern represents.
-- **Equalizer result:** a visual linear fit using four active basis images.
+- **Reconstruction event label:** a reviewer's statement that `1x1`, Twinned `2x1`, `c(6x2)`, RT13, or HTR appeared or disappeared.
+- **Pattern-clarity event label:** a reviewer's statement that the visible RHEED pattern became **Good** or **Bad**.
 - **Image acquisition quality:** whether the captured image is usable for analysis. It is not a statement about surface or FeSe film quality.
-- **Model output:** a prediction displayed for reference. It must not overwrite either the human interpretation or Equalizer result.
+- **Model output:** a prediction displayed for reference. It must not overwrite a human event label.
+
+**Bad pattern clarity does not mean image unusable.** A dim, clipped, missing, or otherwise unanalyzable frame belongs to the separate image-usability record and must not be converted into a Bad clarity label. Good/Bad also does not assert chemical surface quality or FeSe film quality.
 
 ## 2. Start the correct chamber application
 
@@ -176,34 +178,39 @@ ROI and crop, classifier package and enable state, save-root approval and naming
 
 ### In brief
 
-- Use the desktop labeler when Equalizer or Complete is needed.
-- A directly opened static HTML can inspect and edit Drafts but cannot run Equalizer or Complete.
+- Use the desktop labeler for durable revisions and Complete.
+- A directly opened static HTML can inspect and edit a local Draft, but cannot make an audited Complete revision.
 - The local service binds only to `127.0.0.1` and uses a random session token.
 
 Double-click `Start RHEED Post-processing Labeler.cmd`. Confirm the **Build** and **Open / Validate** tabs and verify that no Growth Monitor or instrument program starts.
 
 ![Offline labeler Build tab](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_labeler_build.png)
 
-The desktop labeler starts a loopback-only local service for the selected report. This service gives the browser a narrow route to request the existing PyQt retrospective Equalizer and to record audited revisions. It is not an instrument server and must not bind to a network interface.
+The desktop labeler starts a loopback-only local service for the selected report. This service gives the browser a narrow route to record audited revisions against the selected local report. It is not an instrument server and must not bind to a network interface.
 
-If `interactive_report.html` is opened directly with `file:///`, navigation and Draft editing remain available. **Run Equalizer** and **Complete** must show that the report needs to be reopened through the desktop labeler.
+If `interactive_report.html` is opened directly with `file:///`, navigation and local Draft editing remain available. **Complete** must explain that the report needs to be reopened through the desktop labeler. Equalizer is a separate diagnostic and is not shown or requested in the event-labeling workflow.
 
 ## 5. Prepare the archive and understand event sources
 
 ### In brief
 
 - Preserve the original ZIP and let the tool verify every saved frame and hash.
-- Manual marks and automatic image-change events become editable Drafts.
+- The explicit initial state, manual marks, automatic change candidates, and posthoc events become reviewable Drafts.
 - Adjustment, image-unusable, and sensor records remain read-only context.
 
 The archive must contain one session metadata record, its acquisition CSV files, and every referenced frame. Read `chamber_id` from the session metadata and confirm it names the intended chamber. For Modbus sessions, preserve COM, baud, RTS, device ID, and backend. For ADS sessions, preserve endpoint, ports, and cell count. For Elog sessions, preserve the configured directory and resolved source file. Never edit an archive to make it resemble the other chamber.
 
-### Editable point-event sources
+### Initial state and editable point-event sources
+
+Every run begins with the explicit default state `1x1 present` and pattern
+clarity `unknown`. This is the starting state for replay, not a fabricated
+physical `1x1 appeared` event. Its audit item owns the first state interval's
+Anchor.
 
 | Source | Meaning |
 | --- | --- |
 | `manual` | A grower pressed **MARK EVENT** during acquisition. The live click creates a Draft without opening a dialog. |
-| `auto_capture` | The image-change detector recorded a change point. This identifies a visual change, not its physical cause. |
+| `auto_capture` | The translation-insensitive image-change detector recorded a candidate change point. It identifies a visual change, not its physical cause, and must be Confirmed or Rejected. |
 | `posthoc` | A reviewer adds a point at an actual saved frame after the run. |
 
 Future live and posthoc events use UUIDs. Older rows receive deterministic IDs derived from session identity, source file, source index, time, and capture sequence, so identical `event_idx` values in different CSV files cannot collide.
@@ -234,49 +241,84 @@ python -m tools.rheed_postprocessing_labeling build `
   --output-dir '<local-data-root>\point-event-review'
 ```
 
-Keep `interactive_report.html`, `images/`, `vendor/`, `run_manifest.json`, and `annotations/` together. Review WebP images are for display only. Equalizer reads the original BMP or PNG bytes from the ZIP.
+Keep `interactive_report.html`, `images/`, `vendor/`, `run_manifest.json`, and `annotations/` together. Review WebP images are for display only; the original saved-frame bytes remain in the read-only ZIP.
 
 ## 7. Review and complete point events
 
 ### In brief
 
 1. Select an Unfinished event or add a posthoc event at the playhead.
-2. Snap the review point to the best saved frame, write a comment, and identify the reviewer.
-3. Run and adjust Equalizer, save the Draft, then explicitly click Complete.
+2. Confirm or reject a candidate, edit its concise labels, and identify the reviewer.
+3. Select the representative interval Anchor, save the Draft, then explicitly click Complete.
 
-There are no **Mark In**, **Mark Out**, interval-overlap, or inclusive-end rules in `rheed-point-events-v1`. Each item is a point. Multiple events may share one timestamp or one saved frame and still retain different IDs.
+There are no **Mark In**, **Mark Out**, interval-overlap, or inclusive-end rules in `rheed-point-events-v3`. Each editable change is a point. Multiple events may share one timestamp or one saved frame and still retain different IDs. The timeline has three separate tracks: draggable event points, automatically derived full-state intervals, and one Anchor per interval.
+
+Legacy `rheed-point-events-v2` evidence is validated and displayed read-only. Its deprecated `surface_quality` field is preserved exactly and is never reinterpreted as v3 pattern clarity. Start a separate v3 annotation sidecar if further editing is required.
 
 ### Original point and review point
 
-The **original point** is immutable evidence: event ID, source, original time, original frame if available, capture sequence, image SHA-256, original note, and source-row SHA-256. The **review point** may move, but only by snapping to an actual saved frame. Moving it never changes the original point and automatically clears the old Equalizer result because that result belonged to another image.
+The **original point** is immutable evidence: event ID, source, original time, original frame if available, capture sequence, any pre-existing image SHA-256 evidence, original note, and source-row SHA-256. The **review point** is the editable event location and may move only by snapping to an actual saved frame. Moving it never changes the original point. The timeline therefore preserves both what was recorded live and where the reviewer finally places the event.
+
+### Concise semantic labels
+
+Each event can contain one or more editable labels:
+
+- **Reconstruction appeared** or **Reconstruction disappeared**: `1x1`, Twinned `2x1`, `c(6x2)`, RT13, or HTR.
+- **Pattern clarity became**: **Good** or **Bad**.
+
+Use the smallest set that describes the observed change. A point can carry more than one label when changes occur together. Do not use Good/Bad for image usability, instrument validity, chemical surface quality, or FeSe film quality.
+
+Within one event, each reconstruction may appear **or** disappear only once, and there may be only one pattern-clarity change: Good **or** Bad. Record genuinely separate observations as separate event IDs; they may share the same timestamp. Same-frame labels are applied atomically. Across the run, the replay rejects repeated appearances, disappearance of an absent reconstruction, and no-op Good-to-Good or Bad-to-Bad changes. Rejecting a candidate clears its semantic labels and interval Anchor so it cannot be exported as a physical training target, while the immutable source evidence and revision history preserve what was reviewed.
+
+### Candidate decisions and the initial state
+
+Every automatic-change candidate must be explicitly **Confirmed** or **Rejected**. Confirming means the reviewer accepts the event and supplies its semantic label or labels. Rejecting means the detector point is retained as evidence but is not treated as a physical event. Review the initial-state item separately; it establishes the default first interval and must not be counted as a physical appearance event.
+
+Accepted changes are replayed from the initial state. Each boundary produces a half-open interval `[current boundary, next boundary)` whose exported record contains the complete reconstruction-presence set and the current Good/Bad/unknown clarity. Training code should consume these materialized states rather than treating an individual `appeared` label as a full-frame class.
+
+### Representative interval Anchor
+
+The star-shaped **Anchor** belongs to a derived state interval and selects the saved frame that most clearly represents that complete state. It is not a second event and is exported under the interval. Drag or set it within that interval only. Events at the same time share one following interval and one Anchor. Moving a boundary invalidates an Anchor that no longer lies in its interval and returns the affected review to Draft.
+
+Each interval has exactly one Anchor slot. It may be empty only while the
+interval is Unfinished; duplicate Anchors are invalid, and Complete requires
+that the slot identify one actual saved frame inside the interval.
+
+Routine live, posthoc, report, event-movement, and Anchor-selection operations
+identify that frame by stable session identity plus capture sequence and saved
+path, archive member, or frame index. They do not compute a content hash solely
+for annotation. A hash already present remains optional fail-closed evidence;
+registered archive and evaluation protocols retain their separate hash
+requirements.
 
 ### Required review actions
 
 1. Select a Draft from **Unfinished**.
 2. Inspect the original and current review markers.
 3. Move the review point if a nearby saved frame better represents the event.
-4. Enter a meaningful comment and reviewer. Confidence and human reconstruction before/after fields are optional.
-5. Click **Run Equalizer**. If no compatible accepted calibration exists for the exact frame geometry, view segment, and basis bundle, perform the three-point alignment and confirm handedness first.
-6. Adjust and save the Equalizer measurement.
-7. Click **Complete** explicitly.
+4. Review the initial-state item, or choose **Confirmed** or **Rejected** for an automatic candidate.
+5. Add, edit, or remove reconstruction and pattern-clarity labels. For a confirmed event, retain at least one valid semantic label.
+6. Set the representative interval Anchor on an actual saved frame.
+7. Enter the reviewer. A confidence value and comment are optional.
+8. Click **Complete** explicitly.
 
 ![Point-event editor with generated demo inputs](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_timeline_editor.png)
 
-The actual editor uses point markers and an **Unfinished** queue; the former interval-label controls are absent.
+The actual editor uses event-point, derived-state, and interval-Anchor tracks plus an **Unfinished** queue; the former hand-drawn interval controls are absent.
 
-Complete is disabled until all of these are present: nonempty comment, reviewer, saved review frame, and valid Equalizer result for that exact frame. Editing a completed event's comment, review point, or Equalizer automatically returns it to Draft. Use **Reopen** when intentionally continuing review.
+For a confirmed change event, Complete is disabled until it has a reviewer, at least one valid semantic label, and a representative interval Anchor. The initial-state audit item requires a reviewer and first-interval Anchor but no change label. A rejected automatic candidate needs the reviewer and explicit Rejected decision, but no semantic label or interval Anchor. Comments are optional. Editing completed review content returns it to Draft. Use **Reopen** when intentionally continuing review.
 
 Source events cannot be deleted. They may be marked **Dismissed** only with a reason, preserving the original evidence. A posthoc event may be deleted with an audited reason and later restored.
 
-## 8. Interpret Equalizer, logs, and display controls
+## 8. Interpret Anchors, logs, and display controls
 
 ### In brief
 
-- Equalizer is a separate visual fit and never fills a human reconstruction field.
+- The event point and representative interval Anchor have different meanings and remain synchronized with the frame viewer.
 - Temperature, voltage, current, pressure, and data age are read-only context.
 - Brightness, contrast, zoom, and image enlargement never modify archived pixels.
 
-Equalizer records calibration ID, basis-bundle ID, raw/final/normalized weights, fit residual, valid coverage, exact frame hash, and four active classes: `1x1`, `Tw`, `c6x2`, and `RT13`. HTR has no canonical basis and must remain null. Equalizer weights are not model probabilities, area fractions, or automatic human labels.
+The draggable event marker sets the reviewed change point. The state track is recalculated from all accepted changes, beginning from the default `1x1` state. The star-shaped Anchor selects the clearest representative frame inside one resulting interval. Moving either control snaps to an actual saved frame and preserves immutable source evidence. The Anchor is training metadata for the interval; it does not create an additional appearance, disappearance, or clarity change.
 
 ![Enlarged frame view with adjustable timeline](../tools/rheed_postprocessing_labeling/manual/assets/screenshots/rheed_timeline_zoom.png)
 
@@ -294,7 +336,7 @@ Instrument context is looked up from original logs at the event time. Data age h
 
 Live sessions retain the acquisition CSVs, `rheed_event_revisions.jsonl`, and a rebuildable current-state summary. Offline reports write the same revision concept beside the report, never into the ZIP. A pending transaction marker allows an interrupted write to be recovered exactly once.
 
-Browser local storage is only a convenience Draft. Export JSON frequently. Export CSV for meetings or review tables, but retain JSON for complete provenance and revision history. Import must verify dataset identity, ordered frame hashes, model context, event IDs, review anchors, and revision chain before replacing the current Draft.
+Browser local storage is only a convenience Draft. Export JSON frequently. Export CSV for meetings or review tables, but retain JSON for complete provenance and revision history. Import must verify dataset identity, ordered frame hashes, model context, event IDs, review points, representative interval Anchors, semantic labels, candidate decisions, and revision chain before replacing the current Draft.
 
 ```powershell
 python -m tools.rheed_postprocessing_labeling validate `
@@ -314,7 +356,7 @@ Old `rheed-temporal-segments-v1` JSON remains available to its original validato
 
 Track tool code, tests, templates, example specifications, and sanitized screenshots. Keep experiment ZIP files, raw images, logs, predictions, generated reports, annotation sidecars, checkpoints, credentials, and unpublished results outside Git by default.
 
-Equalizer and model plots are visible during this workflow, so the result is model-assisted review and is not blind-gold. Equalizer must not overwrite a human label, and model argmax must not overwrite either. Image acquisition quality describes analyzability only. The current reconstruction target is bare STO before growth and is not FeSe film quality.
+Model plots are visible during this workflow, so the result is model-assisted review and is not blind-gold. Model argmax must not overwrite a human label. Image acquisition quality describes analyzability only and is separate from the event label **Pattern clarity became Bad**. The current reconstruction target is bare STO before growth and is not FeSe film quality. Equalizer, when used elsewhere as a diagnostic, is separate and is not displayed or stored as an event-label input.
 
 Preserve the source ZIP SHA-256, report manifest, revision journal, canonical JSON, model specifications, and complete report directory during handoff.
 
@@ -335,9 +377,9 @@ Record the exact error, time, chamber, launcher, commit, environment, paths, and
 | Build rejects inputs | Check the ZIP, positional prediction/spec pairs, hashes, and empty output directory. |
 | HTML has no images | Restore the complete report directory. |
 | Unfinished event is missing | Verify the source CSV row and source-row hash, then inspect revision replay errors. |
-| Run Equalizer unavailable | Reopen the report through the desktop labeler, not `file:///`. |
-| Equalizer is rejected | Verify exact raw frame, calibration compatibility, handedness, geometry, view segment, and basis hash. |
-| Complete is disabled | Supply comment, reviewer, saved review frame, and valid Equalizer result. |
+| Automatic candidate remains Pending | Inspect the candidate and explicitly choose Confirmed or Rejected; never infer the choice from the detector score. |
+| Representative Anchor is refused | Move it to an actual saved frame inside the stable interval before the next active, non-rejected semantic event. |
+| Complete is disabled | Supply the reviewer and, for a confirmed event, at least one valid semantic label plus a representative interval Anchor; a rejected candidate needs an explicit Rejected decision. |
 | Revision recovery fails | Preserve JSONL and pending marker; do not hand-edit them. |
 
 For O-MBE, confirm **Oxide MBE Growth Monitor** and the intended repository, branch, commit, Python interpreter. For Ch-MBE, confirm **Chalcogenide MBE Growth Monitor** and the intended repository, branch, commit, Python interpreter.
@@ -380,7 +422,11 @@ Get-FileHash '<local-data-root>\growth_session.zip' -Algorithm SHA256
 
 - Confirm session metadata names the intended chamber.
 - Preserve the source ZIP and SHA-256.
-- Open through the desktop labeler when Equalizer or Complete is required.
+- Open through the desktop labeler for durable revisions and Complete.
 - Resolve every item in Unfinished or dismiss it with a documented reason.
-- Confirm every Complete event has comment, reviewer, exact-frame Equalizer, and revision history.
+- Confirm every automatic candidate has an explicit Confirmed or Rejected
+  decision. The initial state is fixed, not a candidate.
+- Complete the initial-state audit with its reviewer and first-interval Anchor;
+  do not add an appearance label to it.
+- Confirm every Complete accepted event has a reviewer, semantic label, representative interval Anchor, and revision history; comments remain optional.
 - Export JSON, validate it against the original report, and hand off the complete directory.

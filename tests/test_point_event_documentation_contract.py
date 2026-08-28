@@ -11,7 +11,7 @@ def test_tool_readme_describes_current_point_event_contract() -> None:
     prose = re.sub(r"\s+", " ", text)
 
     required_phrases = (
-        "rheed-point-events-v1",
+        "rheed-point-events-v3",
         "`manual`",
         "`auto_capture`",
         "`posthoc`",
@@ -19,11 +19,11 @@ def test_tool_readme_describes_current_point_event_contract() -> None:
         "read-only context, not label fields",
         "**Unfinished**",
         "explicitly click **Complete**",
-        "valid Equalizer result",
-        "HTR has no canonical basis and stays null",
-        "not model probabilities",
+        "Comments are optional",
+        "Good or Bad",
+        "representative **Anchor**",
         "`127.0.0.1`",
-        "original BMP or PNG",
+        "original saved-frame bytes",
         "Legacy `rheed-temporal-segments-v1`",
         "read-only compatibility data",
     )

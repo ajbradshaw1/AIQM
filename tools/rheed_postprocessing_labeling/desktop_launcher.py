@@ -10,7 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from PyQt6.QtCore import QByteArray, QProcess, QProcessEnvironment, QSettings, QUrl
+from PyQt6.QtCore import (
+    QByteArray,
+    QProcess,
+    QProcessEnvironment,
+    QSettings,
+    QTimer,
+    QUrl,
+)
 from PyQt6.QtGui import QCloseEvent, QDesktopServices
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -62,6 +69,7 @@ class BuildRequest:
     output_dir: Path
     title: str
     review_quality: int = 78
+    review_frame_count: int = 100
     overwrite: bool = False
 
 
@@ -130,6 +138,8 @@ def validate_build_request(
         errors.append("Enter a report title.")
     if not 25 <= request.review_quality <= 100:
         errors.append("Review-image quality must be between 25 and 100.")
+    if request.review_frame_count < 2:
+        errors.append("Review-frame count must be at least 2.")
     return errors
 
 
@@ -153,6 +163,8 @@ def build_cli_arguments(request: BuildRequest) -> list[str]:
         request.title.strip(),
         "--review-quality",
         str(request.review_quality),
+        "--review-frame-count",
+        str(request.review_frame_count),
     ])
     if request.overwrite:
         arguments.append("--overwrite")
@@ -192,7 +204,9 @@ def parse_validation_response(payload: str) -> ValidationResult:
         raise ValueError("Validation worker returned an invalid item count")
     if (
         count_key == "event_count"
-        and value.get("schema_version") != "rheed-point-events-v1"
+        and value.get("schema_version") not in {
+            "rheed-point-events-v2", "rheed-point-events-v3",
+        }
     ):
         raise ValueError("Validation worker returned an invalid point-event schema")
     return ValidationResult(
@@ -240,7 +254,7 @@ class LabelingDesktopLauncher(QMainWindow):
         self._loopback_service: LoopbackReportService | None = None
         self._equalizer_coordinator = None
 
-        self.setWindowTitle("RHEED Post-processing and Temporal Labeling")
+        self.setWindowTitle("RHEED Post-processing and Point-Event Labeling")
         self.resize(980, 760)
         central = QWidget(self)
         root = QVBoxLayout(central)
@@ -292,6 +306,7 @@ class LabelingDesktopLauncher(QMainWindow):
             self.output_button,
             self.title_edit,
             self.quality_spin,
+            self.frame_count_spin,
             self.build_button,
             self.report_edit,
             self.report_button,
@@ -356,15 +371,20 @@ class LabelingDesktopLauncher(QMainWindow):
         self.quality_spin = QSpinBox()
         self.quality_spin.setRange(25, 100)
         self.quality_spin.setValue(78)
+        self.frame_count_spin = QSpinBox()
+        self.frame_count_spin.setRange(2, 100000)
+        self.frame_count_spin.setValue(100)
         layout.addWidget(QLabel("Report title"), 4, 0)
         layout.addWidget(self.title_edit, 4, 1, 1, 2)
         layout.addWidget(QLabel("Review WebP quality"), 5, 0)
         layout.addWidget(self.quality_spin, 5, 1)
+        layout.addWidget(QLabel("Uniform review frames"), 6, 0)
+        layout.addWidget(self.frame_count_spin, 6, 1)
 
         self.build_button = QPushButton("Build report and open")
         self.build_button.clicked.connect(self._start_build)
-        layout.addWidget(self.build_button, 6, 1)
-        layout.setRowStretch(7, 1)
+        layout.addWidget(self.build_button, 7, 1)
+        layout.setRowStretch(8, 1)
         return tab
 
     def _create_review_tab(self) -> QWidget:
@@ -524,6 +544,7 @@ class LabelingDesktopLauncher(QMainWindow):
             output_dir=Path(self.output_edit.text().strip()),
             title=self.title_edit.text(),
             review_quality=self.quality_spin.value(),
+            review_frame_count=self.frame_count_spin.value(),
             overwrite=False,
         )
 
@@ -734,8 +755,8 @@ class LabelingDesktopLauncher(QMainWindow):
         """Open through an authenticated loopback service when ZIP is present.
 
         Without the source archive, the static report still supports Draft
-        review and export.  Equalizer and Complete remain unavailable because
-        their exact raw-frame provenance cannot be checked.
+        review and export.  Durable edits and Complete remain unavailable
+        because the source evidence cannot be checked against the archive.
         """
         if not path.is_file():
             self._warning("File not found", "Choose an existing report file.")
@@ -755,18 +776,22 @@ class LabelingDesktopLauncher(QMainWindow):
             and report_payload.get("config", {}).get("annotation_schema")
                 != POINT_EVENT_SCHEMA
         ):
+            source_schema = str(
+                report_payload.get("config", {}).get("annotation_schema", "")
+            )
             self._information(
                 "Legacy report is read-only",
-                "This rheed-temporal-segments-v1 report cannot be edited through "
-                "the point-event desktop Labeler. It remains available only to "
-                "the legacy validator; rebuild the report to create point events.",
+                f"This {source_schema or 'legacy'} report cannot be edited through "
+                f"the {POINT_EVENT_SCHEMA} desktop Labeler. Its existing labels "
+                "remain read-only evidence; rebuild the report to start a separate "
+                "v3 annotation journal.",
             )
             return False
         if not session_path.is_file() or session_path.suffix.lower() != ".zip":
             self._information(
                 "Draft review only",
                 "Choose the matching source session ZIP in the Build tab before "
-                "opening this report if you need Run Equalizer or Complete. "
+                "opening this report if you need durable edits or Complete. "
                 "The report will open as static Draft-only review.",
             )
             return self._open_local_file(path, "report")
@@ -775,7 +800,6 @@ class LabelingDesktopLauncher(QMainWindow):
             return False
 
         self._stop_report_service()
-        coordinator_holder: dict[str, object] = {}
         sidecar_holder: dict[str, object] = {}
         sidecar_lock = threading.Lock()
 
@@ -794,14 +818,11 @@ class LabelingDesktopLauncher(QMainWindow):
         def persist_revision(command):
             return sidecar_store().apply_revision(command)
 
-        def persist_equalizer_revision(command, measurement):
-            return sidecar_store().apply_equalizer_revision(command, measurement)
+        def verify_session_archive():
+            return sidecar_store().ensure_session_verified()
 
         def import_draft_document(document):
             return sidecar_store().import_document(document)
-
-        def sidecar_event_ids() -> set[str]:
-            return set(sidecar_store().event_ids)
 
         def durable_event_state():
             store = sidecar_store()
@@ -819,34 +840,14 @@ class LabelingDesktopLauncher(QMainWindow):
                 ),
             }
 
-        def enqueue(request) -> None:
-            coordinator = coordinator_holder.get("coordinator")
-            if coordinator is None:
-                raise RuntimeError("Equalizer controller is not ready")
-            coordinator.enqueue_from_http(request)
-
         try:
-            # Import lazily so ordinary report build/validation and headless
-            # CLI use never initialize the Equalizer or its Qt graphics code.
-            from .offline_equalizer import OfflineEqualizerCoordinator
-
             service = LoopbackReportService(
                 path,
-                equalizer_callback=enqueue,
                 revision_callback=persist_revision,
-                equalizer_revision_callback=persist_equalizer_revision,
                 import_callback=import_draft_document,
                 state_callback=durable_event_state,
+                session_verification_callback=verify_session_archive,
             )
-            coordinator = OfflineEqualizerCoordinator(
-                report_path=path,
-                session_path=session_path,
-                service=service,
-                additional_event_ids=sidecar_event_ids,
-                session_loader=lambda: sidecar_store().ensure_session_verified(),
-                parent=self,
-            )
-            coordinator_holder["coordinator"] = coordinator
             url = service.start()
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             self._critical(
@@ -857,7 +858,7 @@ class LabelingDesktopLauncher(QMainWindow):
             )
             return False
         self._loopback_service = service
-        self._equalizer_coordinator = coordinator
+        self._equalizer_coordinator = None
         try:
             opened = bool(self._url_opener(QUrl(url)))
         except Exception as exc:  # desktop integration boundary
@@ -874,7 +875,7 @@ class LabelingDesktopLauncher(QMainWindow):
             )
             return False
         self.status_label.setText(
-            "Opened report with desktop Equalizer controls on 127.0.0.1"
+            "Opened report with durable point-event controls on 127.0.0.1"
         )
         return True
 
@@ -932,6 +933,11 @@ class LabelingDesktopLauncher(QMainWindow):
             quality = 78
         self.quality_spin.setValue(max(25, min(100, quality)))
         try:
+            frame_count = int(self._settings.value("build/review_frame_count", 100))
+        except (TypeError, ValueError):
+            frame_count = 100
+        self.frame_count_spin.setValue(max(2, min(100000, frame_count)))
+        try:
             pairs = json.loads(str(self._settings.value("build/model_pairs", "[]")))
         except (json.JSONDecodeError, TypeError):
             pairs = []
@@ -952,6 +958,9 @@ class LabelingDesktopLauncher(QMainWindow):
         self._settings.setValue("review/annotations", self.annotations_edit.text())
         self._settings.setValue("build/title", self.title_edit.text())
         self._settings.setValue("build/review_quality", self.quality_spin.value())
+        self._settings.setValue(
+            "build/review_frame_count", self.frame_count_spin.value()
+        )
         pairs = [[str(pair.predictions), str(pair.model_spec)] for pair in self._model_pairs()]
         self._settings.setValue("build/model_pairs", json.dumps(pairs))
         self._settings.sync()
@@ -970,13 +979,25 @@ class LabelingDesktopLauncher(QMainWindow):
         super().closeEvent(event)
 
 
-def main() -> int:
+def main(
+    *,
+    initial_session: Path | None = None,
+    initial_report: Path | None = None,
+    open_report: bool = False,
+) -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setOrganizationName("AI4MBE")
-    app.setApplicationName("RHEED Post-processing and Temporal Labeling")
+    app.setApplicationName("RHEED Post-processing and Point-Event Labeling")
     install_application_icon(app)
     window = LabelingDesktopLauncher()
+    if initial_session is not None:
+        window.session_edit.setText(str(initial_session.resolve()))
+    if initial_report is not None:
+        window.report_edit.setText(str(initial_report.resolve()))
+        window.tabs.setCurrentWidget(window._review_tab)
     window.show()
+    if open_report:
+        QTimer.singleShot(0, window._open_report)
     return app.exec()
 
 

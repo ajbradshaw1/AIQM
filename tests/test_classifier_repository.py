@@ -18,7 +18,6 @@ from gui.classifier_repository import (
     classifier2_directory,
     resolve_ai_repo_root,
 )
-from gui.events_tab import EventsTab
 from gui.growth_app import GrowthApp, _resolve_ai_repo_root
 from gui.state import RheedQcState
 
@@ -106,6 +105,22 @@ class SharedResolverTests(unittest.TestCase):
         )
 
         self.assertEqual(resolved, expected.resolve())
+
+    def test_incomplete_marked_workspace_does_not_fall_back(self) -> None:
+        workspace = self.root / "AI4MBE"
+        instrument = workspace / "repos" / "aiqm-instrument"
+        instrument.mkdir(parents=True)
+        marker = workspace / "workspace" / "repos.lock.yaml"
+        marker.parent.mkdir()
+        marker.write_text("repositories: {}\n", encoding="utf-8")
+        fallback = _classifier_repo(self.root / "legacy")
+
+        with self.assertRaisesRegex(FileNotFoundError, "Marked workspace"):
+            resolve_ai_repo_root(
+                environ={},
+                instrument_root=instrument,
+                legacy_roots=(fallback,),
+            )
 
     def test_unmarked_ancestor_repos_tree_is_not_selected(self) -> None:
         # Keep this synthetic checkout outside the real D:\AI4MBE ancestry.
@@ -197,12 +212,6 @@ class ResolverCallSiteTests(unittest.TestCase):
         expected = Path("resolved-perception-root")
         with patch("gui.growth_app.resolve_ai_repo_root", return_value=expected):
             self.assertEqual(_resolve_ai_repo_root(), str(expected))
-
-    def test_events_tab_uses_shared_resolver(self) -> None:
-        expected = Path("resolved-perception-root")
-        with patch("gui.events_tab.resolve_ai_repo_root", return_value=expected):
-            self.assertIs(EventsTab._default_ai_repo_root(), expected)
-
 
 class _Signal:
     def __init__(self) -> None:

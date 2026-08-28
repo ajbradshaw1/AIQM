@@ -26,7 +26,11 @@ from tools.rheed_postprocessing_labeling.annotation_validation import (
     validate_annotation_document,
 )
 from tools.rheed_postprocessing_labeling.prediction_io import ModelSpec
-from tools.rheed_postprocessing_labeling.report_builder import build_report, load_report_payload
+from tools.rheed_postprocessing_labeling.report_builder import (
+    build_report,
+    load_report_payload,
+    select_review_frame_indices,
+)
 
 
 ELAPSED = [0.0, 0.7, 2.1, 2.2, 5.8, 8.0]
@@ -254,6 +258,52 @@ def test_report_preserves_irregular_provenance_and_is_model_agnostic(
     assert [model["key"] for model in models] == ["two_output", "three_output"]
     assert models[0]["classes"] == ["1x1", "c_6x2"]
     assert models[1]["classes"] == ["twinned_2x1", "rt13", "htr"]
+
+
+def test_uniform_review_frame_selection_is_fixed_size_and_can_retain_an_anchor() -> None:
+    selected = select_review_frame_indices(3207, 100)
+    assert len(selected) == 100
+    assert selected[0] == 0
+    assert selected[-1] == 3206
+    assert selected == tuple(sorted(set(selected)))
+    assert set(b - a for a, b in zip(selected, selected[1:])) <= {32, 33}
+
+    with_anchor = select_review_frame_indices(
+        3207,
+        100,
+        retain_frame_ordinals=(258,),
+    )
+    assert len(with_anchor) == 100
+    assert 257 in with_anchor
+    assert with_anchor[0] == 0
+    assert with_anchor[-1] == 3206
+
+
+def test_report_limits_only_review_assets_and_keeps_full_provenance(
+    tmp_path: Path, bundle: SyntheticBundle,
+) -> None:
+    report = build_report(
+        bundle.archive,
+        bundle.prediction_paths,
+        bundle.spec_paths,
+        tmp_path / "sampled-report",
+        review_frame_count=3,
+        retain_frame_ordinals=(2,),
+    )
+    payload = load_report_payload(report)
+    assert payload["config"]["count"] == len(bundle.rows)
+    assert payload["times"] == pytest.approx(ELAPSED)
+    assert payload["capture_sequences"] == SEQUENCES
+    assert payload["config"]["review_frame_indices"] == [0, 1, 5]
+    review_asset = payload["config"]["dataset"]["review_asset"]
+    assert review_asset["frame_count"] == 3
+    assert review_asset["frame_ordinals"] == [1, 2, 6]
+    assert review_asset["sampling"] == "uniform_saved_frame_index"
+    assert sorted(path.name for path in (report.parent / "images").iterdir()) == [
+        "frame_0001.webp",
+        "frame_0002.webp",
+        "frame_0006.webp",
+    ]
 
 
 def test_report_uses_only_local_assets(

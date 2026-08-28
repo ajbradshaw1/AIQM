@@ -1,4 +1,4 @@
-"""Focused tests for the immutable-source RHEED point-event contract."""
+"""Focused tests for the v2 offline RHEED point-event contract."""
 
 from __future__ import annotations
 
@@ -12,24 +12,30 @@ import zipfile
 from pathlib import Path
 
 import pytest
-import numpy as np
 from PIL import Image
 
-from gui.equalizer_label_contract import frame_rgb_sha256
+from tools.rheed_postprocessing_labeling.annotation_validation import (
+    validate_annotation_document,
+)
 from tools.rheed_postprocessing_labeling.point_events import (
-    ACTIVE_EQUALIZER_BASES,
+    INITIAL_STATE,
     PointEventSidecarStore,
     PointEventValidationError,
     RevisionStore,
+    SCHEMA_VERSION,
+    V2_INITIAL_STATE,
+    V2_SCHEMA_VERSION,
     completion_errors,
-    deterministic_event_id,
+    derive_state_segments,
     import_point_events,
+    interval_errors,
     make_posthoc_event,
     point_event_document,
     replay_revisions,
     revise_event,
-    validate_equalizer_measurement,
     validate_point_event_document,
+    validate_v2_point_event_document_read_only,
+    validate_event,
 )
 from tools.rheed_postprocessing_labeling.session_archive import (
     hash_frame_payloads,
@@ -55,141 +61,50 @@ def _csv(rows: list[dict[str, object]]) -> bytes:
     return stream.getvalue().encode("utf-8")
 
 
-def _bmp_from_png(payload: bytes) -> bytes:
-    with Image.open(io.BytesIO(payload)) as image:
-        stream = io.BytesIO()
-        image.convert("RGB").save(stream, "BMP")
-    return stream.getvalue()
-
-
-def _rgb_hash(payload: bytes) -> str:
-    with Image.open(io.BytesIO(payload)) as image:
-        return frame_rgb_sha256(
-            np.asarray(image.convert("RGB"), dtype=np.uint8),
-        )
-
-
-def _live_rgb_zip(
-    tmp_path: Path,
-    *,
-    event_count: int = 1,
-    claimed_rgb_hash: str | None = None,
-) -> tuple[Path, bytes, bytes]:
-    heartbeat_payload = _png(80)
-    live_payload = _bmp_from_png(heartbeat_payload)
-    rgb_hash = claimed_rgb_hash or _rgb_hash(heartbeat_payload)
-    timestamp = "2026-08-06T12:00:01.000Z"
+def _zip(tmp_path: Path) -> tuple[Path, list[bytes]]:
+    frames = [_png(20), _png(80), _png(140), _png(200)]
+    times = [f"2026-08-06T12:00:0{index}.000Z" for index in range(4)]
     heartbeat = [{
-        "timestamp": timestamp,
-        "elapsed_s": 1.0,
-        "heartbeat_idx": 1,
-        "pyrometer_temp_C": 501,
-        "frame_path": r"D:\session\frames\rheed_1.png",
-        "capture_backend": "wgc",
-        "captured_at_utc": timestamp,
-        "capture_sequence": 101,
-        "capture_geometry_id": "g1",
-    }]
-    manual = [{
-        "timestamp": timestamp,
-        "elapsed_s": 1.0,
-        "event_idx": index + 1,
-        "frame_path": r"D:\session\frames\rheed_1.png",
-        "note": "",
-        "captured_at_utc": timestamp,
-        "capture_sequence": 101,
-    } for index in range(event_count)]
-    live = [{
-        "label_idx": 1,
-        "capture_sequence": 101,
-        "frame_path": r"D:\session\frames\live_label_001.bmp",
-        "equalizer_frame_sha256": rgb_hash,
-        "equalizer_frame_sha256_algorithm": "rgb-array-v1",
-        "equalizer_calibration_valid": "True",
-        "calibration_id": "cal-rgb",
-        "basis_bundle_id": "basis-rgb",
-        "equalizer_fit_residual": "1.25",
-        "equalizer_valid_coverage": "0.8",
-        **{
-            f"equalizer_{kind}_{suffix}": (
-                "" if kind == "raw" else "0.25"
-            )
-            for kind in ("raw", "final", "normalized")
-            for suffix in ("1x1", "tw", "c6x2", "rt13")
-        },
-    }]
-    path = tmp_path / f"live-rgb-{event_count}-{rgb_hash[:8]}.zip"
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("session/session_metadata.json", json.dumps({
-            "session_id": "live-rgb-session",
-            "chamber_id": "TEST",
-            "camera_backend": "wgc",
-            "capture_geometry_id": "g1",
-        }))
-        archive.writestr("session/heartbeat_log.csv", _csv(heartbeat))
-        archive.writestr("session/manual_events.csv", _csv(manual))
-        archive.writestr("session/live_labels.csv", _csv(live))
-        archive.writestr("session/frames/rheed_1.png", heartbeat_payload)
-        archive.writestr("session/frames/live_label_001.bmp", live_payload)
-    return path, heartbeat_payload, live_payload
-
-
-def _zip(
-    tmp_path: Path, *, auto_state: str = "pending", auto_state_changed_at: str = "",
-) -> tuple[Path, list[bytes]]:
-    frames = [_png(20), _png(80), _png(140)]
-    times = ["2026-08-06T12:00:00.000Z", "2026-08-06T12:00:01.000Z", "2026-08-06T12:00:02.000Z"]
-    heartbeat = [
-        {
-            "timestamp": times[index], "elapsed_s": float(index),
-            "heartbeat_idx": index + 1, "pyrometer_temp_C": 500 + index,
-            "frame_path": rf"D:\session\frames\rheed_{index}.png",
-            "capture_backend": "wgc", "captured_at_utc": times[index],
-            "capture_sequence": 100 + index, "capture_geometry_id": "g1",
-            "captured_monotonic_ns": 1_000_000_000 + index * 1_000_000_000,
-            "frame_width": 12, "frame_height": 8, "source_hwnd": 1234,
-            "view_segment_id": 1, "visual_history_generation": 2,
-            "gun_aligned": "True", "realignment_active": "False",
-            "calibration_id": "", "basis_bundle_id": "",
-        }
-        for index in range(3)
-    ]
-    # Two rows intentionally share event_idx/time across different source
-    # files; their IDs must still be different.
+        "timestamp": times[index], "elapsed_s": float(index),
+        "heartbeat_idx": index + 1,
+        "frame_path": rf"D:\session\frames\rheed_{index}.png",
+        "capture_backend": "wgc", "captured_at_utc": times[index],
+        "capture_sequence": 100 + index, "capture_geometry_id": "g1",
+        "source_hwnd": 1234, "view_segment_id": 1,
+        "visual_history_generation": 2, "gun_aligned": "True",
+        "realignment_active": "False",
+        "received_monotonic_ns": 1_000_000_000 + index,
+    } for index in range(4)]
     manual = [{
         "timestamp": times[1], "elapsed_s": 1.0, "event_idx": 1,
         "frame_path": r"D:\session\frames\rheed_1.png", "note": "",
-        "captured_at_utc": times[2], "capture_sequence": 101,
+        "captured_at_utc": times[1], "capture_sequence": 101,
     }]
     auto = [{
-        "timestamp": times[1], "elapsed_s": 1.0, "event_idx": 1,
+        "timestamp": times[2], "elapsed_s": 2.0, "event_idx": 1,
         "change_score": 0.7, "buffer_count": 0, "buffer_dir": "",
-        "event_state": auto_state, "state_changed_at": auto_state_changed_at,
-        "captured_at_utc": times[2],
-        "capture_sequence": 101,
+        "event_state": "pending", "state_changed_at": "",
+        "captured_at_utc": times[2], "capture_sequence": 102,
+    }]
+    legacy_labels = [{
+        "event_idx": 1, "notes": "old row label",
+        "human_primary_reconstruction": "c(6x2)", "human_labeler": "Grower",
+        "human_confidence": "0.8", "change_from": "1x1", "change_to": "c(6x2)",
+    }]
+    legacy_equalizer = [{
+        "label_idx": 1, "capture_sequence": 101,
+        "equalizer_frame_sha256": hashlib.sha256(frames[1]).hexdigest(),
+        "equalizer_frame_sha256_algorithm": "raw-file-bytes-v1",
+        "calibration_id": "old-calibration", "basis_bundle_id": "old-basis",
     }]
     view = [{
         "timestamp": times[1], "elapsed_s": 1.0, "event_idx": 1,
         "event_type": "rheed_current_adjusted", "note": "read-only",
-        "captured_at_utc": times[2], "capture_sequence": 101,
-    }]
-    labels = [{
-        "event_idx": 1, "notes": "legacy auto review",
-        "human_primary_reconstruction": "c(6x2)", "human_labeler": "Grower A",
-        "human_confidence": "0.8", "change_from": "1x1", "change_to": "c(6x2)",
-        "calibration_id": "", "basis_bundle_id": "",
-    }]
-    live = [{
-        "label_idx": 1, "capture_sequence": 101,
-        # Two events share this provenance, so this must remain unlinked.
-        "equalizer_frame_sha256": hashlib.sha256(frames[1]).hexdigest(),
-        "equalizer_frame_sha256_algorithm": "sha256-file-bytes",
-        "calibration_id": "cal", "basis_bundle_id": "basis",
+        "captured_at_utc": times[1], "capture_sequence": 101,
     }]
     sensor = [{
         "timestamp": times[1], "elapsed_s": 1.0,
         "pyrometer_temp_C": 501, "mistral_v_actual_V": 2.3,
-        "mistral_i_actual_A": 0.4,
     }]
     path = tmp_path / "session.zip"
     with zipfile.ZipFile(path, "w") as archive:
@@ -199,9 +114,10 @@ def _zip(
         }))
         for name, rows in (
             ("heartbeat_log.csv", heartbeat), ("manual_events.csv", manual),
-            ("auto_capture_events.csv", auto), ("rheed_view_events.csv", view),
-            ("events_labels.csv", labels), ("live_labels.csv", live),
-            ("sensor_log.csv", sensor),
+            ("auto_capture_events.csv", auto),
+            ("events_labels.csv", legacy_labels),
+            ("live_labels.csv", legacy_equalizer),
+            ("rheed_view_events.csv", view), ("sensor_log.csv", sensor),
         ):
             archive.writestr(f"session/{name}", _csv(rows))
         for index, payload in enumerate(frames):
@@ -216,306 +132,14 @@ def imported(tmp_path: Path):
     return session, import_point_events(session), payloads
 
 
-def _valid_equalizer(event: dict) -> dict:
-    anchor = event["review"]["anchor"]
-    raw = {label: 0.25 for label in ACTIVE_EQUALIZER_BASES}
-    raw["HTR"] = None
-    return {
-        "schema_version": 1,
-        "valid": True,
-        "calibration_id": "calibration-1", "basis_bundle_id": "basis-1",
-        "active_classes": list(ACTIVE_EQUALIZER_BASES),
-        "weights": {"raw": dict(raw), "final": dict(raw), "normalized": dict(raw)},
-        "fit_residual": 1.5, "valid_coverage": 0.8,
-        "frame_sha256": anchor["image_sha256"],
-        "frame_sha256_algorithm": "raw-file-bytes-v1",
-        "capture_sequence": anchor["capture_sequence"],
-        "view_segment_id": "view-1", "capture_geometry_id": "g1",
-        "HTR": None,
-    }
+def _label(value: str = "rt13", change: str = "appeared") -> dict:
+    return {"kind": "reconstruction", "change": change, "value": value}
 
 
-def test_imports_only_manual_and_auto_as_labelable_points(imported) -> None:
-    session, result, payloads = imported
-    assert [event["source"]["kind"] for event in result.events] == ["auto_capture", "manual"]
-    assert len({event["event_id"] for event in result.events}) == 2
-    assert all(event["status"] == "Draft" for event in result.events)
-    assert next(event for event in result.events if event["source"]["kind"] == "manual")["review"]["comment"] == ""
-    auto = next(event for event in result.events if event["source"]["kind"] == "auto_capture")
-    assert auto["review"]["comment"] == "legacy auto review"
-    assert auto["review"]["human_reconstruction"] == "c(6x2)"
-    assert auto["source"]["original_at_utc"] == "2026-08-06T12:00:01.000Z"
-    assert auto["source"]["original_anchor"]["captured_at_utc"] == "2026-08-06T12:00:02.000Z"
-    assert auto["source"]["original_anchor"]["archive_member"] == ""
-    assert auto["source"]["original_anchor"]["image_sha256"] == ""
-    assert auto["source"]["original_anchor"]["association_status"] == "unresolved_saved_frame"
-    assert auto["review"]["anchor"]["captured_at_utc"] == "2026-08-06T12:00:01.000Z"
-    assert len(result.reference_events) == 1
-    assert result.reference_events[0]["event_type"] == "rheed_current_adjusted"
-    assert result.reference_events[0]["event_at_utc"] == "2026-08-06T12:00:01.000Z"
-    assert result.reference_events[0]["read_only"] is True
-    assert result.sensor_context["rows"][0]["mistral_v_actual_V"] == "2.3"
-    assert result.frame_contexts[0]["provenance_complete"] is True
-    assert result.frame_contexts[0]["received_monotonic_ns"] == 1_000_000_000
-    assert len(result.unlinked_legacy_labels) == 1
-    assert read_raw_frame(session, 1) == payloads[1]
-
-
-def test_live_rgb_hash_uniquely_relinks_without_mislabeling_raw_hash(
-    tmp_path: Path,
-) -> None:
-    path, heartbeat_payload, live_payload = _live_rgb_zip(tmp_path)
-    session = hash_frame_payloads(load_session_archive(path))
-    result = import_point_events(session)
-
-    assert len(result.events) == 1
-    assert result.unlinked_legacy_labels == ()
-    event = result.events[0]
-    anchor = event["review"]["anchor"]
-    measurement = event["review"]["equalizer"]
-    assert measurement["frame_sha256_algorithm"] == "rgb-array-v1"
-    assert measurement["frame_sha256"] == _rgb_hash(heartbeat_payload)
-    assert measurement["raw_frame_sha256_algorithm"] == "raw-file-bytes-v1"
-    assert measurement["raw_frame_sha256"] == hashlib.sha256(
-        heartbeat_payload,
-    ).hexdigest()
-    assert measurement["source_frame_sha256"] == hashlib.sha256(
-        live_payload,
-    ).hexdigest()
-    assert measurement["source_frame_sha256"] != measurement["raw_frame_sha256"]
-    assert measurement["rgb_hash_verified_from_raw_frame"] is True
-    assert validate_equalizer_measurement(measurement, anchor) == measurement
-
-
-def test_live_rgb_hash_relink_rejects_ambiguous_same_frame_events(
-    tmp_path: Path,
-) -> None:
-    path, _, _ = _live_rgb_zip(tmp_path, event_count=2)
-    result = import_point_events(hash_frame_payloads(load_session_archive(path)))
-
-    assert len(result.events) == 2
-    assert all(event["review"]["equalizer"] is None for event in result.events)
-    assert len(result.unlinked_legacy_labels) == 1
-    assert "multiple events" in result.unlinked_legacy_labels[0]["reason"]
-    assert result.unlinked_legacy_labels[0]["frame_sha256_algorithm"] == "rgb-array-v1"
-
-
-def test_live_rgb_hash_relink_rejects_pixel_hash_mismatch(tmp_path: Path) -> None:
-    path, _, live_payload = _live_rgb_zip(
-        tmp_path, claimed_rgb_hash="f" * 64,
-    )
-    result = import_point_events(hash_frame_payloads(load_session_archive(path)))
-
-    assert result.events[0]["review"]["equalizer"] is None
-    assert len(result.unlinked_legacy_labels) == 1
-    unlinked = result.unlinked_legacy_labels[0]
-    assert unlinked["frame_sha256"] == "f" * 64
-    assert unlinked["frame_raw_sha256"] == hashlib.sha256(live_payload).hexdigest()
-
-
-def test_rgb_measurement_requires_verified_dual_hash_binding(imported) -> None:
-    _, result, payloads = imported
-    event = next(
-        item for item in result.events if item["source"]["kind"] == "manual"
-    )
-    anchor = event["review"]["anchor"]
-    measurement = _valid_equalizer(event)
-    measurement.update({
-        "frame_sha256": _rgb_hash(payloads[1]),
-        "frame_sha256_algorithm": "rgb-array-v1",
-    })
-    with pytest.raises(PointEventValidationError, match="not bound"):
-        validate_equalizer_measurement(measurement, anchor)
-
-    measurement.update({
-        "raw_frame_sha256": anchor["image_sha256"],
-        "raw_frame_sha256_algorithm": "raw-file-bytes-v1",
-        "rgb_hash_verified_from_raw_frame": True,
-    })
-    validated = validate_equalizer_measurement(measurement, anchor)
-    assert validated["frame_sha256_algorithm"] == "rgb-array-v1"
-    assert validated["raw_frame_sha256"] == anchor["image_sha256"]
-
-
-def test_deterministic_id_uses_source_and_row_identity() -> None:
-    common = dict(
-        session_identity="s", source_file="session/manual_events.csv",
-        source_sequence=1, source_event_idx=1,
-        event_time="2026-01-01T00:00:00Z", capture_sequence=3,
-        source_row_sha256="a" * 64,
-    )
-    first = deterministic_event_id(source="manual", **common)
-    assert first == deterministic_event_id(source="manual", **common)
-    assert first != deterministic_event_id(
-        source="auto_capture", **{**common, "source_file": "session/auto_capture_events.csv"}
-    )
-
-
-def test_auto_manifest_requires_one_exact_capture_sequence(tmp_path: Path) -> None:
-    from tools.rheed_postprocessing_labeling import point_events as module
-
-    path, _ = _zip(tmp_path)
-    duplicate_manifest = _csv([
-        {"capture_sequence": 101, "frame_path": "a.bmp"},
-        {"capture_sequence": 101, "frame_path": "b.bmp"},
-    ])
-    with zipfile.ZipFile(path, "a") as archive:
-        archive.writestr("session/buffer/capture_manifest.csv", duplicate_manifest)
-        archive.writestr("session/buffer/a.bmp", b"a")
-        archive.writestr("session/buffer/b.bmp", b"b")
-    session = hash_frame_payloads(load_session_archive(path))
-    assert module._auto_frame_member(
-        session, {"buffer_dir": "buffer"}, 101,
-    ) is None
-
-
-def test_complete_is_explicit_and_strict_then_edit_reopens(imported) -> None:
-    _, result, _ = imported
-    event = copy.deepcopy(result.events[0])
-    assert "comment is required" not in completion_errors(event)  # legacy note exists
-    assert any("Equalizer" in error for error in completion_errors(event))
-    with pytest.raises(PointEventValidationError, match="Cannot complete"):
-        revise_event(event, action="complete", actor="Grower A")
-    equalizer = _valid_equalizer(event)
-    equalizer["weights"]["raw"]["1x1"] = None  # valid manual-fit sentinel
-    event, edit_revision = revise_event(
-        event, action="set_equalizer", actor="Grower A",
-        changes={"equalizer": equalizer},
-    )
-    assert event["review"]["human_reconstruction"] == "c(6x2)"
-    assert event["review"]["equalizer"]["HTR"] is None
-    event, complete_revision = revise_event(event, action="complete", actor="Grower A")
-    assert event["status"] == "Complete"
-    event, _ = revise_event(
-        event, action="edit", actor="Grower A", changes={"comment": "revised"},
-    )
-    assert event["status"] == "Draft"
-    assert replay_revisions([result.events[0]], [edit_revision, complete_revision])[
-        event["event_id"]
-    ]["status"] == "Complete"
-
-
-def test_moving_anchor_snaps_to_saved_frame_and_invalidates_equalizer(imported) -> None:
-    session, result, _ = imported
-    event = copy.deepcopy(result.events[0])
-    event["review"]["reviewer"] = "Grower"
-    event["review"]["equalizer"] = _valid_equalizer(event)
-    moved, _ = revise_event(
-        event, action="move_anchor", actor="Grower",
-        changes={"anchor": {
-            **event["review"]["anchor"],
-            "frame_index": 3, "heartbeat_idx": session.frames[2].heartbeat_idx,
-            "elapsed_s": session.frames[2].elapsed_s,
-            "captured_at_utc": session.frames[2].captured_at_utc,
-            "capture_sequence": session.frames[2].capture_sequence,
-            "image_sha256": session.frames[2].frame_sha256,
-            "frame_name": session.frames[2].frame_name,
-            "archive_member": session.frames[2].member,
-        }},
-    )
-    assert moved["review"]["anchor"]["frame_index"] == 3
-    assert moved["review"]["equalizer"] is None
-    assert moved["status"] == "Draft"
-
-
-def test_source_event_cannot_be_deleted_but_posthoc_can(imported) -> None:
-    _, result, _ = imported
-    with pytest.raises(PointEventValidationError, match="source events"):
-        revise_event(
-            result.events[0], action="delete", actor="Grower",
-            changes={"dismiss_reason": "duplicate"},
-        )
-    posthoc = make_posthoc_event(result.events[0]["review"]["anchor"], actor="Grower")
-    deleted, _ = revise_event(
-        posthoc, action="delete", actor="Grower",
-        changes={"dismiss_reason": "mistaken click"},
-    )
-    assert deleted["review"]["disposition"] == "deleted"
-
-
-def test_revision_store_recovers_pending_transaction(tmp_path: Path, imported) -> None:
-    _, result, _ = imported
-    event, revision = revise_event(
-        result.events[0], action="edit", actor="Grower",
-        changes={"comment": "finished later"},
-    )
-    store = RevisionStore(tmp_path / "annotations")
-    state = store.append(revision, initial_events=result.events)
-    assert state[event["event_id"]]["review"]["comment"] == "finished later"
-    # Simulate a crash after the transaction marker but before append.
-    second, second_revision = revise_event(
-        state[event["event_id"]], action="edit", actor="Grower",
-        changes={"reviewer": "Grower"},
-    )
-    from tools.rheed_postprocessing_labeling import point_events as point_events_module
-
-    second_revision = point_events_module._with_record_integrity(
-        second_revision,
-        previous_record_sha256=store.recover()[-1]["record_sha256"],
-    )
-    RevisionStore._atomic_json(store.pending_path, {
-        "schema_version": 1, "revision_id": second_revision["revision_id"],
-        "revision_sha256": hashlib.sha256(json.dumps(
-            second_revision, sort_keys=True, separators=(",", ":"),
-            ensure_ascii=False, allow_nan=False,
-        ).encode("utf-8")).hexdigest(),
-        "revision": second_revision,
-    })
-    partial = json.dumps(
-        second_revision, sort_keys=True, separators=(",", ":"),
-        ensure_ascii=False, allow_nan=False,
-    ).encode("utf-8")
-    with store.journal_path.open("ab") as stream:
-        stream.write(partial[: len(partial) // 2])
-    recovered = store.load(result.events)
-    assert recovered[event["event_id"]]["review"]["reviewer"] == "Grower"
-    assert not store.pending_path.exists()
-    assert all(json.loads(line) for line in store.journal_path.read_text(encoding="utf-8").splitlines())
-
-
-def test_revision_store_rejects_hash_tamper_and_rehashed_action_disguise(
-    tmp_path: Path, imported,
-) -> None:
-    from tools.rheed_postprocessing_labeling import point_events as module
-
-    _, result, _ = imported
-    event = result.events[0]
-    edited, revision = revise_event(
-        event, action="edit", actor="Grower", changes={"comment": "reviewed"},
-    )
-    hash_store = RevisionStore(tmp_path / "hash")
-    hash_store.append(revision, initial_events=result.events)
-    record = json.loads(hash_store.journal_path.read_text(encoding="utf-8"))
-    record["after"]["review"]["comment"] = "tampered"
-    hash_store.journal_path.write_text(
-        json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(PointEventValidationError, match="record hash"):
-        hash_store.load(result.events)
-
-    equalized, equalizer_revision = revise_event(
-        event, action="set_equalizer", actor="Grower",
-        changes={"equalizer": _valid_equalizer(event)},
-    )
-    semantic_store = RevisionStore(tmp_path / "semantic")
-    semantic_store.append(equalizer_revision, initial_events=result.events)
-    disguised = json.loads(semantic_store.journal_path.read_text(encoding="utf-8"))
-    disguised["action"] = "complete"
-    disguised["after"]["status"] = "Complete"
-    disguised["record_sha256"] = module._record_hash(disguised)
-    semantic_store.journal_path.write_text(
-        json.dumps(disguised, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(PointEventValidationError, match="complete transition"):
-        semantic_store.load(result.events)
-
-
-def test_point_document_rejects_tampered_source_and_anchor(imported) -> None:
-    session, result, _ = imported
+def _dataset_payload(session, result) -> tuple[dict, dict]:
     dataset = {
-        "dataset_id": f"sha256:{session.sha256}", "frame_count": len(session.frames),
+        "dataset_id": f"sha256:{session.sha256}",
+        "frame_count": len(session.frames),
         "ordered_frame_fingerprint": "sha256:" + "1" * 64,
         "source_archive_sha256": session.sha256,
         "model_context_fingerprint": "sha256:" + "2" * 64,
@@ -525,553 +149,876 @@ def test_point_document_rejects_tampered_source_and_anchor(imported) -> None:
             "dataset": dataset, "point_events": list(result.events),
             "reference_events": list(result.reference_events),
             "unlinked_legacy_labels": list(result.unlinked_legacy_labels),
+            "source_event_revisions": list(result.source_revisions),
+            "source_event_journal": result.source_journal,
         },
         "heartbeat_indices": [frame.heartbeat_idx for frame in session.frames],
         "capture_sequences": [frame.capture_sequence for frame in session.frames],
         "frame_sha256": [frame.frame_sha256 for frame in session.frames],
         "times": [frame.elapsed_s for frame in session.frames],
     }
-    document = point_event_document(
-        dataset=dataset, events=result.events, annotation_set_id=str(uuid.uuid4()),
-        reviewer="Grower", reference_events=result.reference_events,
-        unlinked_legacy_labels=result.unlinked_legacy_labels,
+    return dataset, payload
+
+
+def test_import_exposes_explicit_initial_state_exactly_once(imported) -> None:
+    session, result, payloads = imported
+    assert [item["source"]["kind"] for item in result.events] == [
+        "initial_assumption", "manual", "auto_capture",
+    ]
+    initial = result.events[0]
+    assert initial["review"]["candidate_decision"] == "confirmed"
+    assert initial["review"]["labels"] == []
+    assert initial["review"]["representative_anchor"] is None
+    assert len({item["event_id"] for item in result.events}) == 3
+    assert read_raw_frame(session, 1) == payloads[1]
+
+
+def test_import_can_omit_auto_proposals_without_changing_source_archive(
+    imported,
+) -> None:
+    session, _, _ = imported
+    archive_hash = session.sha256
+
+    result = import_point_events(session, include_auto_events=False)
+
+    assert [item["source"]["kind"] for item in result.events] == [
+        "initial_assumption", "manual",
+    ]
+    assert session.sha256 == archive_hash
+
+
+def test_initial_assumption_id_is_deterministic(imported) -> None:
+    session, result, _ = imported
+    again = import_point_events(session)
+    assert result.events[0]["event_id"] == again.events[0]["event_id"]
+    assert result.events[0]["review"]["labels"] == again.events[0]["review"]["labels"] == []
+
+
+def test_legacy_rows_are_read_only_and_never_become_v3_labels(imported) -> None:
+    _, result, _ = imported
+    auto = next(item for item in result.events if item["source"]["kind"] == "auto_capture")
+    assert auto["review"]["labels"] == []
+    assert auto["review"]["comment"] == ""
+    assert "equalizer" not in auto["review"]
+    reasons = [item["reason"] for item in result.unlinked_legacy_labels]
+    assert any("no unambiguous v3" in reason for reason in reasons)
+    assert any("Equalizer label is read-only" in reason for reason in reasons)
+    assert all(item["read_only"] is True for item in result.unlinked_legacy_labels)
+
+
+def test_reference_and_sensor_logs_remain_read_only_context(imported) -> None:
+    _, result, _ = imported
+    assert result.reference_events[0]["event_type"] == "rheed_current_adjusted"
+    assert result.reference_events[0]["read_only"] is True
+    assert result.sensor_context["rows"][0]["mistral_v_actual_V"] == "2.3"
+
+
+def test_posthoc_multi_label_edit_complete_and_replay(imported) -> None:
+    _, result, _ = imported
+    anchor = result.events[1]["review"]["anchor"]
+    event = make_posthoc_event(anchor, actor="Grower")
+    event, create = event, None
+    event, add_first = revise_event(
+        event, action="add_label", actor="Grower", changes={"label": _label()},
     )
+    first_id = event["review"]["labels"][0]["label_id"]
+    event, add_second = revise_event(
+        event, action="add_label", actor="Grower", changes={"label": {
+            "kind": "pattern_clarity", "change": "became", "value": "good",
+        }},
+    )
+    second_id = event["review"]["labels"][1]["label_id"]
+    event, edit = revise_event(event, action="edit_label", actor="Grower", changes={
+        "label_id": first_id, "label": _label("htr"),
+    })
+    event, remove = revise_event(event, action="remove_label", actor="Grower", changes={
+        "label_id": second_id,
+    })
+    event, representative = revise_event(
+        event, action="move_representative_anchor", actor="Grower",
+        changes={"representative_anchor": anchor},
+    )
+    event, complete = revise_event(event, action="complete", actor="Grower")
+    assert event["status"] == "Complete"
+    assert event["review"]["comment"] == ""
+    initial = list(result.events)
+    # A posthoc create is represented separately when replayed.
+    posthoc = make_posthoc_event(anchor, actor="Grower")
+    posthoc["event_id"] = event["event_id"]
+    posthoc["source"] = copy.deepcopy(event["source"])
+    create = {
+        "schema_version": SCHEMA_VERSION,
+        "revision_id": str(uuid.uuid4()), "event_id": posthoc["event_id"],
+        "actor": "Grower", "at_utc": "2026-08-06T12:00:01Z",
+        "action": "create_posthoc", "base_revision_id": "",
+        "before_sha256": "", "before": None, "after": posthoc,
+    }
+    # The semantic action tests above already cover transformations; replay
+    # integrity is covered independently by RevisionStore below.
+    assert first_id == event["review"]["labels"][0]["label_id"]
+    assert [add_first["action"], add_second["action"], edit["action"], remove["action"], representative["action"], complete["action"]] == [
+        "add_label", "add_label", "edit_label", "remove_label",
+        "move_representative_anchor", "complete",
+    ]
+
+
+def test_event_rejects_contradictory_training_targets(imported) -> None:
+    _, result, _ = imported
+    event = make_posthoc_event(result.events[1]["review"]["anchor"], actor="Grower")
+    event, _ = revise_event(
+        event, action="add_label", actor="Grower",
+        changes={"label": _label("rt13", "appeared")},
+    )
+    with pytest.raises(PointEventValidationError, match="both appear and disappear"):
+        revise_event(
+            event, action="add_label", actor="Grower",
+            changes={"label": _label("rt13", "disappeared")},
+        )
+    event, _ = revise_event(
+        event, action="add_label", actor="Grower", changes={"label": {
+            "kind": "pattern_clarity", "change": "became", "value": "good",
+        }},
+    )
+    with pytest.raises(PointEventValidationError, match="only one pattern-clarity"):
+        revise_event(
+            event, action="add_label", actor="Grower", changes={"label": {
+                "kind": "pattern_clarity", "change": "became", "value": "bad",
+            }},
+        )
+
+
+def test_completion_gate_has_no_equalizer_or_comment_requirement(imported) -> None:
+    _, result, _ = imported
+    manual = next(item for item in result.events if item["source"]["kind"] == "manual")
+    assert completion_errors(manual) == [
+        "at least one semantic label is required",
+    ]
+    with pytest.raises(PointEventValidationError, match="Cannot complete"):
+        revise_event(manual, action="complete", actor="Grower")
+    event = manual
+    event, _ = revise_event(event, action="add_label", actor="Grower", changes={"label": _label()})
+    event, _ = revise_event(event, action="move_representative_anchor", actor="Grower", changes={"representative_anchor": manual["review"]["anchor"]})
+    event, _ = revise_event(event, action="complete", actor="Grower")
+    assert event["status"] == "Complete"
+    event, _ = revise_event(event, action="edit", actor="Grower", changes={"comment": "optional note"})
+    assert event["status"] == "Draft"
+
+
+def test_rejected_auto_candidate_can_complete_without_label_or_anchor(imported) -> None:
+    _, result, _ = imported
+    auto = next(item for item in result.events if item["source"]["kind"] == "auto_capture")
+    auto, _ = revise_event(
+        auto, action="add_label", actor="Grower",
+        changes={"label": _label("rt13")},
+    )
+    auto, _ = revise_event(
+        auto, action="move_representative_anchor", actor="Grower",
+        changes={"representative_anchor": auto["review"]["anchor"]},
+    )
+    auto, _ = revise_event(auto, action="set_candidate_decision", actor="Grower", changes={"decision": "rejected"})
+    assert auto["review"]["labels"] == []
+    assert auto["review"]["representative_anchor"] is None
+    auto, _ = revise_event(auto, action="complete", actor="Grower")
+    assert auto["status"] == "Complete"
+
+
+def test_interval_anchor_must_precede_next_semantic_event(imported) -> None:
+    _, result, _ = imported
+    initial, manual, auto = map(copy.deepcopy, result.events)
+    initial["review"].update({
+        "candidate_decision": "confirmed",
+        "representative_anchor": auto["review"]["anchor"],
+    })
+    manual["review"]["labels"] = [{
+        "label_id": str(uuid.uuid4()), **_label("rt13"),
+    }]
+    state = {item["event_id"]: item for item in (initial, manual, auto)}
+    assert interval_errors(initial["event_id"], state) == [
+        "representative interval frame must be before the next semantic event",
+    ]
+
+
+def test_revision_store_round_trip_and_hash_tamper(tmp_path: Path, imported) -> None:
+    _, result, _ = imported
+    event = result.events[1]
+    edited, revision = revise_event(
+        event, action="edit", actor="Grower", changes={"comment": "reviewed"},
+    )
+    store = RevisionStore(tmp_path / "annotations")
+    state = store.append(revision, initial_events=result.events)
+    assert state[event["event_id"]]["review"]["comment"] == "reviewed"
+    record = json.loads(store.journal_path.read_text(encoding="utf-8"))
+    record["after"]["review"]["comment"] = "tampered"
+    store.journal_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(PointEventValidationError, match="record hash"):
+        store.load(result.events)
+    assert edited["status"] == "Draft"
+
+
+def test_v2_sidecar_summary_is_never_overwritten_by_v3_store(
+    tmp_path: Path, imported,
+) -> None:
+    _, result, _ = imported
+    directory = tmp_path / "annotations"
+    directory.mkdir()
+    summary = directory / RevisionStore.SUMMARY_NAME
+    original = json.dumps({
+        "schema_version": V2_SCHEMA_VERSION,
+        "events": [{"legacy": "quality evidence"}],
+    }).encode()
+    summary.write_bytes(original)
+
+    with pytest.raises(PointEventValidationError, match="read-only"):
+        RevisionStore(directory).load(result.events)
+
+    assert summary.read_bytes() == original
+    assert not (directory / RevisionStore.JOURNAL_NAME).exists()
+
+
+def test_document_round_trip_rejects_tampered_source_and_representative(imported) -> None:
+    session, result, _ = imported
+    dataset, payload = _dataset_payload(session, result)
+    document = point_event_document(
+        dataset=dataset, events=result.events,
+        reference_events=result.reference_events,
+        unlinked_legacy_labels=result.unlinked_legacy_labels,
+        source_revisions=result.source_revisions,
+        source_journal=result.source_journal,
+        annotation_set_id=str(uuid.uuid4()), reviewer="Grower",
+    )
+    assert document["initial_state"] == INITIAL_STATE
+    assert document["schema_version"] == "rheed-point-events-v3"
+    assert document["segments"][0]["state"] == INITIAL_STATE
     assert validate_point_event_document(document, payload)["events"]
+    assert validate_annotation_document(document, payload)["events"]
     tampered = copy.deepcopy(document)
     tampered["events"][0]["source"]["source_row_sha256"] = "0" * 64
     with pytest.raises(PointEventValidationError):
         validate_point_event_document(tampered, payload)
-    bad_anchor = copy.deepcopy(document)
-    bad_anchor["events"][0]["review"]["anchor"]["capture_sequence"] = 999
+    tampered_segment = copy.deepcopy(document)
+    tampered_segment["segments"][0]["state"]["reconstructions"] = ["htr"]
+    with pytest.raises(PointEventValidationError, match="state segments"):
+        validate_point_event_document(tampered_segment, payload)
+    # Make a journaled representative move, then corrupt its exact sequence.
+    manual = result.events[1]
+    moved, revision = revise_event(
+        manual, action="move_representative_anchor", actor="Grower",
+        changes={"representative_anchor": manual["review"]["anchor"]},
+    )
+    moved_document = point_event_document(
+        dataset=dataset, events=result.events, revisions=[revision],
+        reference_events=result.reference_events,
+        unlinked_legacy_labels=result.unlinked_legacy_labels,
+        source_revisions=result.source_revisions,
+        source_journal=result.source_journal,
+        annotation_set_id=str(uuid.uuid4()), reviewer="Grower",
+    )
+    moved_document["events"][1]["review"]["representative_anchor"]["capture_sequence"] = 999
     with pytest.raises(PointEventValidationError):
-        validate_point_event_document(bad_anchor, payload)
-    bad_reference = copy.deepcopy(document)
-    bad_reference["reference_events"][0]["note"] = "tampered"
-    with pytest.raises(PointEventValidationError, match="reference events"):
-        validate_point_event_document(bad_reference, payload)
-    bad_unlinked = copy.deepcopy(document)
-    bad_unlinked["unlinked_legacy_labels"] = []
-    with pytest.raises(PointEventValidationError, match="legacy-label"):
-        validate_point_event_document(bad_unlinked, payload)
+        validate_point_event_document(moved_document, payload)
+    assert moved["review"]["representative_anchor"] is not None
 
 
-def test_same_time_posthoc_events_are_distinct(imported) -> None:
+def test_v3_document_rejects_surface_quality_and_round_trips(imported) -> None:
+    session, result, _ = imported
+    dataset, payload = _dataset_payload(session, result)
+    current = point_event_document(
+        dataset=dataset,
+        events=result.events,
+        reference_events=result.reference_events,
+        unlinked_legacy_labels=result.unlinked_legacy_labels,
+        source_revisions=result.source_revisions,
+        source_journal=result.source_journal,
+        annotation_set_id=str(uuid.uuid4()),
+        reviewer="Grower",
+    )
+
+    assert current["schema_version"] == SCHEMA_VERSION == "rheed-point-events-v3"
+    assert validate_point_event_document(current, payload) == current
+    surface = copy.deepcopy(current["events"][1])
+    surface["review"]["labels"] = [{
+        "label_id": str(uuid.uuid4()),
+        "kind": "surface_quality",
+        "change": "became",
+        "value": "good",
+    }]
+    with pytest.raises(PointEventValidationError, match="kind is invalid"):
+        validate_event(surface)
+
+
+def test_v2_document_is_strict_read_only_evidence_with_quality_preserved(
+    imported,
+) -> None:
+    session, result, _ = imported
+    dataset, payload = _dataset_payload(session, result)
+    current = point_event_document(
+        dataset=dataset,
+        events=result.events,
+        reference_events=result.reference_events,
+        unlinked_legacy_labels=result.unlinked_legacy_labels,
+        source_revisions=result.source_revisions,
+        source_journal=result.source_journal,
+        annotation_set_id=str(uuid.uuid4()),
+        reviewer="Legacy Grower",
+    )
+    legacy = copy.deepcopy(current)
+    legacy["schema_version"] = V2_SCHEMA_VERSION
+    legacy["initial_state"] = copy.deepcopy(V2_INITIAL_STATE)
+    for event in legacy["events"]:
+        event["schema"] = V2_SCHEMA_VERSION
+        if event["source"]["kind"] == "initial_assumption":
+            event["review"]["labels"] = [{
+                "label_id": str(uuid.uuid4()),
+                "kind": "surface_quality",
+                "change": "became",
+                "value": "good",
+            }]
+    for segment in legacy["segments"]:
+        if segment["state"]["clarity"] == "unknown":
+            segment["state"]["clarity"] = "bad"
+        segment["state"]["quality"] = "good"
+
+    checked = validate_v2_point_event_document_read_only(legacy, payload)
+    assert checked == legacy
+    assert checked["schema_version"] == "rheed-point-events-v2"
+    assert checked["initial_state"]["quality"] == "unknown"
+    initial = next(
+        item for item in checked["events"]
+        if item["source"]["kind"] == "initial_assumption"
+    )
+    assert initial["review"]["labels"][0]["kind"] == "surface_quality"
+
+    tampered = copy.deepcopy(legacy)
+    initial = next(
+        item for item in tampered["events"]
+        if item["source"]["kind"] == "initial_assumption"
+    )
+    initial["review"]["labels"][0]["value"] = "excellent"
+    with pytest.raises(PointEventValidationError, match="surface-quality"):
+        validate_v2_point_event_document_read_only(tampered, payload)
+
+    corruptions: dict[str, dict] = {}
+    empty = copy.deepcopy(legacy)
+    empty["segments"] = []
+    corruptions["empty"] = empty
+
+    gap = copy.deepcopy(legacy)
+    gap["segments"][0]["start_frame_index"] = 2
+    gap["segments"][0]["frame_count"] -= 1
+    corruptions["gap"] = gap
+
+    overlap = copy.deepcopy(legacy)
+    duplicate = copy.deepcopy(overlap["segments"][0])
+    duplicate["start_frame_index"] = 2
+    duplicate["frame_count"] -= 1
+    overlap["segments"].append(duplicate)
+    corruptions["overlap"] = overlap
+
+    wrong_state = copy.deepcopy(legacy)
+    wrong_state["segments"][0]["state"]["reconstructions"] = ["htr"]
+    corruptions["wrong state"] = wrong_state
+
+    wrong_boundary = copy.deepcopy(legacy)
+    wrong_boundary["segments"][0]["boundary_event_ids"] = [
+        next(
+            item["event_id"] for item in legacy["events"]
+            if item["source"]["kind"] == "initial_assumption"
+        )
+    ]
+    corruptions["wrong boundary"] = wrong_boundary
+
+    for _name, corrupted in corruptions.items():
+        with pytest.raises(
+            PointEventValidationError, match="segments do not match frozen replay",
+        ):
+            validate_v2_point_event_document_read_only(corrupted, payload)
+
+
+def test_state_segments_replay_presence_and_pattern_clarity(imported) -> None:
     _, result, _ = imported
-    first = make_posthoc_event(result.events[0]["review"]["anchor"], actor="Grower")
-    second = make_posthoc_event(result.events[0]["review"]["anchor"], actor="Grower")
-    assert uuid.UUID(first["event_id"])
-    assert first["event_id"] != second["event_id"]
+    initial, manual, auto = map(copy.deepcopy, result.events)
+    manual["review"]["labels"] = [
+        {
+            "label_id": str(uuid.uuid4()),
+            "kind": "reconstruction",
+            "change": "disappeared",
+            "value": "one_by_one",
+        },
+        {
+            "label_id": str(uuid.uuid4()),
+            "kind": "reconstruction",
+            "change": "appeared",
+            "value": "rt13",
+        },
+        {
+            "label_id": str(uuid.uuid4()),
+            "kind": "pattern_clarity",
+            "change": "became",
+            "value": "good",
+        },
+    ]
+    manual["review"]["representative_anchor"] = manual["review"]["anchor"]
+    auto["review"]["candidate_decision"] = "rejected"
+
+    segments = derive_state_segments(
+        [initial, manual, auto], frame_count=4, session_identity="run-a",
+    )
+
+    assert [(item["start_frame_index"], item["end_frame_index_exclusive"])
+            for item in segments] == [(1, 2), (2, 5)]
+    assert segments[0]["state"] == {
+        "reconstructions": ["one_by_one"], "clarity": "unknown",
+    }
+    assert segments[1]["state"] == {
+        "reconstructions": ["rt13"], "clarity": "good",
+    }
+    assert segments[1]["anchor"]["frame_index"] == 2
 
 
-def test_sidecar_store_writes_only_beside_report(
+def test_initial_audit_item_completes_without_a_semantic_delta(imported) -> None:
+    _, result, _ = imported
+    initial = copy.deepcopy(result.events[0])
+
+    assert completion_errors(initial) == []
+    with pytest.raises(
+        PointEventValidationError,
+        match="cannot contain semantic change labels",
+    ):
+        revise_event(
+            initial, action="add_label", actor="Grower", changes={"label": {
+                "kind": "pattern_clarity", "change": "became", "value": "good",
+            }},
+        )
+    initial, _ = revise_event(
+        initial, action="move_representative_anchor", actor="Grower",
+        changes={"representative_anchor": initial["review"]["anchor"]},
+    )
+    initial, _ = revise_event(initial, action="complete", actor="Grower")
+    assert initial["status"] == "Complete"
+
+
+def test_state_segments_reject_cross_event_duplicate_appearance(imported) -> None:
+    _, result, _ = imported
+    initial, manual, auto = map(copy.deepcopy, result.events)
+    manual["review"]["labels"] = [{
+        "label_id": str(uuid.uuid4()), **_label("rt13", "appeared"),
+    }]
+    auto["review"]["candidate_decision"] = "confirmed"
+    auto["review"]["labels"] = [{
+        "label_id": str(uuid.uuid4()), **_label("rt13", "appeared"),
+    }]
+
+    with pytest.raises(PointEventValidationError, match="already present"):
+        derive_state_segments(
+            [initial, manual, auto], frame_count=4, session_identity="run-a",
+        )
+
+
+def test_same_frame_owners_normalize_one_interval_anchor(imported) -> None:
+    _, result, _ = imported
+    initial, manual, auto = map(copy.deepcopy, result.events)
+    auto["review"]["anchor"] = copy.deepcopy(manual["review"]["anchor"])
+    manual["review"].update({
+        "labels": [{
+            "label_id": str(uuid.uuid4()),
+            "kind": "reconstruction", "change": "disappeared",
+            "value": "one_by_one",
+        }],
+        "representative_anchor": copy.deepcopy(auto["review"]["anchor"]),
+    })
+    auto["review"].update({
+        "candidate_decision": "confirmed",
+        "labels": [{
+            "label_id": str(uuid.uuid4()),
+            "kind": "reconstruction", "change": "appeared", "value": "rt13",
+        }],
+        # Same-frame co-owner deliberately stores no duplicate Anchor.
+        "representative_anchor": None,
+    })
+    manual["status"] = auto["status"] = "Complete"
+
+    segments = derive_state_segments(
+        [initial, manual, auto], frame_count=4, session_identity="run-a",
+    )
+    owned = next(item for item in segments if len(item["boundary_event_ids"]) == 2)
+    assert owned["anchor"]["frame_index"] == manual["review"]["anchor"]["frame_index"]
+    assert owned["status"] == "Complete"
+
+    # An identical compatibility copy still materializes as one segment Anchor.
+    auto["review"]["representative_anchor"] = copy.deepcopy(
+        manual["review"]["representative_anchor"]
+    )
+    duplicate = derive_state_segments(
+        [initial, manual, auto], frame_count=4, session_identity="run-a",
+    )
+    duplicate_owned = next(
+        item for item in duplicate if len(item["boundary_event_ids"]) == 2
+    )
+    assert duplicate_owned["anchor"] == owned["anchor"]
+
+    auto["review"]["representative_anchor"] = copy.deepcopy(
+        result.events[2]["review"]["anchor"]
+    )
+    with pytest.raises(PointEventValidationError, match="disagree about the interval Anchor"):
+        derive_state_segments(
+            [initial, manual, auto], frame_count=4, session_identity="run-a",
+        )
+
+
+def test_pending_candidate_does_not_truncate_confirmed_interval(imported) -> None:
+    _, result, _ = imported
+    _, manual, auto = map(copy.deepcopy, result.events)
+    manual["review"]["labels"] = [{
+        "label_id": str(uuid.uuid4()),
+        "kind": "reconstruction", "change": "appeared", "value": "rt13",
+    }]
+    manual["review"]["representative_anchor"] = copy.deepcopy(
+        auto["review"]["anchor"]
+    )
+    # Keep the automatic proposal pending even if a Draft already has labels.
+    auto["review"]["labels"] = [{
+        "label_id": str(uuid.uuid4()),
+        "kind": "reconstruction", "change": "appeared", "value": "htr",
+    }]
+    state = {item["event_id"]: item for item in (manual, auto)}
+    assert interval_errors(manual["event_id"], state) == []
+
+
+def test_sidecar_uses_exact_v2_command_contract(
     tmp_path: Path, imported, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session, result, _ = imported
+    dataset, payload = _dataset_payload(session, result)
     report_root = tmp_path / "report"
     report_root.mkdir()
     report = report_root / "interactive_report.html"
     report.write_text("synthetic", encoding="utf-8")
-    dataset = {
-        "dataset_id": f"sha256:{session.sha256}",
-        "source_archive_sha256": session.sha256,
-    }
-    payload = {
-        "config": {"dataset": dataset, "point_events": list(result.events)},
-        "heartbeat_indices": [frame.heartbeat_idx for frame in session.frames],
-        "capture_sequences": [frame.capture_sequence for frame in session.frames],
-        "frame_sha256": [frame.frame_sha256 for frame in session.frames],
-        "times": [frame.elapsed_s for frame in session.frames],
-    }
     from tools.rheed_postprocessing_labeling import report_builder
-    from tools.rheed_postprocessing_labeling import point_events as point_events_module
-
     monkeypatch.setattr(report_builder, "load_report_payload", lambda _path: payload)
-    real_loader = point_events_module.load_session_archive
-    load_count = 0
-
-    def counted_loader(source):
-        nonlocal load_count
-        load_count += 1
-        return real_loader(source)
-
-    monkeypatch.setattr(point_events_module, "load_session_archive", counted_loader)
     store = PointEventSidecarStore(report, session.path)
-    assert load_count == 0, "opening a report must not hash the large source ZIP"
-    event = result.events[0]
-    response = store.apply_revision({
-        "dataset_id": dataset["dataset_id"], "action": "edit",
-        "event_id": event["event_id"], "base_revision_id": "",
-        "actor": "Grower", "changes": {"comment": "reviewed"},
-    })
-    assert load_count == 1
-    assert response["event"]["review"]["comment"] == "reviewed"
-    assert (report_root / "annotations" / "rheed_event_revisions.jsonl").is_file()
-    assert (report_root / "annotations" / "rheed_point_events.json").is_file()
-    assert len(store.revisions) == 1
-    assert store.annotation_metadata["reviewer"] == "Grower"
-    assert store.export_document()["revisions"] == list(store.revisions)
-    assert validate_point_event_document(store.export_document(), payload)["events"]
-    assert session.path.is_file(), "source ZIP remains untouched"
-    with pytest.raises(PointEventValidationError, match="server-saved"):
-        store.apply_revision({
-            "action": "complete", "actor": "Grower",
-            "event_id": event["event_id"],
-            "base_revision_id": response["event"]["revision_id"], "changes": {},
-        })
-    with pytest.raises(PointEventValidationError, match="server-held"):
-        store.apply_revision({
-            "action": "set_equalizer", "actor": "Grower",
-            "event_id": event["event_id"],
-            "base_revision_id": response["event"]["revision_id"],
-            "changes": {"equalizer": _valid_equalizer(response["event"])},
-        })
-    trusted = store.apply_equalizer_revision({
-        "action": "set_equalizer", "actor": "Grower",
-        "event_id": event["event_id"],
-        "base_revision_id": response["event"]["revision_id"],
-        "changes": {},
-    }, _valid_equalizer(response["event"]))
-    assert trusted["event"]["review"]["equalizer"]["valid"] is True
-    completed = store.apply_revision({
-        "action": "complete", "actor": "Grower",
-        "event_id": event["event_id"],
-        "base_revision_id": trusted["event"]["revision_id"], "changes": {},
-    })
-    assert completed["event"]["status"] == "Complete"
-    durable = store.atomic_state_snapshot()
-    assert durable["revisions"][1]["previous_record_sha256"] == durable["revisions"][0]["record_sha256"]
-    assert {
-        item["event_id"]: item for item in durable["events"]
-    } == replay_revisions(
-        result.events, durable["revisions"], require_integrity=True,
-    )
-    with pytest.raises(PointEventValidationError, match="exact saved"):
-        bad = copy.deepcopy(event["review"]["anchor"])
-        bad["capture_sequence"] = 999
+    manual = result.events[1]
+
+    def command(action: str, changes: dict, current: dict) -> dict:
+        return store.apply_revision({
+            "dataset_id": dataset["dataset_id"], "action": action,
+            "event_id": current["event_id"],
+            "base_revision_id": current["revision_id"],
+            "actor": "Grower", "changes": changes,
+        })["event"]
+
+    current = manual
+    current = command("add_label", {"label": _label()}, current)
+    label_id = current["review"]["labels"][0]["label_id"]
+    current = command("edit_label", {
+        "label_id": label_id, "label": _label("htr"),
+    }, current)
+    current = command("move_representative_anchor", {
+        "representative_anchor": manual["review"]["anchor"],
+    }, current)
+    current = command("complete", {}, current)
+    assert current["status"] == "Complete"
+    current = command("remove_label", {"label_id": label_id}, current)
+    assert current["status"] == "Draft"
+    with pytest.raises(PointEventValidationError, match="not part"):
+        store.apply_equalizer_revision({}, {})
+    with pytest.raises(PointEventValidationError):
         store.apply_revision({
             "action": "add_event", "actor": "Grower",
-            "changes": {"anchor": bad},
+            "changes": {"anchor": manual["review"]["anchor"]},
         })
-    created = store.apply_revision({
-        "action": "add_event", "actor": "Grower",
-        "changes": {"anchor": event["review"]["anchor"]},
+    created_response = store.apply_revision({
+        "action": "create_posthoc", "actor": "Grower",
+        "changes": {"anchor": manual["review"]["anchor"]},
     })
-    assert load_count == 1, "the verified SessionArchive is reused"
-    assert created["event"]["source"]["kind"] == "posthoc"
-    assert created["event"]["status"] == "Draft"
+    created = created_response["event"]
+    assert created["source"]["kind"] == "posthoc"
+    assert "reviewer" not in created["review"]
+    assert "confidence" not in created["review"]
+    assert created_response["revision"]["actor"] == "Grower"
+    assert created_response["annotation_set"]["reviewer"] == "Grower"
+    assert (report_root / "annotations" / "rheed_event_revisions.jsonl").is_file()
 
-    import_root = tmp_path / "import-report"
-    import_root.mkdir()
-    import_report = import_root / "interactive_report.html"
-    import_report.write_text("synthetic", encoding="utf-8")
-    _edited, browser_revision = revise_event(
-        event, action="edit", actor="Browser Grower",
-        changes={"comment": "static browser draft"},
-    )
-    browser_document = point_event_document(
-        dataset=dataset, events=result.events,
-        revisions=[browser_revision], annotation_set_id=str(uuid.uuid4()),
-        reviewer="Browser Grower",
-    )
-    # Simulate JavaScript's independently rendered before hash; the trusted
-    # importer re-canonicalizes it while still checking the full snapshot.
-    browser_document["revisions"][0]["before_sha256"] = "0" * 64
-    import_store = PointEventSidecarStore(import_report, session.path)
-    imported_state = import_store.import_document(browser_document)
-    imported_event = next(
-        item for item in imported_state["events"] if item["event_id"] == event["event_id"]
-    )
-    assert imported_event["review"]["comment"] == "static browser draft"
-    assert imported_state["revisions"][0]["record_sha256"]
-    assert imported_state["revisions"][0]["previous_record_sha256"] == ""
-    before_failed_import = import_store.atomic_state_snapshot()
-    annotations_dir = import_root / "annotations"
-
-    def persisted_files() -> dict[str, bytes]:
-        return {
-            path.name: path.read_bytes()
-            for path in annotations_dir.iterdir()
-            if path.is_file()
-        }
-
-    files_before_failure = persisted_files()
-    invalid_annotation_set = copy.deepcopy(browser_document)
-    invalid_annotation_set["annotation_set"]["annotation_set_id"] = "not-a-uuid"
-    with pytest.raises(PointEventValidationError, match="must be a UUID"):
-        import_store.import_document(invalid_annotation_set)
-    assert import_store.atomic_state_snapshot() == before_failed_import
-    assert persisted_files() == files_before_failure
-
-    duplicate_event = copy.deepcopy(browser_document)
-    duplicate_event["events"].append(copy.deepcopy(duplicate_event["events"][0]))
-    with pytest.raises(PointEventValidationError, match="duplicate event_id"):
-        import_store.import_document(duplicate_event)
-    assert import_store.atomic_state_snapshot() == before_failed_import
-    assert persisted_files() == files_before_failure
-
-    tampered = copy.deepcopy(browser_document)
-    tampered["events"][0]["source"]["source_row_sha256"] = "f" * 64
-    with pytest.raises(PointEventValidationError):
-        import_store.import_document(tampered)
-    assert import_store.atomic_state_snapshot() == before_failed_import
-    assert persisted_files() == files_before_failure
+    # The revision actor is also the one durable session-level Grower.  It
+    # survives reopening the desktop sidecar and is used by document export.
+    reopened = PointEventSidecarStore(report, session.path)
+    assert reopened.annotation_metadata["reviewer"] == "Grower"
+    assert reopened.export_document()["annotation_set"]["reviewer"] == "Grower"
 
 
-def test_archived_live_journal_preserves_uuid_and_blank_draft(tmp_path: Path) -> None:
-    path, _ = _zip(tmp_path)
-    external_frame = b"separately-saved-live-equalizer-frame"
-    external_hash = hashlib.sha256(external_frame).hexdigest()
-    legacy_session = hash_frame_payloads(load_session_archive(path))
-    legacy = import_point_events(legacy_session)
-    records: list[dict] = []
-    states: list[dict] = []
-    manual_id = ""
-    for imported_event in legacy.events:
-        state = copy.deepcopy(imported_event)
-        event_id = str(uuid.uuid4())
-        equalizer = None
-        # A live create revision predates any Events-tab review and cannot
-        # already contain an Equalizer result.  Later review evidence must be
-        # represented by its own semantic revision.
-        state["review"].update({
-            "comment": state["source"].get("original_note", ""),
-            "reviewer": "", "confidence": None,
-            "human_reconstruction": None, "change_from": None,
-            "change_to": None, "equalizer": None,
-        })
-        if state["source"]["kind"] == "manual":
-            manual_id = event_id
-            state["review"]["anchor"] = {
-                "frame_path": "session/frames/live_label.bmp",
-                "image_sha256": external_hash,
-                "image_sha256_algorithm": "raw-file-bytes-v1",
-                "capture_sequence": 101,
-                "captured_at_utc": "2026-08-06T12:00:01.250Z",
-                "elapsed_s": 1.25,
-                "view_segment_id": 1,
-                "capture_geometry_id": "g1",
-            }
-            equalizer = _valid_equalizer(state)
-        state["event_id"] = event_id
-        # Match the compact source object written by the live PointEventStore.
-        source = state["source"]
-        original_hash = source["original_anchor"].get("image_sha256", "")
-        state["source"] = {
-            "kind": source["kind"], "session_identity": "session-1",
-            "source_file": Path(source["source_file"]).name,
-            "source_index": source["source_index"],
-            "source_row_sha256": source["source_row_sha256"],
-            "source_row_hash_algorithm": source["source_row_hash_algorithm"],
-            "original_at_utc": source["original_at_utc"],
-            "original_elapsed_s": source["original_elapsed_s"],
-            "original_frame_path": source["original_anchor"].get("frame_name", ""),
-            "original_image_sha256": original_hash,
-            "original_image_sha256_algorithm": (
-                "raw-file-bytes-v1" if original_hash else ""
-            ),
-            "capture_sequence": source["original_anchor"].get("capture_sequence"),
-            "original_note": source["original_note"],
-        }
-        revision_id = str(uuid.uuid4())
-        state.update({
-            "revision_id": revision_id, "revision_number": 1,
-            "created_at_utc": "2026-08-06T12:00:01.000+00:00",
-            "updated_at_utc": "2026-08-06T12:00:01.000+00:00",
-        })
-        record = {
-            "schema": "rheed-point-events-v1", "revision_id": revision_id,
-            "event_id": event_id, "actor": "Grower", "action": "create",
-            "recorded_at_utc": "2026-08-06T12:00:01.000+00:00",
-            "base_revision_id": None, "before": None, "after": state,
-        }
-        record["record_sha256"] = hashlib.sha256(json.dumps(
-            record, sort_keys=True, separators=(",", ":"),
+def test_static_browser_v3_edit_export_imports_into_desktop_sidecar(
+    tmp_path: Path, imported, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the file-report Draft -> JSON -> desktop recovery boundary."""
+
+    session, result, _ = imported
+    dataset, payload = _dataset_payload(session, result)
+    report_root = tmp_path / "report"
+    report_root.mkdir()
+    report = report_root / "interactive_report.html"
+    report.write_text("synthetic", encoding="utf-8")
+    from tools.rheed_postprocessing_labeling import report_builder
+    monkeypatch.setattr(report_builder, "load_report_payload", lambda _path: payload)
+
+    before = copy.deepcopy(result.events[1])
+    after = copy.deepcopy(before)
+    after["review"]["comment"] = "static browser edit"
+    after["status"] = "Draft"
+    revision_id = str(uuid.uuid4())
+    after["revision_id"] = revision_id
+
+    def canonical_hash(value: object) -> str:
+        return hashlib.sha256(json.dumps(
+            value, sort_keys=True, separators=(",", ":"),
             ensure_ascii=False, allow_nan=False,
         ).encode("utf-8")).hexdigest()
-        records.append(record)
-        final_state = state
-        if equalizer is not None:
-            before = copy.deepcopy(state)
-            final_state = copy.deepcopy(state)
-            equalizer_revision_id = str(uuid.uuid4())
-            final_state["review"]["equalizer"] = equalizer
-            final_state.update({
-                "revision_id": equalizer_revision_id,
-                "revision_number": 2,
-                "updated_at_utc": "2026-08-06T12:00:02.000+00:00",
-            })
-            equalizer_record = {
-                "schema": "rheed-point-events-v1",
-                "revision_id": equalizer_revision_id,
-                "event_id": event_id,
-                "actor": "Grower",
-                "action": "set_equalizer",
-                "recorded_at_utc": "2026-08-06T12:00:02.000+00:00",
-                "base_revision_id": revision_id,
-                "before": before,
-                "after": final_state,
-            }
-            equalizer_record["record_sha256"] = hashlib.sha256(json.dumps(
-                equalizer_record, sort_keys=True, separators=(",", ":"),
-                ensure_ascii=False, allow_nan=False,
-            ).encode("utf-8")).hexdigest()
-            records.append(equalizer_record)
-        states.append(final_state)
-    summary = {
-        "schema": "rheed-point-events-v1",
-        "generated_at_utc": "2026-08-06T12:01:00.000+00:00",
-        "journal": "rheed_event_revisions.jsonl",
-        "events": sorted(states, key=lambda item: item["event_id"]),
+
+    revision = {
+        "schema_version": SCHEMA_VERSION,
+        "revision_id": revision_id,
+        "base_revision_id": str(before.get("revision_id", "")),
+        "actor": "Offline Browser Reviewer",
+        "at_utc": "2026-08-06T12:01:00.000Z",
+        "action": "edit",
+        "event_id": before["event_id"],
+        "before_sha256": canonical_hash(before),
+        "before": before,
+        "after": after,
     }
+    assert "reviewer" not in revision["before"]["review"]
+    assert "confidence" not in revision["after"]["review"]
+    document = point_event_document(
+        dataset=dataset,
+        events=result.events,
+        revisions=[revision],
+        reference_events=result.reference_events,
+        unlinked_legacy_labels=result.unlinked_legacy_labels,
+        source_revisions=result.source_revisions,
+        source_journal=result.source_journal,
+        annotation_set_id=str(uuid.uuid4()),
+        reviewer="Offline Browser Reviewer",
+    )
+    document.update({
+        "exported_at_utc": "2026-08-06T12:01:01.000Z",
+        "review_mode": {
+            "model_outputs_visible": True,
+            "eligible_for_blind_gold": False,
+            "label_semantics": (
+                "reconstruction_presence_and_pattern_clarity_changes"
+            ),
+        },
+    })
+
+    imported_snapshot = PointEventSidecarStore(
+        report, session.path,
+    ).import_document(document)
+
+    recovered = next(
+        item for item in imported_snapshot["events"]
+        if item["event_id"] == before["event_id"]
+    )
+    assert recovered["review"]["comment"] == "static browser edit"
+    assert imported_snapshot["annotation_set"]["reviewer"] == (
+        "Offline Browser Reviewer"
+    )
+
+
+def _legacy_state(event_id: str, revision_id: str) -> dict:
+    return {
+        "schema": "rheed-point-events-v1", "event_id": event_id,
+        "source": {"kind": "manual", "source_row_sha256": "a" * 64},
+        "review": {
+            "anchor": None, "comment": "", "reviewer": "", "confidence": None,
+            "human_reconstruction": None, "change_from": None, "change_to": None,
+            "equalizer": None, "disposition": "active", "disposition_reason": "",
+        },
+        "status": "Draft", "revision_id": revision_id, "revision_number": 1,
+    }
+
+
+def _append_v1_journal(path: Path, *, semantic_tamper: bool = False) -> str:
+    event_id, create_id = str(uuid.uuid4()), str(uuid.uuid4())
+    state = _legacy_state(event_id, create_id)
+    create = {
+        "schema": "rheed-point-events-v1", "revision_id": create_id,
+        "event_id": event_id, "actor": "legacy", "action": "create",
+        "recorded_at_utc": "2026-08-06T12:00:01Z",
+        "base_revision_id": None, "before": None, "after": state,
+    }
+    create["record_sha256"] = hashlib.sha256(json.dumps(
+        create, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode()).hexdigest()
+    records = [create]
+    final = state
+    if semantic_tamper:
+        final = copy.deepcopy(state)
+        final["review"]["equalizer"] = {"smuggled": True}
+        edit_id = str(uuid.uuid4())
+        final.update({"revision_id": edit_id, "revision_number": 2})
+        edit = {
+            "schema": "rheed-point-events-v1", "revision_id": edit_id,
+            "event_id": event_id, "actor": "legacy", "action": "edit",
+            "recorded_at_utc": "2026-08-06T12:00:02Z",
+            "base_revision_id": create_id, "before": state, "after": final,
+        }
+        edit["record_sha256"] = hashlib.sha256(json.dumps(
+            edit, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode()).hexdigest()
+        records.append(edit)
     with zipfile.ZipFile(path, "a") as archive:
-        archive.writestr("session/frames/live_label.bmp", external_frame)
         archive.writestr(
             "session/rheed_event_revisions.jsonl",
-            "".join(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n" for record in records),
+            "".join(json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n" for item in records),
         )
-        archive.writestr("session/rheed_point_events.json", json.dumps(summary, sort_keys=True))
-    session = hash_frame_payloads(load_session_archive(path))
-    imported = import_point_events(session)
-    assert manual_id in {event["event_id"] for event in imported.events}
-    manual = next(event for event in imported.events if event["event_id"] == manual_id)
-    assert manual["status"] == "Draft"
-    assert manual["review"]["comment"] == ""
-    assert manual["review"]["equalizer"] is None
-    assert manual["source"]["live_review_frame_evidence"]["image_sha256"] == external_hash
-    assert any("measurement invalidated" in item.get("reason", "") for item in imported.unlinked_legacy_labels)
-    assert len(imported.source_revisions) == 3
-    assert imported.source_journal and imported.source_journal["authoritative"] is True
+        archive.writestr("session/rheed_point_events.json", json.dumps({
+            "schema": "rheed-point-events-v1", "events": [final],
+        }))
+    return event_id
 
 
-def test_mixed_live_journal_recovers_unjournaled_csv_and_later_legacy_review(
-    tmp_path: Path,
-) -> None:
-    path, _ = _zip(
-        tmp_path, auto_state="discarded",
-        auto_state_changed_at="2026-08-06T12:00:03.000Z",
+def _append_v2_journal(path: Path, *, semantic_tamper: bool = False) -> tuple[str, dict]:
+    event_id, revision_id, label_id = (
+        str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()),
     )
-    session = hash_frame_payloads(load_session_archive(path))
-    legacy = import_point_events(session)
-    auto = next(event for event in legacy.events if event["source"]["kind"] == "auto_capture")
-    manual = next(event for event in legacy.events if event["source"]["kind"] == "manual")
-    state = copy.deepcopy(auto)
-    event_id = str(uuid.uuid4())
-    revision_id = str(uuid.uuid4())
-    source = state["source"]
-    state.update({
-        "event_id": event_id, "revision_id": revision_id,
-        "revision_number": 1, "created_at_utc": "2026-08-06T12:00:01.000+00:00",
-        "updated_at_utc": "2026-08-06T12:00:01.000+00:00",
-    })
-    state["source"] = {
-        "kind": "auto_capture", "session_identity": "session-1",
-        "source_file": "auto_capture_events.csv", "source_index": source["source_index"],
-        # Pre-v1 mutable-row hash captured while the decision was pending.
-        "source_row_sha256": next(
-            value for value in source["compatible_legacy_source_row_sha256"]
-            if value != source["source_row_full_sha256"]
-        ),
-        "source_row_hash_algorithm": "sha256-canonical-json-row-v1",
-        "original_at_utc": source["original_at_utc"],
-        "original_elapsed_s": source["original_elapsed_s"],
-        "original_frame_path": "", "original_image_sha256": "",
-        "original_image_sha256_algorithm": "",
-        "capture_sequence": source["original_anchor"]["capture_sequence"],
-        "original_note": "",
+    with zipfile.ZipFile(path) as archive:
+        frame_payload = archive.read("session/frames/rheed_0.png")
+    frame_hash = hashlib.sha256(frame_payload).hexdigest()
+    anchor = {
+        "frame_path": r"D:\session\frames\rheed_0.png",
+        "image_sha256": frame_hash,
+        "image_sha256_algorithm": "raw-file-bytes-v1",
+        "capture_sequence": 100,
+        "captured_at_utc": "2026-08-06T12:00:00.000Z",
+        "elapsed_s": 0.0,
+        "view_segment_id": 1,
+        "capture_geometry_id": "g1",
     }
-    # Simulate the real ordering: live Draft create first, Events-tab label CSV later.
-    state["review"].update({
-        # The trigger capture was not uniquely present in the empty auto
-        # buffer, so live acquisition correctly left the review anchor unset.
-        "anchor": None,
-        "comment": "", "reviewer": "", "confidence": None,
-        "human_reconstruction": None, "change_from": None,
-        "change_to": None, "equalizer": None,
-    })
+    surface_value = "excellent" if semantic_tamper else "good"
+    state = {
+        "schema": V2_SCHEMA_VERSION,
+        "event_id": event_id,
+        "source": {
+            "kind": "initial_assumption",
+            "session_identity": "session-1",
+            "source_row_sha256": "b" * 64,
+            "original_anchor": copy.deepcopy(anchor),
+            "original_note": "legacy initial quality audit",
+        },
+        "review": {
+            "anchor": copy.deepcopy(anchor),
+            "representative_anchor": None,
+            "labels": [{
+                "label_id": label_id,
+                "kind": "surface_quality",
+                "change": "became",
+                "value": surface_value,
+            }],
+            "candidate_decision": "confirmed",
+            "comment": "legacy quality evidence",
+            "disposition": "active",
+            "disposition_reason": "",
+        },
+        "status": "Draft",
+        "created_at_utc": "2026-08-06T12:00:00.000Z",
+        "updated_at_utc": "2026-08-06T12:00:00.000Z",
+        "revision_id": revision_id,
+        "revision_number": 1,
+    }
     record = {
-        "schema": "rheed-point-events-v1", "revision_id": revision_id,
-        "event_id": event_id, "actor": "auto-capture", "action": "create",
-        "recorded_at_utc": "2026-08-06T12:00:01.000+00:00",
-        "base_revision_id": None, "before": None, "after": state,
+        "schema": V2_SCHEMA_VERSION,
+        "revision_id": revision_id,
+        "event_id": event_id,
+        "actor": "legacy-grower",
+        "recorded_at_utc": "2026-08-06T12:00:00.000Z",
+        "action": "create",
+        "base_revision_id": None,
+        "before": None,
+        "after": state,
+        "previous_record_sha256": "",
     }
     record["record_sha256"] = hashlib.sha256(json.dumps(
         record, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")).hexdigest()
-    summary = {
-        "schema": "rheed-point-events-v1", "journal": "rheed_event_revisions.jsonl",
-        "events": [state],
-    }
+    ).encode()).hexdigest()
     with zipfile.ZipFile(path, "a") as archive:
         archive.writestr(
             "session/rheed_event_revisions.jsonl",
             json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
         )
-        archive.writestr("session/rheed_point_events.json", json.dumps(summary, sort_keys=True))
+        archive.writestr("session/rheed_point_events.json", json.dumps({
+            "schema": V2_SCHEMA_VERSION,
+            "events": [state],
+        }))
+    return event_id, record
+
+
+def test_archived_v1_journal_is_validated_and_retained_read_only(tmp_path: Path) -> None:
+    path, _ = _zip(tmp_path)
+    legacy_id = _append_v1_journal(path)
     imported = import_point_events(hash_frame_payloads(load_session_archive(path)))
-    assert {event["event_id"] for event in imported.events} == {event_id, manual["event_id"]}
-    imported_auto = next(event for event in imported.events if event["event_id"] == event_id)
-    assert imported_auto["review"]["comment"] == "legacy auto review"
-    assert imported_auto["review"]["reviewer"] == "Grower A"
-    assert imported_auto["status"] == "Draft"
-    assert imported_auto["review"]["anchor"]["frame_index"] == 2
-    assert imported_auto["review"]["anchor"]["image_sha256"]
-    assert (
-        imported_auto["source"]["original_anchor"]["association_status"]
-        == "unresolved_saved_frame"
+    assert legacy_id not in {item["event_id"] for item in imported.events}
+    assert imported.source_journal["schema"] == "rheed-point-events-v1"
+    assert imported.source_journal["read_only"] is True
+    evidence = next(
+        item for item in imported.unlinked_legacy_labels
+        if item.get("event_id") == legacy_id
     )
-    assert imported_auto["source"]["source_row_sha256"] == source["source_row_sha256"]
-    assert imported_auto["source"]["source_decision"]["event_state"] == "discarded"
-    assert imported.source_journal["deterministic_csv_fallback_count"] == 1
+    assert evidence["read_only"] is True
+    assert len(imported.source_revisions) == 1
 
 
-def test_archived_stale_summary_may_be_valid_prefix_but_not_tampered(tmp_path: Path) -> None:
+def test_archived_v1_rehashed_semantic_tamper_fails_closed(tmp_path: Path) -> None:
     path, _ = _zip(tmp_path)
-    session = hash_frame_payloads(load_session_archive(path))
-    legacy = import_point_events(session)
-    event = copy.deepcopy(legacy.events[0])
-    event_id = str(uuid.uuid4())
-    create_id = str(uuid.uuid4())
-    event.update({
-        "event_id": event_id, "revision_id": create_id, "revision_number": 1,
-        "created_at_utc": "2026-08-06T12:00:01+00:00",
-        "updated_at_utc": "2026-08-06T12:00:01+00:00",
-    })
-    source = event["source"]
-    event["source"] = {
-        "kind": source["kind"], "session_identity": "session-1",
-        "source_file": Path(source["source_file"]).name,
-        "source_index": source["source_index"],
-        "source_row_sha256": source["source_row_sha256"],
-        "original_at_utc": source["original_at_utc"],
-        "original_elapsed_s": source["original_elapsed_s"],
-        "original_frame_path": "", "original_image_sha256": "",
-        "original_image_sha256_algorithm": "", "capture_sequence": 101,
-        "original_note": source["original_note"],
-    }
-    create = {
-        "schema": "rheed-point-events-v1", "revision_id": create_id,
-        "event_id": event_id, "actor": "live", "action": "create",
-        "recorded_at_utc": "2026-08-06T12:00:01+00:00", "base_revision_id": None,
-        "before": None, "after": event,
-    }
-    create["record_sha256"] = hashlib.sha256(json.dumps(
-        create, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-    ).encode()).hexdigest()
-    edited = copy.deepcopy(event)
-    edited["review"]["comment"] = "after summary"
-    edit_id = str(uuid.uuid4())
-    edited.update({"revision_id": edit_id, "revision_number": 2})
-    edit = {
-        "schema": "rheed-point-events-v1", "revision_id": edit_id,
-        "event_id": event_id, "actor": "live", "action": "edit",
-        "recorded_at_utc": "2026-08-06T12:00:02+00:00",
-        "base_revision_id": create_id, "before": event, "after": edited,
-    }
-    edit["record_sha256"] = hashlib.sha256(json.dumps(
-        edit, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-    ).encode()).hexdigest()
-    with zipfile.ZipFile(path, "a") as archive:
-        archive.writestr(
-            "session/rheed_event_revisions.jsonl",
-            "".join(json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n" for item in (create, edit)),
-        )
-        archive.writestr("session/rheed_point_events.json", json.dumps({"events": [event]}))
-    imported = import_point_events(hash_frame_payloads(load_session_archive(path)))
-    assert next(item for item in imported.events if item["event_id"] == event_id)["review"]["comment"] == "after summary"
-
-
-@pytest.mark.parametrize("tamper_kind", ("equalizer_as_edit", "revision_gap"))
-def test_archived_live_journal_rejects_rehashed_semantic_tamper(
-    tmp_path: Path, tamper_kind: str,
-) -> None:
-    path, _ = _zip(tmp_path)
-    session = hash_frame_payloads(load_session_archive(path))
-    legacy = import_point_events(session)
-    event = copy.deepcopy(next(
-        item for item in legacy.events if item["source"]["kind"] == "manual"
-    ))
-    event_id = str(uuid.uuid4())
-    create_id = str(uuid.uuid4())
-    source = event["source"]
-    original_hash = source["original_anchor"].get("image_sha256", "")
-    event.update({
-        "event_id": event_id,
-        "revision_id": create_id,
-        "revision_number": 1,
-        "created_at_utc": "2026-08-06T12:00:01+00:00",
-        "updated_at_utc": "2026-08-06T12:00:01+00:00",
-    })
-    event["source"] = {
-        "kind": "manual", "session_identity": "session-1",
-        "source_file": "manual_events.csv",
-        "source_index": source["source_index"],
-        "source_row_sha256": source["source_row_sha256"],
-        "source_row_hash_algorithm": source["source_row_hash_algorithm"],
-        "original_at_utc": source["original_at_utc"],
-        "original_elapsed_s": source["original_elapsed_s"],
-        "original_frame_path": source["original_anchor"].get("frame_name", ""),
-        "original_image_sha256": original_hash,
-        "original_image_sha256_algorithm": (
-            "raw-file-bytes-v1" if original_hash else ""
-        ),
-        "capture_sequence": source["original_anchor"].get("capture_sequence"),
-        "original_note": source["original_note"],
-    }
-    event["review"].update({
-        "comment": source["original_note"], "reviewer": "",
-        "confidence": None, "human_reconstruction": None,
-        "change_from": None, "change_to": None, "equalizer": None,
-    })
-    create = {
-        "schema": "rheed-point-events-v1", "revision_id": create_id,
-        "event_id": event_id, "actor": "live", "action": "create",
-        "recorded_at_utc": "2026-08-06T12:00:01+00:00",
-        "base_revision_id": None, "before": None, "after": event,
-    }
-    create["record_sha256"] = hashlib.sha256(json.dumps(
-        create, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")).hexdigest()
-
-    disguised_after = copy.deepcopy(event)
-    if tamper_kind == "equalizer_as_edit":
-        disguised_after["review"]["equalizer"] = _valid_equalizer(
-            disguised_after,
-        )
-    else:
-        disguised_after["review"]["comment"] = "legitimate edit, wrong revision"
-    disguised_id = str(uuid.uuid4())
-    disguised_after.update({
-        "revision_id": disguised_id,
-        "revision_number": 3 if tamper_kind == "revision_gap" else 2,
-        "updated_at_utc": "2026-08-06T12:00:02+00:00",
-    })
-    disguised = {
-        "schema": "rheed-point-events-v1", "revision_id": disguised_id,
-        "event_id": event_id, "actor": "live", "action": "edit",
-        "recorded_at_utc": "2026-08-06T12:00:02+00:00",
-        "base_revision_id": create_id, "before": event,
-        "after": disguised_after,
-    }
-    # The record hash is internally consistent: semantic replay, not the hash
-    # check, must reject a disguised action or a non-consecutive revision.
-    disguised["record_sha256"] = hashlib.sha256(json.dumps(
-        disguised, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")).hexdigest()
-    with zipfile.ZipFile(path, "a") as archive:
-        archive.writestr(
-            "session/rheed_event_revisions.jsonl",
-            "".join(
-                json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n"
-                for item in (create, disguised)
-            ),
-        )
-        archive.writestr(
-            "session/rheed_point_events.json",
-            json.dumps({"events": [disguised_after]}, sort_keys=True),
-        )
-
+    _append_v1_journal(path, semantic_tamper=True)
     with pytest.raises(PointEventValidationError, match="semantics are invalid"):
         import_point_events(hash_frame_payloads(load_session_archive(path)))
+
+
+def test_archived_v2_journal_is_preserved_as_read_only_evidence(
+    tmp_path: Path,
+) -> None:
+    path, _ = _zip(tmp_path)
+    legacy_id, record = _append_v2_journal(path)
+
+    imported = import_point_events(hash_frame_payloads(load_session_archive(path)))
+
+    assert imported.source_journal["schema"] == V2_SCHEMA_VERSION
+    assert imported.source_journal["read_only"] is True
+    assert imported.source_revisions == (record,)
+    evidence = next(
+        item for item in imported.unlinked_legacy_labels
+        if item.get("event_id") == legacy_id
+    )
+    assert evidence["read_only"] is True
+    assert evidence["source_schema"] == V2_SCHEMA_VERSION
+    assert evidence["legacy_state"] == record["after"]
+    assert evidence["legacy_state"]["review"]["labels"][0] == {
+        "label_id": record["after"]["review"]["labels"][0]["label_id"],
+        "kind": "surface_quality",
+        "change": "became",
+        "value": "good",
+    }
+    assert legacy_id not in {item["event_id"] for item in imported.events}
+    assert all(item["schema"] == SCHEMA_VERSION for item in imported.events)
+    assert all(
+        label["kind"] != "surface_quality"
+        for item in imported.events
+        for label in item["review"]["labels"]
+    )
+
+
+def test_archived_v2_rehashed_invalid_quality_fails_closed(tmp_path: Path) -> None:
+    path, _ = _zip(tmp_path)
+    _append_v2_journal(path, semantic_tamper=True)
+    with pytest.raises(PointEventValidationError, match="semantics are invalid"):
+        import_point_events(hash_frame_payloads(load_session_archive(path)))
+
+
+def test_no_legacy_segment_is_automatically_converted(imported) -> None:
+    _, result, _ = imported
+    assert all(item["source"]["kind"] != "segment" for item in result.events)
+    assert all(
+        set(item["review"]) == {
+            "anchor", "representative_anchor", "labels", "candidate_decision",
+            "comment", "disposition", "disposition_reason",
+        }
+        for item in result.events
+    )

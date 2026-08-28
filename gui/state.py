@@ -327,6 +327,12 @@ class EvapControlState:
     cell_Sr_pv_C: Optional[float] = None      # Strontium
     cell_Eu_pv_C: Optional[float] = None      # Europium
     cell_Er_pv_C: Optional[float] = None      # Erbium
+    # Elog-mode only: Ch-MBE sources, verified on Omicron 2026-08-05.
+    # Deliberately distinct from ADS Cell1..Cell7 until their physical
+    # material mapping is independently confirmed.
+    cell_Fe_pv_C: Optional[float] = None
+    cell_Te_pv_C: Optional[float] = None
+    cell_Se_pv_C: Optional[float] = None
     # Elog-mode only: plasma source state (when in use)
     plasma_dc_bias_V: Optional[float] = None
     plasma_forward_W: Optional[float] = None
@@ -340,8 +346,16 @@ class EvapControlState:
     # through the state object.
     source_path: str = ""
     # Elog mode populates ``source_at_utc`` from the LabVIEW record. OCR and
-    # dummy modes have no source clock and leave it None.
+    # dummy modes have no source clock and leave it None.  The attempt fields
+    # describe the record inspected by the latest poll even when it was
+    # rejected as unchanged or stale; the ordinary source/receive fields stay
+    # bound to the latest accepted sample generation.
     source_at_utc: Optional[str] = None
+    attempt_source_at_utc: Optional[str] = None
+    source_age_ms: Optional[float] = None
+    source_record_advanced: bool = False
+    source_stale: bool = False
+    source_status: str = "unavailable"
     received_at_utc: Optional[str] = None
     sample_sequence: int = 0
     read_duration_ms: Optional[float] = None

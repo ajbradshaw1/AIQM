@@ -10,7 +10,9 @@ with::
 from __future__ import annotations
 
 import os
+import json
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -207,6 +209,8 @@ class _GrowthLog:
             writer_ready=True,
         )
         self.auto_capture_decision_result = True
+        self.point_candidate_decision_result = True
+        self.point_candidate_decisions: list[tuple[int, str]] = []
         self.last_auto_capture_kwargs = None
 
     def save_session_metadata(self, metadata: dict) -> None:
@@ -226,6 +230,12 @@ class _GrowthLog:
 
     def update_auto_capture_state(self, _event_idx: int, _state: str) -> bool:
         return self.auto_capture_decision_result
+
+    def set_auto_capture_candidate_decision(
+        self, event_idx: int, decision: str,
+    ) -> bool:
+        self.point_candidate_decisions.append((event_idx, decision))
+        return self.point_candidate_decision_result
 
 
 class _CloseEvent:
@@ -278,6 +288,9 @@ class _AppHarness:
         )
         self._return_to_idle_if_arm_failed = (
             GrowthApp._return_to_idle_if_arm_failed.__get__(self)
+        )
+        self._session_metadata_with_camera = (
+            GrowthApp._session_metadata_with_camera.__get__(self)
         )
 
     def _stop_workers(self, *workers) -> tuple[object, ...]:
@@ -487,6 +500,79 @@ class StopWorkersTests(unittest.TestCase):
         self.assertEqual(app.monitor.state, "armed")
         self.assertFalse(app.monitor.start_btn.enabled)
 
+    def test_close_persists_camera_open_settings_after_worker_shutdown(self):
+        app = _AppHarness()
+        snapshot = {
+            "read_at_utc": "2026-08-28T12:00:00Z",
+            "access_mode": "full",
+            "gain": 17,
+        }
+        app.camera_worker = types.SimpleNamespace(
+            sensor_settings_at_connect=snapshot,
+        )
+        app.growth_log.active = True
+        event = _CloseEvent()
+
+        GrowthApp.closeEvent(app, event)
+
+        self.assertTrue(event.accepted)
+        self.assertEqual(
+            app.growth_log.saved_metadata[
+                "camera_sensor_settings_at_connect"
+            ],
+            snapshot,
+        )
+
+    def test_connect_snapshot_survives_crash_and_failed_reconnect(self):
+        """The session sidecar exists without requiring STOP or close."""
+
+        app = _AppHarness()
+        snapshot = {
+            "read_at_utc": "2026-08-28T12:00:00Z",
+            "access_mode": "full",
+            "capture_geometry_id": "vimba-geometry-v1:sha256:" + "a" * 64,
+            "capture_geometry": {
+                "readback_complete": True,
+                "fields": {"offset_x": 0, "offset_y": 0},
+            },
+        }
+        app.camera_worker = types.SimpleNamespace(
+            sensor_settings_at_connect=snapshot,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            app.growth_log.session_dir = Path(directory)
+            self.assertTrue(GrowthApp._persist_camera_connect_snapshot(app))
+
+            # Model an abrupt process exit: do not call STOP, closeEvent, or
+            # save_session_metadata. The atomic connect sidecar is already a
+            # complete, independently parseable record.
+            sidecar = Path(directory) / "camera_sensor_settings_at_connect.json"
+            record = json.loads(sidecar.read_text(encoding="utf-8"))
+            self.assertEqual(record["snapshot_status"], "captured")
+            self.assertEqual(
+                record["camera_sensor_settings_at_connect"], snapshot,
+            )
+            self.assertEqual(list(Path(directory).glob(".*.tmp")), [])
+
+            # A failed reconnect exposes no current-cycle settings. The
+            # session cache and sidecar must still describe the settings that
+            # were proven when this session began.
+            app.camera_worker = types.SimpleNamespace(
+                sensor_settings_at_connect={},
+            )
+            metadata = GrowthApp._session_metadata_with_camera(app)
+            self.assertEqual(
+                metadata["camera_sensor_settings_at_connect"], snapshot,
+            )
+            self.assertEqual(
+                metadata["camera_sensor_settings_at_connect_file"],
+                sidecar.name,
+            )
+            self.assertEqual(
+                json.loads(sidecar.read_text(encoding="utf-8")), record,
+            )
+
     def test_queued_camera_and_capture_signals_are_ignored_after_refused_close(self):
         app = _AppHarness()
         app.growth_log.active = True
@@ -558,6 +644,25 @@ class StopWorkersTests(unittest.TestCase):
 
         self.assertIn("decision was not saved", app._status_bar.messages[-1])
         self.assertNotIn("marked discarded", app._status_bar.messages[-1])
+
+    def test_explicit_banner_decisions_update_same_point_candidate(self):
+        app = _AppHarness()
+
+        GrowthApp._on_auto_capture_decision(
+            app, 1, "frames/auto_event_001", "kept_explicit",
+        )
+        GrowthApp._on_auto_capture_decision(
+            app, 2, "frames/auto_event_002", "discarded",
+        )
+        GrowthApp._on_auto_capture_decision(
+            app, 3, "frames/auto_event_003", "kept_default",
+        )
+
+        self.assertEqual(
+            app.growth_log.point_candidate_decisions,
+            [(1, "confirmed"), (2, "rejected")],
+        )
+        self.assertIn("remains Unfinished", app._status_bar.messages[-1])
 
     def test_close_hides_auxiliary_top_levels_before_main_exit(self):
         qt_app = QApplication.instance() or QApplication([])

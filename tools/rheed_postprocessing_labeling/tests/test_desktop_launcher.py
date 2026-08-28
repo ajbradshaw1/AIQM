@@ -8,6 +8,8 @@ import re
 import sys
 import base64
 import struct
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -195,7 +197,7 @@ def test_markdown_manual_and_ai_prompt_pack_are_complete() -> None:
         "Never invent any other operating default",
         "Never transfer a value, assumption, schema, or approval between chambers",
         "Do not authorize ARM",
-        "surface reconstruction, acquisition-quality QC, and FeSe film quality",
+            "reconstruction events, RHEED pattern clarity, image acquisition quality, and FeSe film quality",
         "model-assisted",
         "not blind-gold",
     )
@@ -429,6 +431,7 @@ def test_build_arguments_preserve_model_pair_order_and_spaces(tmp_path: Path) ->
         tmp_path / "output folder",
         "Anneal review",
         review_quality=82,
+        review_frame_count=100,
         overwrite=True,
     )
 
@@ -440,6 +443,9 @@ def test_build_arguments_preserve_model_pair_order_and_spaces(tmp_path: Path) ->
     ]
     assert predictions == [str(pair.predictions) for pair in request.model_pairs]
     assert specifications == [str(pair.model_spec) for pair in request.model_pairs]
+    assert arguments[
+        arguments.index("--review-frame-count") + 1
+    ] == "100"
     assert arguments[-1] == "--overwrite"
 
 
@@ -466,7 +472,7 @@ def test_validation_response_is_strict(payload: str) -> None:
         parse_validation_response(payload)
 
 
-def test_validation_response_accepts_only_exact_success_schema() -> None:
+def test_validation_response_accepts_current_and_read_only_point_schemas() -> None:
     segment_result = parse_validation_response(
         '{"valid":true,"dataset_id":" run-123 ","segment_count":4}'
     )
@@ -476,11 +482,17 @@ def test_validation_response_accepts_only_exact_success_schema() -> None:
 
     event_result = parse_validation_response(
         '{"valid":true,"dataset_id":" run-456 ",'
-        '"schema_version":"rheed-point-events-v1","event_count":5}'
+        '"schema_version":"rheed-point-events-v2","event_count":5}'
     )
     assert event_result.dataset_id == "run-456"
     assert event_result.event_count == 5
     assert event_result.item_kind == "event"
+    current_result = parse_validation_response(
+        '{"valid":true,"dataset_id":"run-789",'
+        '"schema_version":"rheed-point-events-v3","event_count":6}'
+    )
+    assert current_result.dataset_id == "run-789"
+    assert current_result.event_count == 6
 
 
 def test_model_pairs_move_together_and_remain_ordered(
@@ -638,6 +650,60 @@ def test_legacy_segment_report_is_refused_by_point_event_desktop(
     launcher.deleteLater()
 
 
+def test_open_report_preverifies_session_off_the_qt_thread(
+    tmp_path: Path,
+    qt_app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.rheed_postprocessing_labeling import point_events, report_builder
+
+    report = tmp_path / "interactive_report.html"
+    report.write_text("<!doctype html>", encoding="utf-8")
+    session = tmp_path / "session.zip"
+    session.write_bytes(b"verification-is-mocked")
+    monkeypatch.setattr(report_builder, "load_report_payload", lambda _path: {
+        "config": {"annotation_schema": point_events.SCHEMA_VERSION},
+    })
+    verification_started = threading.Event()
+    release_verification = threading.Event()
+    verification_threads: list[int] = []
+
+    class BlockingStore:
+        def __init__(self, _report: Path, _session: Path) -> None:
+            pass
+
+        def ensure_session_verified(self) -> object:
+            verification_threads.append(threading.get_ident())
+            verification_started.set()
+            assert release_verification.wait(timeout=3)
+            return object()
+
+    monkeypatch.setattr(point_events, "PointEventSidecarStore", BlockingStore)
+    opened: list[str] = []
+    launcher = _launcher(
+        tmp_path,
+        qt_app,
+        opener=lambda url: opened.append(url.toString()) is None,
+    )
+    launcher.session_edit.setText(str(session))
+    main_thread = threading.get_ident()
+    release_timer = threading.Timer(1.0, release_verification.set)
+    release_timer.start()
+    started_at = time.monotonic()
+    try:
+        assert launcher._open_report_with_desktop_controls(report) is True
+        elapsed = time.monotonic() - started_at
+        assert verification_started.wait(timeout=1)
+        assert elapsed < 0.5
+        assert verification_threads and verification_threads[0] != main_thread
+        assert opened and opened[0].startswith("http://127.0.0.1:")
+    finally:
+        release_verification.set()
+        release_timer.cancel()
+        launcher._stop_report_service()
+        launcher.deleteLater()
+
+
 def test_successful_build_auto_opens_expected_report(
     tmp_path: Path,
     qt_app: QApplication,
@@ -692,7 +758,7 @@ def test_build_and_validation_results_fail_closed(
         json.dumps({
             "valid": True,
             "dataset_id": "run-b",
-            "schema_version": "rheed-point-events-v1",
+            "schema_version": "rheed-point-events-v2",
             "event_count": 2,
         })
     ]
@@ -740,3 +806,41 @@ def test_desktop_subcommand_import_is_lazy() -> None:
     assert import_line in source
     assert source.index("def _desktop") < source.index(import_line)
     assert import_line not in source[:source.index("def _desktop")]
+
+
+def test_desktop_subcommand_forwards_explicit_startup_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.rheed_postprocessing_labeling import cli as cli_module
+    from tools.rheed_postprocessing_labeling import desktop_launcher as launcher_module
+
+    session = tmp_path / "session.zip"
+    report = tmp_path / "report" / "interactive_report.html"
+    received: dict[str, object] = {}
+
+    def fake_desktop_main(**kwargs: object) -> int:
+        received.update(kwargs)
+        return 17
+
+    monkeypatch.setattr(launcher_module, "main", fake_desktop_main)
+
+    assert cli_module.main([
+        "desktop",
+        "--session", str(session),
+        "--report", str(report),
+        "--open",
+    ]) == 17
+    assert received == {
+        "initial_session": session,
+        "initial_report": report,
+        "open_report": True,
+    }
+
+
+def test_desktop_open_requires_report() -> None:
+    from tools.rheed_postprocessing_labeling import cli as cli_module
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(["desktop", "--open"])
+    assert exc_info.value.code == 2

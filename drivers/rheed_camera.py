@@ -19,11 +19,15 @@ direct-read future — no screengrab UI contamination (see Jun 15 test
 where a kSA tooltip appeared inside a captured RHEED frame).
 """
 
+import hashlib
+import json
 import logging
 import math
 import sys
 import threading
 from abc import ABC, abstractmethod
+from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -452,6 +456,13 @@ class VmbCamera(RheedCamera):
         self._trigger_hz = trigger_hz
         self._requested_exposure_us = exposure_us
         self._exposure_us: Optional[float] = None
+        # Read-only, point-in-time camera feature snapshot captured after a
+        # successful setup and before streaming starts.  It deliberately
+        # survives disconnect so session_metadata.json can still include it
+        # after the worker has stopped.  A fresh connect clears it first so a
+        # failed reconnect can never expose settings from an older cycle.
+        self._sensor_settings_lock = threading.Lock()
+        self._sensor_settings_at_connect: dict = {}
         self._bit_depth = bit_depth
         # Fixed normalization denominator (4095 for 12-bit Manta G-033B).
         # Used to map raw uint16 ADC samples into the uint8 range while
@@ -537,6 +548,8 @@ class VmbCamera(RheedCamera):
             self._stream_error = None
             self._last_frame_error = None
         self._exposure_us = None
+        with self._sensor_settings_lock:
+            self._sensor_settings_at_connect = {}
         with self._frame_lock:
             self._latest_frame = None
             self._latest_frame_sequence = 0
@@ -1285,6 +1298,15 @@ class VmbCamera(RheedCamera):
                     self._set_if_writable(cam, "TriggerMode", "On", mode, txn)
                     self._set_if_writable(cam, "AcquisitionMode", "Continuous", mode, txn)
 
+                    # Read only, after every requested mutation has its final
+                    # readback and before the callback thread can contend for
+                    # the camera.  Publication is deferred to the transaction
+                    # commit below: a start_streaming failure must not leave a
+                    # snapshot that looks like a successful connection.
+                    pending_sensor_settings = self._read_sensor_settings(
+                        cam, mode,
+                    )
+
                     # Never start acquisition for an abandoned cycle: it would
                     # hold the camera against kSA with no consumer.
                     self._raise_if_cancelled("immediately before start_streaming")
@@ -1311,6 +1333,10 @@ class VmbCamera(RheedCamera):
                                 )
                             txn.committed = True
                             self._active_access_mode = mode
+                            with self._sensor_settings_lock:
+                                self._sensor_settings_at_connect = deepcopy(
+                                    pending_sensor_settings,
+                                )
                             self._ready_event.set()
                         log.info(
                             "VmbCamera connected in AccessMode.%s "
@@ -1343,6 +1369,213 @@ class VmbCamera(RheedCamera):
                     f"__enter__: {e}"
                 ) from e
             raise
+
+    # Acquisition settings that materially affect the image distribution or
+    # identify the camera which produced it.  Firmware families expose
+    # different names, so each logical field has an ordered candidate list;
+    # the first readable candidate wins and its feature name is recorded too.
+    _SENSOR_SETTING_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
+        # ExposureTimeAbs/ExposureTime are specified in microseconds.  The raw
+        # register is deliberately separate: its unit is camera/firmware
+        # specific and must never be mislabeled as microseconds.
+        ("exposure_us", ("ExposureTimeAbs", "ExposureTime")),
+        ("exposure_raw", ("ExposureTimeRaw",)),
+        ("exposure_auto", ("ExposureAuto",)),
+        ("exposure_mode", ("ExposureMode",)),
+        ("gain", ("Gain", "GainRaw")),
+        ("gain_auto", ("GainAuto",)),
+        ("black_level", ("BlackLevel", "BlackLevelRaw")),
+        ("gamma", ("Gamma",)),
+        ("pixel_format", ("PixelFormat",)),
+        ("width", ("Width",)),
+        ("height", ("Height",)),
+        ("width_max", ("WidthMax",)),
+        ("height_max", ("HeightMax",)),
+        ("offset_x", ("OffsetX",)),
+        ("offset_y", ("OffsetY",)),
+        ("binning_horizontal", ("BinningHorizontal",)),
+        ("binning_vertical", ("BinningVertical",)),
+        ("binning_horizontal_mode", ("BinningHorizontalMode",)),
+        ("binning_vertical_mode", ("BinningVerticalMode",)),
+        ("decimation_horizontal", ("DecimationHorizontal",)),
+        ("decimation_vertical", ("DecimationVertical",)),
+        ("decimation_horizontal_mode", ("DecimationHorizontalMode",)),
+        ("decimation_vertical_mode", ("DecimationVerticalMode",)),
+        ("reverse_x", ("ReverseX",)),
+        ("reverse_y", ("ReverseY",)),
+        ("region_selector", ("RegionSelector",)),
+        ("timestamp_tick_frequency_hz", ("GevTimestampTickFrequency",)),
+        ("device_serial", ("DeviceSerialNumber",)),
+        ("device_firmware", ("DeviceFirmwareVersion",)),
+    )
+
+    _GEOMETRY_REQUIRED = (
+        "width", "height", "width_max", "height_max", "offset_x", "offset_y",
+        "binning_horizontal", "binning_vertical", "decimation_horizontal",
+        "decimation_vertical", "reverse_x", "reverse_y",
+    )
+    _GEOMETRY_OPTIONAL = (
+        "binning_horizontal_mode", "binning_vertical_mode",
+        "decimation_horizontal_mode", "decimation_vertical_mode",
+        "region_selector",
+    )
+
+    @staticmethod
+    def _geometry_scalar(key: str, value):
+        """Canonicalize one spatial readback or reject an ambiguous value."""
+
+        if key in {"reverse_x", "reverse_y"}:
+            if isinstance(value, bool):
+                return value
+            raise ValueError(f"{key} must be boolean")
+        if isinstance(value, bool):
+            raise ValueError(f"{key} must be an integer, not boolean")
+        number = float(value)
+        if not math.isfinite(number) or not number.is_integer():
+            raise ValueError(f"{key} must be a finite integer")
+        result = int(number)
+        if key in {"width", "height", "width_max", "height_max"} and result <= 0:
+            raise ValueError(f"{key} must be positive")
+        if key in {"offset_x", "offset_y"} and result < 0:
+            raise ValueError(f"{key} must be non-negative")
+        if key.startswith(("binning_", "decimation_")) and result < 1:
+            raise ValueError(f"{key} must be at least one")
+        return result
+
+    @classmethod
+    def _capture_geometry_metadata(
+        cls, settings: dict, feature_status: dict,
+    ) -> dict:
+        """Derive a stable geometry identity only from proven readbacks.
+
+        Every geometry-affecting value must be confirmed by the camera.  A
+        missing node is not evidence of its neutral value, so missing and
+        unreadable nodes both leave geometry unknown and the identifier empty.
+        WidthMax/HeightMax are required so a cropped ROI is never mislabeled
+        as full-frame based on dimensions alone.
+        """
+
+        fields: dict[str, object] = {}
+        problems: list[str] = []
+        for key in cls._GEOMETRY_REQUIRED:
+            status = str(feature_status.get(key, {}).get("status") or "missing")
+            if status == "confirmed":
+                raw = settings.get(key)
+            else:
+                problems.append(f"{key}:{status}")
+                continue
+            try:
+                fields[key] = cls._geometry_scalar(key, raw)
+            except (TypeError, ValueError, OverflowError):
+                problems.append(f"{key}:invalid")
+
+        for key in cls._GEOMETRY_OPTIONAL:
+            status = str(feature_status.get(key, {}).get("status") or "missing")
+            if status == "confirmed":
+                fields[key] = str(settings.get(key))
+            elif status not in {"not_exposed"}:
+                # These selectors/modes can change pixel correspondence. If a
+                # node exists but is unreadable, do not mint a geometry ID.
+                problems.append(f"{key}:{status}")
+
+        complete = not problems
+        geometry_id = ""
+        full_frame = False
+        capture_region = "unknown"
+        if complete:
+            canonical = {
+                "schema": "vimba-capture-geometry-v1",
+                "fields": fields,
+            }
+            digest = hashlib.sha256(
+                json.dumps(
+                    canonical, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=True, allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            geometry_id = f"vimba-geometry-v1:sha256:{digest}"
+            full_frame = bool(
+                fields["offset_x"] == 0
+                and fields["offset_y"] == 0
+                and fields["width"] == fields["width_max"]
+                and fields["height"] == fields["height_max"]
+            )
+            capture_region = "full_frame" if full_frame else "roi"
+        return {
+            "schema": "vimba-capture-geometry-v1",
+            "readback_complete": complete,
+            "capture_geometry_id": geometry_id,
+            "capture_region": capture_region,
+            "full_frame_confirmed": full_frame,
+            "fields": fields,
+            "problems": problems,
+        }
+
+    def _read_sensor_settings(self, cam, mode: str) -> dict:
+        """Return a non-fatal, read-only snapshot of camera-open settings.
+
+        This is deliberately a point-in-time record, not a claim that the
+        values stayed constant for the session.  Another application can
+        change camera features later, so ``read_at_utc`` is part of the
+        contract.  Missing, unreadable, or oddly typed features are omitted;
+        provenance collection must never make ARM fail.
+        """
+        settings: dict = {
+            "read_at_utc": (
+                datetime.now(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            ),
+            "access_mode": str(mode),
+        }
+        feature_status: dict[str, dict[str, str]] = {}
+        for key, candidates in self._SENSOR_SETTING_CANDIDATES:
+            encountered = False
+            failures: list[str] = []
+            for feature_name in candidates:
+                try:
+                    feature = getattr(cam, feature_name)
+                except AttributeError:
+                    continue
+                except Exception as exc:  # noqa: BLE001 — SDK feature lookup
+                    encountered = True
+                    failures.append(f"{feature_name}:lookup:{type(exc).__name__}")
+                    continue
+                encountered = True
+                try:
+                    value = feature.get()
+                    if not isinstance(value, (str, int, float, bool)):
+                        value = str(value)
+                except Exception as exc:  # noqa: BLE001 — optional SDK provenance
+                    failures.append(f"{feature_name}:read:{type(exc).__name__}")
+                    continue
+                settings[key] = value
+                settings[f"{key}_feature"] = feature_name
+                feature_status[key] = {
+                    "status": "confirmed", "feature": feature_name,
+                }
+                break
+            else:
+                feature_status[key] = {
+                    "status": "unreadable" if encountered else "not_exposed",
+                    "detail": ",".join(failures),
+                }
+        unavailable = [
+            key for key, status in feature_status.items()
+            if status["status"] != "confirmed"
+        ]
+        if unavailable:
+            log.info(
+                "VmbCamera: optional camera-open settings unavailable: %s",
+                ", ".join(unavailable),
+            )
+        settings["feature_read_status"] = feature_status
+        geometry = self._capture_geometry_metadata(settings, feature_status)
+        settings["capture_geometry"] = geometry
+        settings["capture_geometry_id"] = geometry["capture_geometry_id"]
+        settings["geometry_readback_complete"] = geometry["readback_complete"]
+        settings["full_frame_confirmed"] = geometry["full_frame_confirmed"]
+        return settings
 
     def _stop_streaming_or_flag_unknown(self, cam) -> None:
         """Stop acquisition, or mark the camera unusable until power-cycled.
@@ -1664,6 +1897,32 @@ class VmbCamera(RheedCamera):
     def exposure_us(self) -> Optional[float]:
         """Confirmed camera exposure readback for the active connect cycle."""
         return self._exposure_us
+
+    @property
+    def sensor_settings_at_connect(self) -> dict:
+        """Defensive copy of the most recent successful camera-open snapshot.
+
+        The record survives disconnect so STOP and window-close can persist it
+        after worker teardown.  It is empty before a successful connect and
+        is explicitly timestamped because external camera software may change
+        settings later in the session.
+        """
+        with self._sensor_settings_lock:
+            return deepcopy(self._sensor_settings_at_connect)
+
+    @property
+    def capture_geometry_id(self) -> str:
+        """Spatial identity from the successful connect-cycle readback.
+
+        Empty means the required geometry could not be proven.  In
+        particular this never falls back to a dimensions-only ``full-frame``
+        claim.
+        """
+        with self._sensor_settings_lock:
+            return str(
+                self._sensor_settings_at_connect.get("capture_geometry_id")
+                or ""
+            )
 
 
 class ScreenGrabCamera(RheedCamera):

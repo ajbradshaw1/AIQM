@@ -6,15 +6,13 @@ import json
 from pathlib import Path
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 
 import pytest
 
-from tools.rheed_postprocessing_labeling.loopback_service import (
-    EqualizerRequest,
-    LoopbackReportService,
-)
+from tools.rheed_postprocessing_labeling.loopback_service import LoopbackReportService
 
 
 def _json_request(url: str, *, token: str, payload: dict | None = None):
@@ -28,21 +26,14 @@ def _json_request(url: str, *, token: str, payload: dict | None = None):
         return response.status, json.loads(response.read().decode("utf-8"))
 
 
-def test_loopback_service_is_token_bound_and_completes_one_equalizer_request() -> None:
+def test_loopback_service_is_token_bound_and_equalizer_is_unavailable() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         report = root / "interactive_report.html"
         report.write_text("<!doctype html><title>offline</title>", encoding="utf-8")
         (root / "images").mkdir()
         (root / "images" / "frame_1.webp").write_bytes(b"fixture")
-        received: list[EqualizerRequest] = []
-        ready = threading.Event()
-
-        def receive(request: EqualizerRequest) -> None:
-            received.append(request)
-            ready.set()
-
-        service = LoopbackReportService(report, equalizer_callback=receive)
+        service = LoopbackReportService(report)
         try:
             report_url = service.start()
             assert report_url.startswith("http://127.0.0.1:")
@@ -58,98 +49,159 @@ def test_loopback_service_is_token_bound_and_completes_one_equalizer_request() -
             else:  # pragma: no cover - explicit security assertion
                 raise AssertionError("unauthenticated request unexpectedly succeeded")
 
-            status, queued = _json_request(
-                service.base_url + "/api/equalizer/request",
-                token=service.token,
-                payload={
-                    "event_id": "legacy-74d3f6d68b624584",
-                    "review_frame_index": 3,
-                    "reviewer": "Grower A",
-                },
+            _, status_payload = _json_request(
+                service.base_url + "/api/status", token=service.token,
             )
-            assert status == 202
-            assert ready.wait(1)
-            request = received[0]
-            assert request.request_id == queued["request_id"]
-            assert request.review_frame_index == 3
-
-            service.complete_equalizer(request.request_id, {
-                "schema_version": 1,
-                "frame_sha256": "a" * 64,
-                "final_weights": {"1x1": 1.0, "HTR": None},
-            })
-            _, result = _json_request(
-                service.base_url
-                + "/api/equalizer/result?request_id="
-                + request.request_id,
-                token=service.token,
-            )
-            assert result["status"] == "complete"
-            assert result["measurement"]["final_weights"]["HTR"] is None
-            assert len(result["result_token"]) >= 32
+            assert status_payload["equalizer_available"] is False
+            assert status_payload["session_verification"] == "ready"
+            assert status_payload["session_verification_error"] == ""
+            with pytest.raises(urllib.error.HTTPError) as unavailable:
+                _json_request(
+                    service.base_url + "/api/equalizer/request",
+                    token=service.token,
+                    payload={
+                        "event_id": "event-1",
+                        "review_frame_index": 3,
+                        "reviewer": "Grower A",
+                    },
+                )
+            assert unavailable.value.code == 400
+            assert b"separate diagnostic" in unavailable.value.read()
         finally:
             service.stop()
 
 
-def test_equalizer_revision_redeems_server_result_once() -> None:
+def test_loopback_rejects_equalizer_revision_even_if_legacy_callbacks_exist() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         report = Path(temporary) / "interactive_report.html"
         report.write_text("<!doctype html>", encoding="utf-8")
-        requests: list[EqualizerRequest] = []
-        trusted: list[tuple[dict, dict]] = []
-
-        def persist_equalizer(command, measurement):
-            trusted.append((dict(command), dict(measurement)))
-            return {"ok": True, "event": {"event_id": command["event_id"]}}
-
         service = LoopbackReportService(
             report,
-            equalizer_callback=requests.append,
             revision_callback=lambda _command: {"ok": True},
-            equalizer_revision_callback=persist_equalizer,
+            equalizer_callback=lambda _request: None,
+            equalizer_revision_callback=lambda _command, _measurement: {
+                "ok": True,
+            },
         )
         try:
             service.start()
-            _, queued = _json_request(
-                service.base_url + "/api/equalizer/request", token=service.token,
-                payload={"event_id": "event-1", "review_frame_index": 2, "reviewer": "Grower"},
-            )
-            service.complete_equalizer(
-                queued["request_id"], {"valid": True, "frame_sha256": "a" * 64},
-            )
-            _, result = _json_request(
-                service.base_url + "/api/equalizer/result?request_id=" + queued["request_id"],
-                token=service.token,
-            )
-            with pytest.raises(urllib.error.HTTPError) as arbitrary:
+            with pytest.raises(urllib.error.HTTPError) as rejected:
                 _json_request(
                     service.base_url + "/api/revisions", token=service.token,
                     payload={
                         "action": "set_equalizer", "event_id": "event-1",
-                        "changes": {"equalizer": {"valid": True}},
+                        "changes": {"equalizer_result_token": "legacy-token"},
                     },
                 )
-            assert arbitrary.value.code == 400
-            command = {
-                "action": "set_equalizer", "event_id": "event-1",
-                "changes": {"equalizer_result_token": result["result_token"]},
-            }
-            _, saved = _json_request(
-                service.base_url + "/api/revisions", token=service.token,
-                payload=command,
-            )
-            assert saved["ok"] is True
-            assert trusted[0][0]["changes"] == {}
-            assert trusted[0][1]["frame_sha256"] == "a" * 64
-            with pytest.raises(urllib.error.HTTPError) as reused:
-                _json_request(
-                    service.base_url + "/api/revisions", token=service.token,
-                    payload=command,
-                )
-            assert reused.value.code == 400
+            assert rejected.value.code == 400
+            assert b"not part of rheed-point-events-v3" in rejected.value.read()
         finally:
             service.stop()
         assert not service.running
+
+
+def test_session_verification_reports_pending_then_ready_and_gates_revision() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        report = Path(temporary) / "interactive_report.html"
+        report.write_text("<!doctype html>", encoding="utf-8")
+        verification_started = threading.Event()
+        release_verification = threading.Event()
+        revision_called = threading.Event()
+
+        def verify_session() -> None:
+            verification_started.set()
+            assert release_verification.wait(timeout=3)
+
+        def persist(_payload):
+            revision_called.set()
+            return {"ok": True, "event": {}, "revision": {}}
+
+        service = LoopbackReportService(
+            report,
+            revision_callback=persist,
+            session_verification_callback=verify_session,
+        )
+        request_result: list[object] = []
+        try:
+            service.start()
+            assert verification_started.wait(timeout=1)
+            _, pending = _json_request(
+                service.base_url + "/api/status", token=service.token,
+            )
+            assert pending["session_verification"] == "pending"
+            assert pending["session_verification_error"] == ""
+
+            def submit_revision() -> None:
+                try:
+                    request_result.append(_json_request(
+                        service.base_url + "/api/revisions",
+                        token=service.token,
+                        payload={"action": "edit"},
+                    ))
+                except Exception as exc:  # pragma: no cover - assertion below
+                    request_result.append(exc)
+
+            request_thread = threading.Thread(target=submit_revision)
+            request_thread.start()
+            request_thread.join(timeout=0.1)
+            assert request_thread.is_alive()
+            assert not revision_called.is_set()
+
+            release_verification.set()
+            request_thread.join(timeout=2)
+            assert not request_thread.is_alive()
+            assert revision_called.is_set()
+            assert request_result == [(200, {
+                "ok": True, "event": {}, "revision": {},
+            })]
+            _, ready = _json_request(
+                service.base_url + "/api/status", token=service.token,
+            )
+            assert ready["session_verification"] == "ready"
+            assert ready["session_verification_error"] == ""
+        finally:
+            release_verification.set()
+            service.stop()
+
+
+def test_session_verification_error_is_reported_and_mutations_fail_closed() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        report = Path(temporary) / "interactive_report.html"
+        report.write_text("<!doctype html>", encoding="utf-8")
+        revision_called = threading.Event()
+
+        def fail_verification() -> None:
+            raise ValueError("session archive mismatch")
+
+        service = LoopbackReportService(
+            report,
+            revision_callback=lambda _payload: revision_called.set() or {},
+            session_verification_callback=fail_verification,
+        )
+        try:
+            service.start()
+            deadline = time.monotonic() + 2
+            while True:
+                _, status = _json_request(
+                    service.base_url + "/api/status", token=service.token,
+                )
+                if status["session_verification"] == "error":
+                    break
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            assert status["session_verification_error"] == "session archive mismatch"
+
+            with pytest.raises(urllib.error.HTTPError) as rejected:
+                _json_request(
+                    service.base_url + "/api/revisions",
+                    token=service.token,
+                    payload={"action": "edit"},
+                )
+            assert rejected.value.code == 400
+            assert b"Source session verification failed" in rejected.value.read()
+            assert not revision_called.is_set()
+        finally:
+            service.stop()
 
 
 def test_loopback_service_persists_revision_via_injected_fail_closed_callback() -> None:
@@ -165,7 +217,6 @@ def test_loopback_service_persists_revision_via_injected_fail_closed_callback() 
 
         service = LoopbackReportService(
             report,
-            equalizer_callback=lambda _request: None,
             revision_callback=persist,
             import_callback=lambda document: (
                 imports.append(dict(document))
@@ -194,10 +245,18 @@ def test_loopback_service_persists_revision_via_injected_fail_closed_callback() 
             assert calls == [{"event_id": "event-1", "action": "update"}]
             _, imported = _json_request(
                 service.base_url + "/api/events/import", token=service.token,
-                payload={"document": {"schema_version": "rheed-point-events-v1"}},
+                payload={"document": {"schema_version": "rheed-point-events-v3"}},
             )
             assert imported["ok"] is True
-            assert imports == [{"schema_version": "rheed-point-events-v1"}]
+            assert imports == [{"schema_version": "rheed-point-events-v3"}]
+            with pytest.raises(urllib.error.HTTPError) as legacy:
+                _json_request(
+                    service.base_url + "/api/events/import", token=service.token,
+                    payload={"document": {"schema_version": "rheed-point-events-v2"}},
+                )
+            assert legacy.value.code == 400
+            assert b"read-only evidence" in legacy.value.read()
+            assert imports == [{"schema_version": "rheed-point-events-v3"}]
         finally:
             service.stop()
 
@@ -207,7 +266,7 @@ def test_loopback_service_rejects_traversal_and_incomplete_requests() -> None:
         root = Path(temporary)
         report = root / "interactive_report.html"
         report.write_text("<!doctype html>", encoding="utf-8")
-        service = LoopbackReportService(report, equalizer_callback=lambda _request: None)
+        service = LoopbackReportService(report)
         try:
             service.start()
             for path in ("/../secret.txt", "/run_manifest.json", "/images"):
@@ -225,7 +284,7 @@ def test_loopback_service_rejects_traversal_and_incomplete_requests() -> None:
                 )
             except urllib.error.HTTPError as exc:
                 assert exc.code == 400
-                assert b"reviewer" in exc.read()
+                assert b"separate diagnostic" in exc.read()
             else:  # pragma: no cover
                 raise AssertionError("request without reviewer unexpectedly succeeded")
         finally:
