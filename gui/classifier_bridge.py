@@ -23,6 +23,7 @@ import numpy as np
 # ``GUI_LABELS`` / ``C2_LABELS`` names are kept as aliases so existing
 # importers (scripts/classifier_demo.py) keep working; new code should
 # import from ``gui.recon_labels`` directly.
+from gui.classifier_repository import classifier2_directory
 from gui.recon_labels import RECON_LABELS, CLASSIFIER2_TO_GUI
 
 GUI_LABELS = RECON_LABELS
@@ -60,15 +61,9 @@ class ClassifierBridge:
         self._repo = Path(ai_repo_root)
         self._bad_threshold = bad_threshold
 
-        # Auto-detect the Classifier2 layout. Justin's GitHub origin/main is
-        # still pre-reorg (Classifier2/ at repo root); some local clones (AJ's
-        # Mac) are post-reorg (src/classifiers/classifier2/). Prefer the
-        # post-reorg path when present, fall back to the pre-reorg one.
-        candidates = [
-            self._repo / "src" / "classifiers" / "classifier2",
-            self._repo / "Classifier2",
-        ]
-        c2_dir_path = next((p for p in candidates if p.exists()), candidates[0])
+        # Prefer the post-reorg layout, but only when it contains evaluate.py.
+        # A stale empty directory must not shadow a complete root/Classifier2.
+        c2_dir_path = classifier2_directory(self._repo)
         c2_dir = str(c2_dir_path)
         if c2_dir not in sys.path:
             sys.path.insert(0, c2_dir)

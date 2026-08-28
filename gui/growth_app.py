@@ -22,6 +22,7 @@ from PyQt6.QtCore import QEvent, pyqtSlot, Qt, QTimer
 log = logging.getLogger(__name__)
 
 from gui.auto_capture import AutoCaptureEngine, PixelDiffChangeDetector
+from gui.classifier_repository import resolve_ai_repo_root
 from gui.equalizer_alignment import (
     BasisBundle,
     CalibrationRecord,
@@ -152,38 +153,9 @@ def resolve_workspace_folder(folder: str | Path) -> Path:
     return path
 
 
-# Known AI_for_quantum clone locations, in preference order. Kept in
-# sync with EventsTab._KNOWN_AI_REPO_ROOTS in gui/events_tab.py — if
-# a third caller shows up, move both to a shared module.
-_KNOWN_AI_REPO_ROOTS = [
-    # Bulbasaur (O-MBE)
-    r"C:\Users\Lab10\AI_for_quantum",
-    # Ch-MBE (Omicron chalcogenide MBE) — added 2026-07-21
-    r"C:\Users\Omicron\AI_for_quantum",
-    # AJ's Mac dev clone
-    "/Users/aj/ai-for-quantum",
-]
-
-
 def _resolve_ai_repo_root() -> str:
-    """Find the AI_for_quantum repo path for ClassifierBridge.
-
-    Precedence:
-      1. ``AI_REPO_ROOT`` env var — per-machine escape hatch
-      2. First existing path from ``_KNOWN_AI_REPO_ROOTS``
-      3. First entry as fallback (error message will point at a concrete
-         path we tried)
-
-    Kept in sync with ``gui/events_tab.py::_default_ai_repo_root``.
-    """
-    env = os.environ.get("AI_REPO_ROOT")
-    if env:
-        return env
-    from pathlib import Path
-    for candidate in _KNOWN_AI_REPO_ROOTS:
-        if Path(candidate).exists():
-            return candidate
-    return _KNOWN_AI_REPO_ROOTS[0]
+    """Return the shared Classifier2 repository resolution as a string."""
+    return str(resolve_ai_repo_root())
 
 
 _BUNDLED_WEAK_PRIMARY_AI_ROOT = (
@@ -559,20 +531,36 @@ class GrowthApp(QMainWindow):
         # rest of the app. Skipped entirely when the config checkbox is
         # unchecked so a misbehaving classifier can't block a session.
         classifier_enabled = self.monitor.config_classifier_enabled.isChecked()
+        classifier_setup_error = ""
         if classifier_enabled and (
             not self.classifier_worker or not self.classifier_worker.isRunning()
         ):
-            self.classifier_worker = ClassifierWorker(
-                ai_repo_root=_resolve_ai_repo_root(),
-            )
-            self.camera_worker.state_updated.connect(
-                self.classifier_worker.on_rheed_state,
-                Qt.ConnectionType.DirectConnection,
-            )
-            self.classifier_worker.state_updated.connect(
-                self._on_classifier_state,
-            )
-            self.classifier_worker.start()
+            try:
+                self.classifier_worker = ClassifierWorker(
+                    ai_repo_root=_resolve_ai_repo_root(),
+                )
+                self.camera_worker.state_updated.connect(
+                    self.classifier_worker.on_rheed_state,
+                    Qt.ConnectionType.DirectConnection,
+                )
+                self.classifier_worker.state_updated.connect(
+                    self._on_classifier_state,
+                )
+                self.classifier_worker.start()
+            except Exception as exc:
+                # The live classifier is optional. Camera/sensor startup and
+                # the independently bundled weak-primary shadow must continue
+                # even when repository discovery or worker setup fails.
+                self.classifier_worker = None
+                classifier_setup_error = f"Failed to load classifier: {exc}"
+                log.exception(
+                    "Live classifier setup failed; arming continues without it"
+                )
+                self._on_classifier_state(ClassifierState(
+                    loading=False,
+                    ready=False,
+                    error=classifier_setup_error,
+                ))
         elif not classifier_enabled:
             # Defensive stop: if a previous arm cycle left a classifier
             # worker running and the user re-armed with the checkbox
@@ -680,7 +668,13 @@ class GrowthApp(QMainWindow):
             self.evap_worker.start()
 
         self.monitor.set_state("armed")
-        self.statusBar().showMessage("Armed \u2014 live readings active")
+        if classifier_setup_error:
+            self.statusBar().showMessage(
+                "Armed \u2014 live readings active; live classifier unavailable",
+                7000,
+            )
+        else:
+            self.statusBar().showMessage("Armed \u2014 live readings active")
 
     @pyqtSlot()
     def _on_disarm(self):
