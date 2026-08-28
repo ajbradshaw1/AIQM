@@ -131,7 +131,8 @@ Common failure hints:
 
 ### 3b. Short GUI session (for the audit script)
 
-Launch Growth Monitor for O-MBE:
+Launch Growth Monitor for O-MBE by double-clicking
+`Start O-MBE Growth Monitor.cmd` (or use the equivalent explicit entry point):
 
 ```powershell
 python growth_monitor_ombe.py

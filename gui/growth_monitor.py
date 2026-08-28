@@ -10,8 +10,9 @@ Tab layout:
              growth notes (bottom half, full width), export
 """
 
+import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -29,33 +30,36 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QFont, QShortcut, QKeySequence
 
 
-def _default_save_path() -> str:
+def _default_save_path(config: Optional[MBESystemConfig] = None) -> str:
     """Pick the default growth-log save path.
 
-    On Bulbasaur (Windows with the T9 SSD mounted at E:), prefer
-    ``E:\\OMBE\\GrowthMonitor`` per PI directive that growth data goes
-    on the SSD, not C:'s bloat. Checks the DRIVE (``E:\\``), not the
-    ``OMBE`` folder — the folder is created on first save. Historically
-    the check required ``E:\\OMBE`` to already exist, which fell back to
-    the repo when a fresh Bulbasaur launch hadn't yet materialized the
-    folder — bug found Jul 8 2026.
+    On Windows with the T9 SSD mounted at E:, use a chamber-specific root:
+    ``E:\\OMBE\\GrowthMonitor`` or ``E:\\ChMBE\\GrowthMonitor``.  Checks the
+    DRIVE (``E:\\``), not a chamber folder — the folder is created on first
+    save.  This keeps a Ch-MBE launch from silently inheriting an O-MBE path.
 
     Fallbacks:
-      - Windows without the T9 mounted → ``%USERPROFILE%\\Documents\\OMBE``.
+      - Windows without the T9 mounted → the corresponding chamber folder
+        under ``%USERPROFILE%\\Documents``.
         Better than the repo path because it's still off C:'s bloat
         (whichever partition Documents lives on, typically not the
         overflowing one).
       - Non-Windows (Mac dev) → ``logs/growths`` relative to the repo.
         Backwards-compatible for local dev / CI test paths.
     """
+    installed_session_root = os.environ.get("AIQM_SESSION_ROOT", "").strip()
+    if installed_session_root:
+        return installed_session_root
+    cfg = config or get_active_config()
+    chamber_folder = "ChMBE" if cfg.chamber_id == "chmbe" else "OMBE"
     if sys.platform == "win32":
         # Check the drive itself, not the OMBE folder — folder gets
         # created on first save if missing.
         if Path("E:\\").exists():
-            return r"E:\OMBE\GrowthMonitor"
+            return str(Path("E:\\") / chamber_folder / "GrowthMonitor")
         # Windows without T9: prefer Documents over C: root; keeps growth
         # sessions per-user and off any C:-bloat path.
-        return str(Path.home() / "Documents" / "OMBE")
+        return str(Path.home() / "Documents" / chamber_folder)
     # Non-Windows dev: repo-relative default preserves test / CI paths.
     return "logs/growths"
 
@@ -719,20 +723,23 @@ class GrowthMonitor(QWidget):
         )
         rheed_qc_row.addWidget(self.rheed_energy_btn, 0)
 
-        self.rheed_qc_pass_btn = QPushButton("QC PASS")
+        self.rheed_qc_pass_btn = QPushButton("IMAGE USABLE")
         self.rheed_qc_pass_btn.setToolTip(
-            "Explicitly label the current full RHEED image as globally usable. "
-            "This is not a reconstruction label."
+            "Mark the current full RHEED acquisition image as usable for "
+            "analysis. This describes image acquisition quality only; it is "
+            "not a surface reconstruction or film-quality label."
         )
         self.rheed_qc_pass_btn.clicked.connect(
             lambda: self._emit_rheed_qc_label("qc_pass"),
         )
         rheed_qc_row.addWidget(self.rheed_qc_pass_btn, 0)
 
-        self.rheed_qc_reject_btn = QPushButton("QC REJECT")
+        self.rheed_qc_reject_btn = QPushButton("IMAGE UNUSABLE")
         self.rheed_qc_reject_btn.setToolTip(
-            "Explicitly label the current full RHEED image as unusable for "
-            "classification. Add a reason in the note box when possible."
+            "Mark the current full RHEED acquisition image as unusable for "
+            "analysis. This describes acquisition failure or obstruction, "
+            "not surface reconstruction or film quality. Add a reason in "
+            "the note box when possible."
         )
         self.rheed_qc_reject_btn.setStyleSheet(
             "QPushButton { background-color: #7f1d1d; color: white; }"
@@ -1111,7 +1118,7 @@ class GrowthMonitor(QWidget):
 
         save_row = QHBoxLayout()
         self.config_save_path = QLineEdit()
-        default_save = _default_save_path()
+        default_save = _default_save_path(self._cfg)
         self.config_save_path.setPlaceholderText(default_save)
         self.config_save_path.setText(default_save)
         save_row.addWidget(self.config_save_path)
@@ -1167,10 +1174,43 @@ class GrowthMonitor(QWidget):
             5,
             "Legacy monitor-pixel capture; overlays can contaminate frames.",
         )
+        self.config_camera_mode.setItemData(
+            6,
+            "Direct read from the AVT camera through the Vimba SDK.",
+        )
+        self.config_camera_mode.setCurrentText(self._cfg.camera_mode_default)
         config_form.addRow("Camera mode:", self.config_camera_mode)
+
+        self.config_camera_exposure_ms = QDoubleSpinBox()
+        safe_exposure_max_ms = (
+            900.0 / self._cfg.camera_fps
+            if self._cfg.camera_fps > 0 else 900.0
+        )
+        self.config_camera_exposure_ms.setRange(0.0, safe_exposure_max_ms)
+        self.config_camera_exposure_ms.setDecimals(0)
+        self.config_camera_exposure_ms.setSingleStep(10.0)
+        self.config_camera_exposure_ms.setSuffix(" ms")
+        self.config_camera_exposure_ms.setSpecialValueText("Keep current")
+        configured_exposure = self._cfg.camera_exposure_us
+        self.config_camera_exposure_ms.setValue(
+            configured_exposure / 1000.0 if configured_exposure else 0.0
+        )
+        self.config_camera_exposure_ms.setToolTip(
+            "Manual exposure for direct Vimba mode. 'Keep current' performs "
+            f"no camera write. The {safe_exposure_max_ms:.0f} ms ceiling "
+            f"preserves headroom for the {self._cfg.camera_fps:g} Hz "
+            "acquisition loop. Applied when ARM is pressed and recorded in "
+            "session metadata; it does not modify the camera user set."
+        )
+        config_form.addRow("Direct exposure:", self.config_camera_exposure_ms)
+        self.config_camera_mode.currentTextChanged.connect(
+            self._update_camera_exposure_enabled,
+        )
+        self._update_camera_exposure_enabled()
 
         self.config_pyrometer_mode = QComboBox()
         self.config_pyrometer_mode.addItems(["dummy", "exactus", "modbus", "screengrab"])
+        self.config_pyrometer_mode.setCurrentText(self._cfg.pyrometer_mode_default)
         config_form.addRow("Pyrometer mode:", self.config_pyrometer_mode)
 
         # Seeded from the active chamber config so each chamber opens on its
@@ -1256,6 +1296,7 @@ class GrowthMonitor(QWidget):
                 self.config_browse_btn,
                 self.config_prefix,
                 self.config_camera_mode,
+                self.config_camera_exposure_ms,
                 self.config_pyrometer_mode,
                 self.config_exactus_port,
                 self.config_exactus_baud,
@@ -1367,6 +1408,13 @@ class GrowthMonitor(QWidget):
         "from the running worker)."
     )
 
+    def _update_camera_exposure_enabled(self, mode: str = "") -> None:
+        """Expose the hardware write control only for unlocked direct mode."""
+        selected_mode = str(mode or self.config_camera_mode.currentText())
+        self.config_camera_exposure_ms.setEnabled(
+            self._state == "idle" and selected_mode in ("vimba", "direct")
+        )
+
     def _set_config_widgets_enabled(self, enabled: bool) -> None:
         """Lock/unlock the config panel widgets in bulk.
 
@@ -1387,6 +1435,8 @@ class GrowthMonitor(QWidget):
                 widget.setToolTip(orig_tooltip)
             else:
                 widget.setToolTip(self._CONFIG_LOCKED_TOOLTIP)
+        if enabled:
+            self._update_camera_exposure_enabled()
 
     def _apply_state(self):
         s = self._state
@@ -1412,7 +1462,11 @@ class GrowthMonitor(QWidget):
             self.arm_btn.setText("DISARM")
             self.arm_btn.setStyleSheet(BTN_DISARM)
             self.arm_btn.setEnabled(True)
-            self.start_btn.setEnabled(True)
+            # NOT unconditionally enabled: ARM means the worker started, not
+            # that the camera ever delivered. _refresh_start_enabled turns it
+            # on when the first qualifying frame arrives, and off again if
+            # delivery stops.
+            self.start_btn.setEnabled(self.has_live_camera_frame())
             self.start_btn.setStyleSheet(BTN_START)
             self.stop_btn.setEnabled(False)
             self.commit_btn.setEnabled(False)
@@ -1425,6 +1479,19 @@ class GrowthMonitor(QWidget):
             # the values that were current at arm time.
             self._set_config_widgets_enabled(False)
         elif s == "running":
+            # The session clock starts HERE, not on the button click: this
+            # branch is reached only after GrowthApp accepted the request and
+            # opened the session.
+            #
+            # Guarded on the TIMER, not on _start_time. A redundant
+            # set_state("running") mid-session must not restart the clock and
+            # reset elapsed time — but _start_time survives STOP (it is only
+            # cleared by reset_displays on disarm) because the export path
+            # still reads it, so guarding on that would leave a second session
+            # in the same arm cycle with a dead clock.
+            if not self._elapsed_timer.isActive():
+                self._start_time = datetime.now()
+                self._elapsed_timer.start()
             self.arm_btn.setEnabled(False)
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
@@ -1446,6 +1513,18 @@ class GrowthMonitor(QWidget):
 
         self._update_rheed_qc_controls()
 
+    @property
+    def state(self) -> str:
+        """Current top-bar state: "idle", "armed", or "running".
+
+        Read-only accessor so GrowthApp can tell a pre-session ARM from a
+        live session without reaching into ``_state``. The distinction
+        matters for camera failures: refusing to arm should return the GUI
+        to idle, while losing the camera mid-growth must leave the session
+        and its sensor logging alone.
+        """
+        return self._state
+
     def set_state(self, new_state: str):
         self._state = new_state
         self._apply_state()
@@ -1457,10 +1536,21 @@ class GrowthMonitor(QWidget):
             self.disarm_requested.emit()
 
     def _on_start_clicked(self):
-        if self._state == "armed":
-            self._start_time = datetime.now()
-            self._elapsed_timer.start()
-            self.start_requested.emit()
+        # Deliberately does NOT start the clock. GrowthApp can still refuse
+        # this request — no live frame, an unrecovered log transaction — and
+        # it returns without unwinding anything the click did. Starting the
+        # elapsed timer here meant a refused START left a running clock and a
+        # populated _start_time behind an "armed" UI, so the next successful
+        # start inherited a session age that predated the session.
+        #
+        # The clock now starts in _apply_state("running"), which only happens
+        # after every precondition and the session initialisation succeeded.
+        if self._state != "armed":
+            return
+        if not self.has_live_camera_frame():
+            # Defense in depth: the button should already be disabled.
+            return
+        self.start_requested.emit()
 
     def _on_stop_clicked(self):
         if self._state == "running":
@@ -1602,8 +1692,45 @@ class GrowthMonitor(QWidget):
         )
         self.plasma_group.setVisible(plasma_on)
 
+    def has_live_camera_frame(self) -> bool:
+        """Whether the camera has delivered a usable frame this arm cycle.
+
+        Reads the LAST state rather than a "did we ever see one" flag: a camera
+        that delivered frames and then died must not keep permitting a session
+        start. The worker's starvation deadline clears ``connected`` once
+        delivery stops, so both never-started and went-quiet fail this.
+        """
+        state = self._latest_camera
+        if state is None:
+            return False
+        return bool(
+            getattr(state, "connected", False)
+            and getattr(state, "valid", False)
+            and getattr(state, "frame", None) is not None
+        )
+
+    def _refresh_start_enabled(self) -> None:
+        """START is available only while armed AND holding a live frame.
+
+        ARM only proves the worker started; direct Vimba reads are
+        edge-triggered, so a camera can connect and never fire a callback.
+        Leaving START clickable in that window let a grower begin a growth
+        with no RHEED at all — and the slot-side rejection came too late,
+        after the click had already started the session clock.
+        """
+        if self._state != "armed":
+            return
+        enabled = self.has_live_camera_frame()
+        self.start_btn.setEnabled(enabled)
+        self.start_btn.setToolTip(
+            "" if enabled else
+            "Waiting for the first live RHEED frame. If this does not clear, "
+            "DISARM and check camera access (kSA / Vimba X Viewer)."
+        )
+
     def update_camera_state(self, state: CameraState):
         self._latest_camera = state
+        self._refresh_start_enabled()
         if state.frame is not None:
             self._current_frame = state.frame
             self._display_frame(state.frame)
@@ -1627,6 +1754,10 @@ class GrowthMonitor(QWidget):
                     "RHEED unavailable",
                 )
         self._update_rheed_qc_controls()
+
+    def clear_camera_provenance(self) -> None:
+        """Drop the prior arm cycle's camera readback before reconnecting."""
+        self._latest_camera = None
 
     # Value-label style presets. Kept as constants so update_classifier_state
     # doesn't allocate style strings per emission (5-slider hot path at 2 Hz).
@@ -2309,6 +2440,7 @@ class GrowthMonitor(QWidget):
         """
         if not self.mark_event_btn.isEnabled():
             return
+        event_at_utc = datetime.now(timezone.utc).isoformat()
 
         # PSU snapshot — same priority as _on_commit (mistral > direct >
         # none). Keeps psu_source semantically identical between the two
@@ -2338,6 +2470,7 @@ class GrowthMonitor(QWidget):
         note = self.log_note_input.toPlainText().strip()
 
         payload = {
+            "event_at_utc": event_at_utc,
             "elapsed_s": self.get_elapsed_seconds(),
             "pyro_temp": pyro_temp,
             "voltage_V": voltage_v,
@@ -2740,15 +2873,46 @@ class GrowthMonitor(QWidget):
     def get_session_metadata(self) -> dict:
         """Return session metadata for growth log export."""
         mistral_mode = self.config_mistral_mode.currentText()
+        direct_camera = self.config_camera_mode.currentText() in (
+            "vimba", "direct",
+        )
         metadata = {
             "date": datetime.now().strftime("%Y-%m-%d"),
             "grower": self.grower_input.text(),
             "sample_id": self.sample_id_input.text(),
             "chamber_id": self._cfg.chamber_id,
             "camera_mode": self.config_camera_mode.currentText(),
+            "camera_exposure_requested_ms": (
+                self.config_camera_exposure_ms.value()
+                if direct_camera
+                and self.config_camera_exposure_ms.value() > 0
+                else None
+            ),
+            "camera_exposure_readback_ms": (
+                self._latest_camera.exposure_us / 1000.0
+                if direct_camera
+                and self._latest_camera is not None
+                and self._latest_camera.exposure_us is not None
+                else None
+            ),
             "mistral_mode": mistral_mode,
             "evap_mode": self.config_evap_mode.currentText(),
             "pyrometer_mode": self.config_pyrometer_mode.currentText(),
+            # Record the effective serial settings, including user-editable
+            # COM/baud values and chamber-bound transport fields.  These are
+            # provenance only and do not authorize a setpoint change.
+            "pyrometer_port": (
+                self.config_exactus_port.text().strip()
+                or self._cfg.pyrometer_port
+            ),
+            "pyrometer_baudrate": int(
+                self.config_exactus_baud.currentText()
+            ),
+            "pyrometer_device_id": self._cfg.pyrometer_device_id,
+            "pyrometer_rts": self._cfg.pyrometer_rts,
+            "pyrometer_modbus_backend": (
+                self._cfg.pyrometer_modbus_backend
+            ),
             "weak_primary_shadow_enabled": (
                 self.config_weak_primary_shadow_enabled.isChecked()
             ),
@@ -2762,6 +2926,16 @@ class GrowthMonitor(QWidget):
             metadata["mistral_ads_cell_count"] = self._cfg.ads_cell_count
             metadata["mistral_ads_port_main"]  = self._cfg.ads_port_main
             metadata["mistral_ads_port_pid"]   = self._cfg.ads_port_pid
+        if metadata["evap_mode"] == "elog":
+            metadata["evap_log_dir"] = self._cfg.evap_log_dir
+            latest_evap = self._latest_evap
+            source_path = (
+                latest_evap.source_path
+                if latest_evap is not None
+                else ""
+            )
+            metadata["evap_source_path"] = source_path
+            metadata["evap_source_resolved"] = bool(source_path)
         return metadata
 
     # ----- Reset -----------------------------------------------------------

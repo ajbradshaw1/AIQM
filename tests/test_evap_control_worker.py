@@ -19,6 +19,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 # Must set BEFORE any Qt import — headless CI/local runs on Mac + Linux.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -34,6 +35,7 @@ _app = QApplication.instance() or QApplication(sys.argv)
 from drivers.evap_control import (  # noqa: E402
     DummyEvapControl, ElogReader, EvapControl,
 )
+from drivers.config import CHALCOGENIDE_MBE, OXIDE_MBE  # noqa: E402
 from gui.growth_monitor import GrowthMonitor  # noqa: E402
 from gui.state import EvapControlState  # noqa: E402
 from gui.workers import EvapControlWorker  # noqa: E402
@@ -113,9 +115,46 @@ class WorkerModeRoutingTests(unittest.TestCase):
         self.assertIsInstance(driver, EvapControl)
 
     def test_elog_mode_returns_elog_reader(self):
-        worker = EvapControlWorker(mode="elog")
+        worker = EvapControlWorker(
+            mode="elog",
+            log_dir=CHALCOGENIDE_MBE.evap_log_dir,
+        )
         driver = worker._create_driver()
         self.assertIsInstance(driver, ElogReader)
+        self.assertEqual(driver._log_dir, CHALCOGENIDE_MBE.evap_log_dir)
+
+    def test_explicit_chamber_log_dir_beats_generic_environment(self):
+        old = os.environ.get("AIQM_EVAP_LOG_DIR")
+        os.environ["AIQM_EVAP_LOG_DIR"] = r"C:\wrong-chamber\log"
+        try:
+            driver = EvapControlWorker(
+                mode="elog",
+                log_dir=OXIDE_MBE.evap_log_dir,
+            )._create_driver()
+        finally:
+            if old is None:
+                os.environ.pop("AIQM_EVAP_LOG_DIR", None)
+            else:
+                os.environ["AIQM_EVAP_LOG_DIR"] = old
+        self.assertEqual(driver._log_dir, OXIDE_MBE.evap_log_dir)
+
+    def test_chamber_config_beats_compatibility_log_dir(self):
+        worker = EvapControlWorker(
+            mode="elog",
+            chamber_config=OXIDE_MBE,
+            log_dir=r"C:\wrong-chamber\log",
+        )
+        driver = worker._create_driver()
+        self.assertEqual(driver._log_dir, OXIDE_MBE.evap_log_dir)
+
+    def test_elog_mode_uses_chamber_log_directory(self):
+        expected = r"C:\evap_control_1.2.0.48\log"
+        worker = EvapControlWorker(
+            mode="elog",
+            chamber_config=SimpleNamespace(evap_log_dir=expected),
+        )
+        driver = worker._create_driver()
+        self.assertEqual(driver._log_dir, expected)
 
     def test_dummy_mode_returns_dummy_evap_control(self):
         worker = EvapControlWorker(mode="dummy")
@@ -158,7 +197,7 @@ class ConfigModeOptionsTests(unittest.TestCase):
         }
         self.assertEqual(options, {"dummy", "elog", "screengrab"})
 
-    def test_config_evap_mode_default_is_elog(self):
+    def test_ombe_config_defaults_use_direct_read_modes(self):
         # Default flipped from "screengrab" to "elog" 2026-07-09 per
         # the P3 decision — direct-read is strictly better when
         # EvapControl is running. Bulbasaur end-to-end validation is
@@ -166,10 +205,70 @@ class ConfigModeOptionsTests(unittest.TestCase):
         # the failure mode turns out too noisy for growers and we add
         # auto-fallback or revert the default, update this test and
         # the corresponding setCurrentText call in growth_monitor.py.
-        self.assertEqual(
-            self.monitor.config_evap_mode.currentText(),
-            "elog",
-        )
+        self.assertEqual(self.monitor.config_camera_mode.currentText(), "vimba")
+        self.assertEqual(self.monitor.config_pyrometer_mode.currentText(), "modbus")
+        self.assertEqual(self.monitor.config_mistral_mode.currentText(), "ads")
+        self.assertEqual(self.monitor.config_evap_mode.currentText(), "elog")
+
+    def test_chmbe_config_defaults_use_direct_read_modes(self):
+        previous = os.environ.get("AIQM_CHAMBER")
+        os.environ["AIQM_CHAMBER"] = "chmbe"
+        try:
+            monitor = GrowthMonitor()
+        finally:
+            if previous is None:
+                os.environ.pop("AIQM_CHAMBER", None)
+            else:
+                os.environ["AIQM_CHAMBER"] = previous
+        try:
+            self.assertEqual(monitor.config_camera_mode.currentText(), "vimba")
+            self.assertEqual(monitor.config_pyrometer_mode.currentText(), "modbus")
+            self.assertEqual(monitor.config_mistral_mode.currentText(), "ads")
+            self.assertEqual(monitor.config_evap_mode.currentText(), "elog")
+        finally:
+            monitor.deleteLater()
+
+    def test_both_chambers_open_on_live_reader_defaults(self):
+        for config in (OXIDE_MBE, CHALCOGENIDE_MBE):
+            monitor = GrowthMonitor(config=config)
+            try:
+                self.assertEqual(monitor.config_camera_mode.currentText(), "vimba")
+                self.assertEqual(
+                    monitor.config_pyrometer_mode.currentText(), "modbus",
+                )
+                self.assertEqual(monitor.config_mistral_mode.currentText(), "ads")
+                self.assertEqual(monitor.config_evap_mode.currentText(), "elog")
+            finally:
+                monitor.deleteLater()
+
+    def test_session_metadata_records_effective_reader_provenance(self):
+        monitor = GrowthMonitor(config=CHALCOGENIDE_MBE)
+        try:
+            source = (
+                Path(CHALCOGENIDE_MBE.evap_log_dir)
+                / "log_20260817_120000.elo"
+            )
+            monitor._latest_evap = EvapControlState(
+                mode="elog",
+                connected=True,
+                valid=True,
+                source_path=str(source),
+            )
+            metadata = monitor.get_session_metadata()
+            self.assertEqual(metadata["pyrometer_port"], "COM3")
+            self.assertEqual(metadata["pyrometer_baudrate"], 115200)
+            self.assertEqual(metadata["pyrometer_device_id"], 1)
+            self.assertIs(metadata["pyrometer_rts"], False)
+            self.assertEqual(
+                metadata["pyrometer_modbus_backend"], "raw_serial",
+            )
+            self.assertEqual(
+                metadata["evap_log_dir"],
+                CHALCOGENIDE_MBE.evap_log_dir,
+            )
+            self.assertEqual(metadata["evap_source_path"], str(source))
+        finally:
+            monitor.deleteLater()
 
 
 # ---------------------------------------------------------------------------

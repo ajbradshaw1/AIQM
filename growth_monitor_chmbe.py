@@ -1,10 +1,10 @@
 """Launch the Growth Monitor configured for the Chalcogenide MBE (Ch-MBE).
 
 This entry point deliberately overrides an inherited chamber selection.  A
-workstation-level ``AIQM_CHAMBER=ombe`` must never turn the Ch-MBE launcher
-into an O-MBE process.  On Windows it also owns a named mutex for the whole Qt
-process lifetime so two monitor instances cannot compete for the same serial,
-ADS, and capture interfaces.
+workstation-level ``AIQM_CHAMBER=ombe`` must never turn the Ch-MBE desktop
+shortcut into an O-MBE process.  On Windows it also owns a named mutex for the
+whole Qt process lifetime so two monitor instances cannot compete for the same
+serial, ADS, and capture interfaces.
 """
 
 from __future__ import annotations
@@ -47,7 +47,8 @@ def _acquire_windows_mutex():
     import ctypes
 
     kernel32 = _windows_kernel32()
-    handle = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+    create_mutex = kernel32.CreateMutexW
+    handle = create_mutex(None, False, _MUTEX_NAME)
     if not handle:
         raise OSError(ctypes.get_last_error(), "Unable to create Ch-MBE mutex")
     if ctypes.get_last_error() == _ERROR_ALREADY_EXISTS:

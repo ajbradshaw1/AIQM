@@ -702,6 +702,7 @@ class ConfigLockTests(unittest.TestCase):
             self.monitor.config_browse_btn,
             self.monitor.config_prefix,
             self.monitor.config_camera_mode,
+            self.monitor.config_camera_exposure_ms,
             self.monitor.config_pyrometer_mode,
             self.monitor.config_exactus_port,
             self.monitor.config_exactus_baud,
@@ -714,6 +715,20 @@ class ConfigLockTests(unittest.TestCase):
         # Idle is the initial state and the setUp already applied it.
         for w in self._config_widgets():
             self.assertTrue(w.isEnabled(), f"{w} should be enabled in idle")
+
+    def test_exposure_control_requires_unlocked_direct_camera_mode(self):
+        self.assertEqual(self.monitor.config_camera_mode.currentText(), "vimba")
+        self.assertTrue(self.monitor.config_camera_exposure_ms.isEnabled())
+
+        self.monitor.config_camera_mode.setCurrentText("screengrab")
+        self.assertFalse(self.monitor.config_camera_exposure_ms.isEnabled())
+
+        self.monitor.config_camera_mode.setCurrentText("vimba")
+        self.assertTrue(self.monitor.config_camera_exposure_ms.isEnabled())
+        self.monitor.set_state("armed")
+        self.assertFalse(self.monitor.config_camera_exposure_ms.isEnabled())
+        self.monitor.set_state("idle")
+        self.assertTrue(self.monitor.config_camera_exposure_ms.isEnabled())
 
     def test_armed_state_locks_all_config_widgets(self):
         self.monitor.set_state("armed")
@@ -767,6 +782,15 @@ class DefaultSavePathTests(unittest.TestCase):
     Windows fallback / non-Windows fallback. Path.exists() is patched
     per test to simulate the environments."""
 
+    def test_installed_session_root_has_priority(self):
+        import gui.growth_monitor as gm
+        with unittest.mock.patch.dict(
+            gm.os.environ,
+            {"AIQM_SESSION_ROOT": r"D:\Selected\GrowthSessions"},
+        ):
+            result = gm._default_save_path()
+        self.assertEqual(result, r"D:\Selected\GrowthSessions")
+
     def test_windows_with_t9_returns_ssd_path(self):
         # Simulate Bulbasaur with T9 mounted.
         import gui.growth_monitor as gm
@@ -777,6 +801,18 @@ class DefaultSavePathTests(unittest.TestCase):
             ):
                 result = gm._default_save_path()
         self.assertEqual(result, r"E:\OMBE\GrowthMonitor")
+
+    def test_chmbe_with_t9_uses_separate_ssd_path(self):
+        import gui.growth_monitor as gm
+        from drivers.config import CHALCOGENIDE_MBE
+
+        with unittest.mock.patch.object(gm, "sys") as mock_sys:
+            mock_sys.platform = "win32"
+            with unittest.mock.patch.object(
+                gm.Path, "exists", return_value=True,
+            ):
+                result = gm._default_save_path(CHALCOGENIDE_MBE)
+        self.assertEqual(result, r"E:\ChMBE\GrowthMonitor")
 
     def test_windows_without_t9_falls_back_to_documents(self):
         # Simulate a Windows box without the T9 SSD.
@@ -793,6 +829,22 @@ class DefaultSavePathTests(unittest.TestCase):
             result.endswith("Documents/OMBE")
             or result.endswith("Documents\\OMBE"),
             f"expected Documents/OMBE fallback, got {result}",
+        )
+
+    def test_chmbe_without_t9_uses_separate_documents_folder(self):
+        import gui.growth_monitor as gm
+        from drivers.config import CHALCOGENIDE_MBE
+
+        with unittest.mock.patch.object(gm, "sys") as mock_sys:
+            mock_sys.platform = "win32"
+            with unittest.mock.patch.object(
+                gm.Path, "exists", return_value=False,
+            ):
+                result = gm._default_save_path(CHALCOGENIDE_MBE)
+        self.assertTrue(
+            result.endswith("Documents/ChMBE")
+            or result.endswith("Documents\\ChMBE"),
+            f"expected Documents/ChMBE fallback, got {result}",
         )
 
     def test_non_windows_returns_repo_relative(self):

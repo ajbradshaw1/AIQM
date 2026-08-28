@@ -142,6 +142,11 @@ class CameraState:
     connected: bool = False
     error: str = ""
     mode: str = ""  # "vimba", "screengrab", "screengrab_mss", or "dummy"
+    # Exposure the camera actually confirmed on the direct Vimba path, in
+    # microseconds — the readback, not the request. None for backends with no
+    # exposure to interrogate (screengrab, dummy) and whenever no manual write
+    # was requested.
+    exposure_us: Optional[float] = None
     capture_backend: str = ""
     captured_at_utc: str = ""
     capture_sequence: int = 0
@@ -329,6 +334,11 @@ class EvapControlState:
     connected: bool = False
     error: str = ""
     mode: str = ""  # "screengrab", "elog", or "dummy"
+    # Concrete input selected by the driver.  In elog mode this is the
+    # current .elo file once one has been found and stays blank before then.
+    # It is provenance only; consumers must not open or mutate this path
+    # through the state object.
+    source_path: str = ""
     # Elog mode populates ``source_at_utc`` from the LabVIEW record. OCR and
     # dummy modes have no source clock and leave it None.
     source_at_utc: Optional[str] = None

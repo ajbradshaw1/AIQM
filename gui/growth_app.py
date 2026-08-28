@@ -12,11 +12,12 @@ import sys
 import time
 from copy import copy
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMainWindow
+from PyQt6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMainWindow
 from PyQt6.QtCore import QEvent, pyqtSlot, Qt, QTimer
 
 log = logging.getLogger(__name__)
@@ -189,6 +190,7 @@ class GrowthApp(QMainWindow):
         self.setMinimumSize(1000, 700)
 
         self.camera_worker: Optional[RheedCameraWorker] = None
+        self._reported_camera_exposure_us: Optional[float] = None
         self.pyrometer_worker: Optional[PyrometerWorker] = None
         self.mistral_worker: Optional[MistralWorker] = None
         self.evap_worker: Optional[EvapControlWorker] = None
@@ -222,7 +224,8 @@ class GrowthApp(QMainWindow):
         # native worker is still exiting, so queued worker signals must remain
         # fail-closed even though the main window is still alive.
         self._shutdown_pending = False
-        self.growth_log = GrowthLogger()
+        session_root = os.environ.get("AIQM_SESSION_ROOT", "logs/growths")
+        self.growth_log = GrowthLogger(base_dir=session_root)
 
         # Periodic sensor logging timer (1 second interval while running)
         self._sensor_log_timer = QTimer(self)
@@ -507,6 +510,14 @@ class GrowthApp(QMainWindow):
     def _on_arm(self):
         """Connect camera, pyrometer, MISTRAL, and Evap Control workers."""
         camera_mode = self.monitor.config_camera_mode.currentText()
+        self._reported_camera_exposure_us = None
+        exposure_ms = self.monitor.config_camera_exposure_ms.value()
+        exposure_us = (
+            exposure_ms * 1000.0
+            if camera_mode in ("vimba", "direct") and exposure_ms > 0
+            else None
+        )
+        self.monitor.clear_camera_provenance()
         pyrometer_mode = self.monitor.config_pyrometer_mode.currentText()
         mistral_mode = self.monitor.config_mistral_mode.currentText()
         evap_mode = self.monitor.config_evap_mode.currentText()
@@ -514,7 +525,11 @@ class GrowthApp(QMainWindow):
         new_camera_worker = False
         if not self.camera_worker or not self.camera_worker.isRunning():
             self.camera_worker = RheedCameraWorker(
-                mode=camera_mode, poll_interval=1.0,
+                mode=camera_mode,
+                poll_interval=1.0,
+                camera_index=self._chamber_config.camera_index,
+                trigger_hz=self._chamber_config.camera_fps,
+                exposure_us=exposure_us,
             )
             self.camera_worker.state_updated.connect(self._on_camera_state)
             self.camera_worker.start()
@@ -648,6 +663,7 @@ class GrowthApp(QMainWindow):
                 poll_interval=0.5,
                 port=exactus_port,
                 baudrate=exactus_baud,
+                device_id=self._chamber_config.pyrometer_device_id,
                 rts=self._chamber_config.pyrometer_rts,
                 modbus_backend=self._chamber_config.pyrometer_modbus_backend,
             )
@@ -665,7 +681,9 @@ class GrowthApp(QMainWindow):
 
         if not self.evap_worker or not self.evap_worker.isRunning():
             self.evap_worker = EvapControlWorker(
-                mode=evap_mode, poll_interval=1.0,
+                mode=evap_mode,
+                poll_interval=1.0,
+                chamber_config=self._chamber_config,
             )
             self.evap_worker.state_updated.connect(self._on_evap_state)
             self.evap_worker.start()
@@ -786,6 +804,22 @@ class GrowthApp(QMainWindow):
     @pyqtSlot()
     def _on_start(self):
         """Begin a growth session — start logging."""
+        if not self._has_live_camera_frame():
+            # ARM only proves the worker started; it does not prove the camera
+            # ever delivered anything. Direct Vimba reads are edge-triggered,
+            # so a camera that connects but never fires a callback leaves the
+            # GUI armed and silent. Without this gate a grower could run a
+            # whole growth believing RHEED was being recorded while the frame
+            # log stayed empty — the one failure that cannot be recovered
+            # after the fact.
+            self.statusBar().showMessage(
+                "START blocked: no live RHEED frame yet. Wait for the image, "
+                "or DISARM and check camera access.",
+                9000,
+            )
+            log.warning("START refused: no valid camera frame received yet")
+            return
+
         if self._equalizer_calibration is not None:
             self._invalidate_equalizer_calibration(
                 "new session started before prior calibration was cleared",
@@ -1130,6 +1164,29 @@ class GrowthApp(QMainWindow):
             metadata["calibration_id"] = (
                 self._equalizer_calibration.calibration_id
             )
+        return metadata
+
+    def _current_heartbeat_metadata(self, frame: np.ndarray) -> dict:
+        """Bind one saved heartbeat to frame geometry and accepted alignment.
+
+        The app-owned calibration is the only accepted live calibration.  A
+        merely open Equalizer candidate is intentionally excluded.  When no
+        calibration has been accepted yet, the currently loaded basis bundle
+        is still useful provenance for a later retrospective calibration.
+        """
+        metadata = self.monitor.get_current_capture_metadata()
+        metadata["frame_width"] = int(frame.shape[1])
+        metadata["frame_height"] = int(frame.shape[0])
+        calibration = self._equalizer_calibration
+        if calibration is not None:
+            metadata["calibration_id"] = calibration.calibration_id
+            metadata["basis_bundle_id"] = calibration.basis_bundle_id
+        else:
+            basis_bundle_id = (
+                self.monitor.live_equalizer_tab.get_basis_bundle_id()
+            )
+            if basis_bundle_id:
+                metadata["basis_bundle_id"] = basis_bundle_id
         return metadata
 
     def _invalidate_equalizer_calibration(self, reason: str) -> bool:
@@ -1560,7 +1617,7 @@ class GrowthApp(QMainWindow):
         if stale or not snapshot.gun_aligned or snapshot.realignment_active:
             self._fail_retrospective_calibration_acceptance(
                 request_token,
-                reason or "historical frame lacks stable RHEED QC provenance",
+                reason or "historical frame lacks stable image-acquisition state provenance",
             )
             return
 
@@ -1743,7 +1800,7 @@ class GrowthApp(QMainWindow):
         """Record a lightweight RHEED adjustment or explicit QC label."""
         if not self.growth_log.active or not self._rheed_qc_state.session_active:
             self.statusBar().showMessage(
-                "Start a session before recording RHEED QC.", 3000,
+                "Start a session before recording image usability.", 3000,
             )
             return
 
@@ -1771,7 +1828,7 @@ class GrowthApp(QMainWindow):
             frame_role = event_type
         elif capture_token is None:
             self.statusBar().showMessage(
-                "A fresh connected RHEED frame is required for this QC label.",
+                "A fresh connected RHEED frame is required for this image-usability label.",
                 4000,
             )
             return
@@ -1784,7 +1841,7 @@ class GrowthApp(QMainWindow):
             qc_reason = note or "operator_reject"
         else:
             self.statusBar().showMessage(
-                f"Unsupported RHEED QC event: {event_type}", 3000,
+                f"Unsupported RHEED image-usability event: {event_type}", 3000,
             )
             return
 
@@ -1821,6 +1878,7 @@ class GrowthApp(QMainWindow):
         capture_metadata = self.monitor.get_current_capture_metadata()
         write_started_ns = time.perf_counter_ns()
         event_index = self.growth_log.record_manual_event(
+            event_at_utc=payload.get("event_at_utc", ""),
             elapsed_s=payload.get("elapsed_s", 0.0),
             pyro_temp=payload.get("pyro_temp"),
             voltage_V=payload.get("voltage_V"),
@@ -1838,6 +1896,7 @@ class GrowthApp(QMainWindow):
             "manual_event",
             details={
                 "event_index": event_index,
+                "point_event_id": self.growth_log.last_point_event_id,
                 "capture_sequence": capture_metadata.get("capture_sequence"),
                 "write_duration_ms": (
                     write_completed_ns - write_started_ns
@@ -1848,9 +1907,105 @@ class GrowthApp(QMainWindow):
                 ),
             },
         )
-        self.statusBar().showMessage("Event marked", 2000)
+        self.statusBar().showMessage(
+            "Event marked — Draft saved for post-run review", 3000,
+        )
 
     # --- LIVE EQUALIZER save (Jul 10 2026 workstream #4) -------------------
+
+    def _select_live_equalizer_point_event(
+        self,
+        *,
+        snapshot: RheedFrameSnapshot,
+        actor: str,
+        pyro_temp: Optional[float],
+        voltage_v: Optional[float],
+        current_a: Optional[float],
+        psu_source: str,
+    ) -> Optional[str]:
+        """Require an explicit event choice before saving Equalizer output.
+
+        The newest unfinished manual mark is the first choice, but it is never
+        selected silently.  This method returns ``None`` when the grower
+        cancels and ``""`` only for older test/compatibility loggers that have
+        no point-event API.
+        """
+        get_events = getattr(self.growth_log, "unfinished_point_events", None)
+        if get_events is None:
+            return ""
+        events = list(get_events())
+        labels: list[str] = []
+        ids: list[str] = []
+        for event in events:
+            source = event.get("source", {})
+            kind = str(source.get("kind") or "event")
+            elapsed = source.get("original_elapsed_s")
+            elapsed_text = "time unavailable"
+            try:
+                if elapsed is not None:
+                    elapsed_text = f"{float(elapsed):.1f} s"
+            except (TypeError, ValueError):
+                pass
+            comment = str(event.get("review", {}).get("comment") or "").strip()
+            summary = comment[:45] if comment else "unfinished - no comment"
+            labels.append(
+                f"{kind} at {elapsed_text} - {summary} "
+                f"[{str(event.get('event_id'))[:8]}]"
+            )
+            ids.append(str(event.get("event_id") or ""))
+        create_label = "Create a new event from the current frozen frame"
+        labels.append(create_label)
+        ids.append("__create__")
+        selected, accepted = QInputDialog.getItem(
+            self,
+            "Bind Equalizer to an event",
+            "Choose the event that this exact Equalizer frame belongs to. "
+            "The first item is only a suggested default:",
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return None
+        try:
+            event_id = ids[labels.index(selected)]
+        except (ValueError, IndexError):
+            return None
+        if event_id != "__create__":
+            return event_id
+
+        capture_metadata = {
+            "capture_backend": snapshot.capture_backend,
+            "captured_at_utc": snapshot.captured_at_utc,
+            "captured_monotonic_ns": snapshot.received_monotonic_ns,
+            "capture_sequence": snapshot.capture_sequence,
+            "frame_age_ms": snapshot.age_ms(),
+            "source_hwnd": snapshot.source_hwnd,
+            "capture_geometry_id": snapshot.capture_geometry_id,
+            "camera_width": snapshot.camera_width,
+            "camera_height": snapshot.camera_height,
+            "view_segment_id": snapshot.view_segment_id,
+            "visual_history_generation": snapshot.visual_history_generation,
+            "gun_aligned": snapshot.gun_aligned,
+            "realignment_active": snapshot.realignment_active,
+        }
+        index = self.growth_log.record_manual_event(
+            event_at_utc=datetime.now(timezone.utc).isoformat(),
+            elapsed_s=self.monitor.get_elapsed_seconds(),
+            pyro_temp=pyro_temp,
+            voltage_V=voltage_v,
+            current_A=current_a,
+            psu_source=psu_source,
+            frame=snapshot.rgb,
+            note="",
+            capture_metadata=capture_metadata,
+        )
+        if index <= 0 or not self.growth_log.last_point_event_id:
+            self.statusBar().showMessage(
+                "Could not create the event; Equalizer was not saved.", 5000,
+            )
+            return None
+        return self.growth_log.last_point_event_id
 
     @pyqtSlot(dict)
     def _on_live_label_save(self, payload: dict):
@@ -1940,6 +2095,27 @@ class GrowthApp(QMainWindow):
         if pyro is not None and pyro.has_valid_reading:
             pyro_temp = pyro.temperature
 
+        actor = self.monitor.grower_input.text().strip()
+        if not actor:
+            self.statusBar().showMessage(
+                "Enter the grower/reviewer before saving Equalizer output.", 4000,
+            )
+            return
+        event_id = GrowthApp._select_live_equalizer_point_event(
+            self,
+            snapshot=snapshot,
+            actor=actor,
+            pyro_temp=pyro_temp,
+            voltage_v=voltage_v,
+            current_a=current_a,
+            psu_source=psu_source,
+        )
+        if event_id is None:
+            self.statusBar().showMessage(
+                "Equalizer save cancelled; no event was changed.", 3000,
+            )
+            return
+
         write_started_ns = time.perf_counter_ns()
         try:
             idx = self.growth_log.record_live_label(
@@ -1952,7 +2128,7 @@ class GrowthApp(QMainWindow):
                 current_A=current_a,
                 psu_source=psu_source,
                 equalizer_payload=payload,
-                labeler=self.monitor.grower_input.text().strip(),
+                labeler=actor,
             )
         except (TypeError, ValueError, OSError) as exc:
             log.warning("Live Equalizer label rejected: %s", exc)
@@ -1961,6 +2137,23 @@ class GrowthApp(QMainWindow):
             )
             return
         if idx > 0:
+            point_event_bound = False
+            if event_id:
+                try:
+                    self.growth_log.attach_live_equalizer_to_point_event(
+                        event_id,
+                        live_label_index=idx,
+                        actor=actor,
+                        calibration=calibration,
+                        snapshot=snapshot,
+                        equalizer_payload=payload,
+                    )
+                    point_event_bound = True
+                except (OSError, TypeError, ValueError) as exc:
+                    log.error(
+                        "Live Equalizer label saved but point-event binding failed: %s",
+                        exc,
+                    )
             write_completed_ns = time.perf_counter_ns()
             GrowthApp._trace_temporal(self,
                 "equalizer_label_saved", "equalizer",
@@ -1968,6 +2161,8 @@ class GrowthApp(QMainWindow):
                     "label_index": idx,
                     "capture_sequence": snapshot.capture_sequence,
                     "calibration_id": calibration.calibration_id,
+                    "point_event_id": event_id or None,
+                    "point_event_bound": point_event_bound,
                     "frame_age_at_request_ms": frame_age_ms,
                     "source_age_at_save_ms": snapshot.age_ms(
                         write_completed_ns,
@@ -1977,9 +2172,17 @@ class GrowthApp(QMainWindow):
                     ) / 1_000_000.0,
                 },
             )
-            self.statusBar().showMessage(
-                f"Live label #{idx} saved", 3000,
-            )
+            if event_id and not point_event_bound:
+                self.statusBar().showMessage(
+                    f"Live label #{idx} saved, but event binding needs review.",
+                    6000,
+                )
+            elif point_event_bound:
+                self.statusBar().showMessage(
+                    f"Equalizer saved to Draft event {event_id[:8]}.", 4000,
+                )
+            else:
+                self.statusBar().showMessage(f"Live label #{idx} saved", 3000)
         else:
             self.statusBar().showMessage(
                 "Live label save failed — no session data.", 3000,
@@ -2416,6 +2619,7 @@ class GrowthApp(QMainWindow):
             return
 
         state = _stamp_gui_received(state)
+        self._announce_camera_exposure(state)
         if self.growth_log.active:
             GrowthApp._trace_temporal(self,
                 "state_received", "rheed",
@@ -2447,6 +2651,9 @@ class GrowthApp(QMainWindow):
             self.monitor.set_auto_capture_status(
                 "Auto-capture: stopped (RHEED capture unavailable)"
             )
+            handled_pre_session_loss = self._return_to_idle_if_arm_failed(
+                state,
+            )
             if (
                 self._rheed_qc_state.session_active
                 and not self._camera_capture_interrupted
@@ -2468,10 +2675,15 @@ class GrowthApp(QMainWindow):
                     frame_role="camera_disconnect",
                     note=state.error,
                 )
-            self.statusBar().showMessage(
-                f"RHEED capture stopped: {state.error}",
-                10000,
-            )
+            if not handled_pre_session_loss:
+                # Suppressed after a pre-session teardown: that path has
+                # already said something more specific — either the reason
+                # the arm was refused, or _on_disarm's actionable warning
+                # that workers are still stopping.
+                self.statusBar().showMessage(
+                    f"RHEED capture stopped: {state.error}",
+                    10000,
+                )
         elif (
             state.connected
             and getattr(state, "valid", state.connected)
@@ -2519,6 +2731,97 @@ class GrowthApp(QMainWindow):
                     f"events: {self._auto_capture_event_count}"
                 )
 
+    def _return_to_idle_if_arm_failed(self, state) -> bool:
+        """Tear down an arm the camera cannot support. Returns True if it did.
+
+        Scope is broader than the name suggests, and deliberately so: this
+        fires on ANY camera loss while armed with no session started — a
+        refused connect, but equally a camera that connected and then dropped
+        during preview. Both leave the grower armed with no frames, and in
+        both the honest state is idle. It is named for the case that motivated
+        it; the tests cover both.
+
+        ``_on_arm`` sets "armed" before the camera thread answers, so a refused
+        or failed connect used to leave the GUI armed: config panel locked, ARM
+        button reading DISARM, after an arm that did not succeed. The grower
+        had to work out that the next click was a disarm. Manual exposure makes
+        that reachable by design — requesting a write while kSA or the Vimba X
+        Viewer holds Full access is refused on purpose, and since the camera
+        mode now defaults to vimba it is reachable on the very first ARM.
+
+        This performs a REAL disarm rather than relabelling the state. Flipping
+        to "idle" alone would unlock the config panel while the pyrometer,
+        MISTRAL, evap and classifier workers — which arm successfully and
+        independently — still own the hardware they were configured against.
+        That is the exact condition ``_on_disarm``'s "Disarm incomplete" guard
+        exists to prevent, so this reuses it and inherits that guard: if a
+        worker will not stop, the app stays armed and says so.
+
+        Deliberately scoped to a failure DURING ARM. Losing the camera
+        mid-session must not tear the session down — sensor logging continues
+        so the record still shows when capture was lost, which is why
+        ``growth_log.active`` is checked rather than the state alone.
+        """
+        if (
+            self.monitor.state != "armed"
+            or self.growth_log.active
+            or self._shutdown_pending
+        ):
+            return False
+        log.error("Camera lost before the session started: %s", state.error)
+        self._on_disarm()
+        if self.monitor.state != "idle":
+            # _on_disarm refused: a worker would not stop, so it stayed armed
+            # and posted "Disarm incomplete — wait and press DISARM again".
+            # That message is ACTIONABLE and this one is not, so it has to be
+            # the one left on screen. Returning True suppresses the caller's
+            # trailing message too.
+            return True
+        self.statusBar().showMessage(
+            f"Camera did not connect — disarmed: {state.error}", 10000,
+        )
+        return True
+
+    def _has_live_camera_frame(self) -> bool:
+        """Whether the camera has delivered a usable frame this arm cycle.
+
+        Deliberately reads the LAST EMITTED state rather than a "did we ever
+        see one" flag: a camera that delivered frames and then died must not
+        keep permitting a fresh session start. ``valid`` is the worker's own
+        judgement that the read produced real pixels, and the starvation
+        deadline clears ``connected`` once delivery stops, so both the
+        never-started and the went-quiet cases fail this check.
+        """
+        state = getattr(self.monitor, "_latest_camera", None)
+        if state is None:
+            return False
+        return bool(
+            getattr(state, "connected", False)
+            and getattr(state, "valid", False)
+            and getattr(state, "frame", None) is not None
+        )
+
+    def _announce_camera_exposure(self, state) -> None:
+        """Tell the grower the exposure the camera actually confirmed.
+
+        The readback, not the request — those differ whenever the device
+        quantises onto its increment grid, and the grower needs to see what the
+        frames were really taken at. Fires only on change, so a 1 Hz state
+        stream does not repaint the status bar every second.
+        """
+        exposure_us = getattr(state, "exposure_us", None)
+        if (
+            state.connected
+            and exposure_us is not None
+            and exposure_us != self._reported_camera_exposure_us
+        ):
+            self._reported_camera_exposure_us = exposure_us
+            self.statusBar().showMessage(
+                f"Direct camera exposure confirmed: "
+                f"{exposure_us / 1000.0:.0f} ms",
+                5000,
+            )
+
     def _on_heartbeat(self):
         """Heartbeat timer tick — save the latest RHEED frame as an anchor.
 
@@ -2532,7 +2835,7 @@ class GrowthApp(QMainWindow):
         frame = self.monitor.get_current_frame()
         if frame is None:
             return
-        capture_metadata = self.monitor.get_current_capture_metadata()
+        capture_metadata = self._current_heartbeat_metadata(frame)
         try:
             capture_sequence = int(
                 capture_metadata.get("capture_sequence") or 0

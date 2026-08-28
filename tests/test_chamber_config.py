@@ -73,6 +73,58 @@ class TestGetActiveConfig(unittest.TestCase):
 
 class TestOmbConfig(unittest.TestCase):
 
+    def test_direct_read_mode_defaults(self):
+        self.assertEqual(OXIDE_MBE.camera_mode_default, "vimba")
+        self.assertEqual(OXIDE_MBE.pyrometer_mode_default, "modbus")
+        self.assertEqual(OXIDE_MBE.mistral_mode_default, "ads")
+        self.assertEqual(OXIDE_MBE.evap_mode_default, "elog")
+
+    def test_camera_exposure_is_500ms_and_chamber_specific(self):
+        """O-MBE requests 500 ms — deliberately NOT the Ch-MBE value.
+
+        This REPLACES an earlier assertion that O-MBE carried no exposure
+        default at all. That test encoded the original scope, where the
+        writable 300 ms result was measured on Ch-MBE only and O-MBE opened on
+        "Keep current" — performing no camera write, and therefore coexisting
+        with kSA holding Full access.
+
+        Both chambers now request a manual exposure and fail ARM closed, but
+        the VALUE is per-chamber. The inequality below is asserted on purpose:
+        a well-meaning edit copying one chamber's number across would look
+        tidy and would be wrong. 300 ms is a measurement taken on the Ch-MBE
+        Manta G-033B (serial 50-0503464907, 2026-08-06); 500 ms is O-MBE's
+        specified starting point, not yet measured on that chamber.
+
+        Note this now fires on the first ARM: camera_mode_default is "vimba",
+        so no grower action is needed to reach the direct-camera path. kSA /
+        Vimba X Viewer must be released before ARM — see
+        docs/acceptance_camera_exposure_ombe.md.
+        """
+        self.assertEqual(OXIDE_MBE.camera_exposure_us, 500_000.0)
+        self.assertNotEqual(
+            OXIDE_MBE.camera_exposure_us,
+            CHALCOGENIDE_MBE.camera_exposure_us,
+            "exposure is per-chamber; do not copy one chamber's value across",
+        )
+
+    def test_camera_exposure_clears_the_trigger_period_headroom(self):
+        """The default must survive the driver's own safety check.
+
+        VmbCamera refuses any exposure above 90% of the trigger period, so a
+        default that violated it would turn every ARM into a refusal — a
+        config-only own goal that no camera test would catch. It matters more
+        now that camera_mode_default is "vimba": the refusal would greet a
+        grower on their first ARM.
+        """
+        for cfg in (OXIDE_MBE, CHALCOGENIDE_MBE):
+            with self.subTest(chamber=cfg.chamber_id):
+                safe_max_us = 1_000_000.0 / cfg.camera_fps * 0.90
+                self.assertLessEqual(
+                    cfg.camera_exposure_us, safe_max_us,
+                    f"{cfg.chamber_id} default exceeds the "
+                    f"{safe_max_us:.0f} us ceiling at {cfg.camera_fps} Hz",
+                )
+
     def test_mistral_mode_default(self):
         # Switched from "screengrab" to "ads" Jul 27 2026 after
         # direct pyads to Bulbasaur PLC validated. Fallback modes
@@ -81,6 +133,10 @@ class TestOmbConfig(unittest.TestCase):
 
     def test_evap_mode_default(self):
         self.assertEqual(OXIDE_MBE.evap_mode_default, "elog")
+
+    def test_ombe_evap_log_dir_is_explicit(self):
+        self.assertTrue(OXIDE_MBE.evap_log_dir)
+        self.assertIn("1.2.0.51", OXIDE_MBE.evap_log_dir)
 
     def test_five_cells(self):
         self.assertEqual(len(OXIDE_MBE.cell_display), 5)
@@ -111,11 +167,23 @@ class TestOmbConfig(unittest.TestCase):
 
 class TestChMbeConfig(unittest.TestCase):
 
+    def test_validated_mode_defaults(self):
+        self.assertEqual(CHALCOGENIDE_MBE.camera_mode_default, "vimba")
+        self.assertEqual(CHALCOGENIDE_MBE.pyrometer_mode_default, "modbus")
+        self.assertEqual(CHALCOGENIDE_MBE.mistral_mode_default, "ads")
+        self.assertEqual(CHALCOGENIDE_MBE.evap_mode_default, "elog")
+
+    def test_verified_camera_exposure_default(self):
+        # MEASURED on this chamber's Manta G-033B (serial 50-0503464907,
+        # 2026-08-06). O-MBE's 500 ms is a specified starting point, not a
+        # measurement — see TestOmbConfig. Do not unify the two.
+        self.assertEqual(CHALCOGENIDE_MBE.camera_exposure_us, 300_000.0)
+
     def test_mistral_mode_default(self):
         self.assertEqual(CHALCOGENIDE_MBE.mistral_mode_default, "ads")
 
     def test_evap_mode_default(self):
-        self.assertEqual(CHALCOGENIDE_MBE.evap_mode_default, "screengrab")
+        self.assertEqual(CHALCOGENIDE_MBE.evap_mode_default, "elog")
 
     def test_seven_cells(self):
         self.assertEqual(len(CHALCOGENIDE_MBE.cell_display), 7)
@@ -127,6 +195,7 @@ class TestChMbeConfig(unittest.TestCase):
 
     def test_evap_log_dir_set(self):
         self.assertTrue(CHALCOGENIDE_MBE.evap_log_dir)
+        self.assertIn("1.2.0.48", CHALCOGENIDE_MBE.evap_log_dir)
 
     def test_cell_labels_not_empty(self):
         for cell in CHALCOGENIDE_MBE.cell_display:

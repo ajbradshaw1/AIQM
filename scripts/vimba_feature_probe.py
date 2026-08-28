@@ -527,20 +527,25 @@ def _frame_rate_check(
     achievable rate is bounded by 1/exposure. AcquisitionFrameRateLimit is
     the camera's own read-only statement of that bound.
 
-    FAILURE MODE (corrected 2026-08-06). Over-triggering the DIRECT Vimba
-    path does not raise a timeout. window_capture.py's 5 s stale timeout
-    belongs to ScreenGrabCamera (the WGC/kSA-window backend); VmbCamera
-    never calls it. VmbCamera.read_frame() returns ``_latest_frame.copy()``
-    unconditionally, with no age check and no frame identity, and VmbCamera
-    exposes no ``last_capture`` — so RheedCameraWorker takes its else-branch
-    and synthesises ``frame_age_ms = 0.0`` with ``capture_sequence =
-    frame_count``.
+    FAILURE MODE (corrected 2026-08-06, revised 2026-08-12). Over-triggering
+    the DIRECT Vimba path does not raise a timeout. window_capture.py's 5 s
+    stale timeout belongs to ScreenGrabCamera (the WGC/kSA-window backend);
+    VmbCamera never calls it.
 
-    The real consequence is therefore silent, not loud: the same cached
-    image is re-served and counted as a new frame. That inflates worker FPS,
-    feeds duplicates to the intensity trend and the classifier, and corrupts
-    change-detector inputs. Nothing errors. Until VmbCamera carries a camera
-    frame ID and capture timestamp, this check is the only warning available.
+    The older description of the consequence — that the same cached image is
+    silently re-served and counted as a new frame — is NO LONGER ACCURATE.
+    VmbCamera now carries per-callback sequence bookkeeping: read_frame()
+    refuses to deliver unless a new callback has arrived since the previous
+    read, raising FrameNotYetAvailableError instead. RheedCameraWorker treats
+    a gap inside its starvation deadline as normal and, past that deadline,
+    emits a disconnected state rather than retrying forever.
+
+    So over-triggering now degrades the achievable frame RATE rather than
+    corrupting frame identity: reads return "not yet" more often, and a
+    sufficiently over-triggered camera trips the starvation deadline. This
+    check remains worth running because it predicts that rate collapse from
+    the camera's own declared limit, before a grower sees it as a stuttering
+    preview.
     """
     out: dict[str, Any] = {"lines": [], "ok": None}
     exposure_info = features.get(exposure_name or "", {})
@@ -587,8 +592,10 @@ def _frame_rate_check(
         out["ok"] = trigger_hz <= bound
         verdict = (
             "OK" if out["ok"]
-            else "TOO FAST — expect silently re-served cached frames "
-                 "counted as new (no error is raised)"
+            else "TOO FAST — expect skipped deliveries and a reduced "
+                 "achievable frame rate; if the shortfall persists past the "
+                 "worker's starvation deadline the GUI reports the camera "
+                 "as not delivering"
         )
         out["lines"].append(
             f"VmbCamera trigger: {trigger_hz:.2f} Hz vs {bound:.2f} fps "

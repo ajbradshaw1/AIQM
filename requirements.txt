@@ -1,4 +1,8 @@
 PyQt6
+# Imported at module level by gui/rheed_intensity_window.py and
+# gui/pyrometer_window.py, both of which gui/growth_app.py imports at
+# import time — so it is a hard dependency of the Growth Monitor, not an
+# optional plotting extra.
 pyqtgraph
 numpy
 matplotlib
@@ -7,6 +11,20 @@ scipy
 Pillow
 pytest
 opencv-python
+# Direct dependency, not merely transitive.
+#
+# growth_monitor_app.py imports torch at module scope (deliberately before
+# PyQt6 — the Windows Intel-OpenMP DLL ordering fix), and classifier_bridge.py
+# and weak_primary_shadow.py load it for inference. It was previously declared
+# only through timm, which made a hard runtime requirement look optional and
+# left the installed version unrecorded.
+#
+# Floor, not a hard pin: 2.13.0 is what is exercised locally and in CI. The
+# "+cpu" local-version tag is deliberately NOT used here — it resolves only
+# against download.pytorch.org, not PyPI, so it would break a plain
+# `pip install -r requirements.txt`. CI pins the exact CPU wheel instead; see
+# .github/workflows/tests.yml.
+torch>=2.13
 timm==1.0.28
 requests
 pyvisa

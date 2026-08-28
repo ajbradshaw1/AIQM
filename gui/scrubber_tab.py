@@ -399,7 +399,7 @@ class ScrubberTab(QWidget):
         for src, label in (
             ("heartbeat", "continuous"),
             ("manual", "manual event"),
-            ("view", "RHEED QC/alignment"),
+            ("view", "RHEED image usability/alignment"),
             ("auto", "auto-capture"),
         ):
             swatch = QLabel("█")

@@ -39,6 +39,12 @@ from .rheed_intensity import (
     RheedIntensitySample,
     RheedRoiDefinition,
 )
+from .rheed_point_events import (
+    PointEventError,
+    PointEventStore,
+    make_review_anchor,
+    sha256_file,
+)
 
 
 log = logging.getLogger(__name__)
@@ -67,6 +73,7 @@ class AutoCaptureCommitResult:
     buffer_dir: str = ""
     committed: bool = False
     writer_ready: bool = False
+    point_event_id: str = ""
 
 # Structured RHEED view/QC event types. These are deliberately separate
 # from ``manual_events.csv``: reconstruction-change marks and acquisition
@@ -287,6 +294,12 @@ class GrowthLogger:
         "pyrometer_temp_C", "frame_path",
         "capture_backend", "captured_at_utc", "capture_sequence",
         "frame_age_ms", "source_hwnd", "capture_geometry_id",
+        # Appended for forward-compatible retrospective Equalizer binding.
+        # Keep every legacy field above in its original position.
+        "captured_monotonic_ns", "frame_width", "frame_height",
+        "view_segment_id", "visual_history_generation",
+        "gun_aligned", "realignment_active",
+        "calibration_id", "basis_bundle_id",
     ]
     SET_CHANGE_FIELDS = [
         "timestamp", "elapsed_s", "event_idx",
@@ -1951,6 +1964,8 @@ class GrowthLogger:
         self._rheed_roi_intensity_file = None
         self._rheed_roi_intensity_writer = None
         self._rheed_roi_definition_file = None
+        self._rheed_point_event_store: Optional[PointEventStore] = None
+        self._last_point_event_id = ""
         self._calibration_journal_trusted = True
         self._commit_counter = 0
         self._heartbeat_counter = 0
@@ -1981,6 +1996,16 @@ class GrowthLogger:
     def session_dir(self) -> Optional[Path]:
         return self._session_dir
 
+    @property
+    def point_event_store(self) -> Optional[PointEventStore]:
+        """Current session's append-only point-event review store."""
+        return self._rheed_point_event_store
+
+    @property
+    def last_point_event_id(self) -> str:
+        """UUID assigned to the most recently registered live point event."""
+        return self._last_point_event_id
+
     def set_base_dir(self, base_dir: str | Path) -> bool:
         """Apply a runtime log root and recover its interrupted transactions.
 
@@ -2004,6 +2029,8 @@ class GrowthLogger:
         self._session_dir = self._base_dir / f"{prefix}_{safe_id}_{tag}"
         self._session_dir.mkdir(parents=True, exist_ok=True)
         (self._session_dir / "frames").mkdir(exist_ok=True)
+        self._rheed_point_event_store = PointEventStore(self._session_dir)
+        self._last_point_event_id = ""
         self._calibration_journal_trusted = True
         self._basis_bundle_ids_recorded.clear()
         if not self._initialize_human_labeling_state():
@@ -2574,6 +2601,80 @@ class GrowthLogger:
         })
         self._set_change_file.flush()
 
+    def _register_live_point_event(
+        self,
+        *,
+        source_kind: str,
+        source_file: str,
+        source_index: int,
+        source_row: Mapping[str, object],
+        frame_path: str = "",
+        original_note: str = "",
+        frame_metadata: Optional[Mapping[str, object]] = None,
+    ) -> str:
+        """Link an immutable acquisition row to a new Draft point event.
+
+        The source CSV has already been flushed when this helper runs.  A
+        journal failure therefore never erases or rewrites the grower's live
+        evidence; it is logged so a deterministic legacy import can recover
+        the row later.
+        """
+        store = self._rheed_point_event_store
+        if store is None or self._session_dir is None:
+            return ""
+        metadata = dict(frame_metadata or {})
+        anchor = None
+        frame_hash = ""
+        if frame_path:
+            try:
+                frame_hash = sha256_file(frame_path)
+                anchor = make_review_anchor(
+                    frame_path=frame_path,
+                    image_sha256=frame_hash,
+                    capture_sequence=metadata.get(
+                        "capture_sequence", source_row.get("capture_sequence"),
+                    ),
+                    captured_at_utc=str(metadata.get(
+                        "captured_at_utc", source_row.get("captured_at_utc", ""),
+                    ) or ""),
+                    elapsed_s=source_row.get("elapsed_s"),
+                    view_segment_id=metadata.get("view_segment_id"),
+                    capture_geometry_id=str(metadata.get(
+                        "capture_geometry_id",
+                        source_row.get("capture_geometry_id", ""),
+                    ) or ""),
+                )
+            except (OSError, PointEventError) as exc:
+                log.error("Could not bind saved frame to point event: %s", exc)
+                anchor = None
+                frame_hash = ""
+        try:
+            state = store.create_event(
+                source_kind=source_kind,
+                actor="live-grower" if source_kind == "manual" else "auto-capture",
+                session_identity=self._session_dir.name,
+                source_file=source_file,
+                source_index=source_index,
+                source_row=source_row,
+                original_at_utc=str(source_row.get("timestamp", "") or ""),
+                original_elapsed_s=source_row.get("elapsed_s"),
+                original_note=original_note,
+                capture_sequence=source_row.get("capture_sequence"),
+                original_frame_path=frame_path,
+                original_image_sha256=frame_hash,
+                review_anchor=anchor,
+                current_software=True,
+            )
+        except (OSError, PointEventError, TypeError, ValueError) as exc:
+            log.error(
+                "Acquisition row saved but Draft point event could not be journaled: %s",
+                exc,
+            )
+            return ""
+        event_id = str(state["event_id"])
+        self._last_point_event_id = event_id
+        return event_id
+
     def record_manual_event(
         self,
         elapsed_s: float,
@@ -2584,6 +2685,7 @@ class GrowthLogger:
         frame: Optional[np.ndarray] = None,
         note: str = "",
         capture_metadata: Optional[dict] = None,
+        event_at_utc: str = "",
     ) -> int:
         """Append a grower-marked event to manual_events.csv.
 
@@ -2608,6 +2710,7 @@ class GrowthLogger:
         if not self._manual_event_writer:
             return 0
 
+        event_timestamp = str(event_at_utc or datetime.now(timezone.utc).isoformat())
         self._manual_event_counter += 1
         idx = self._manual_event_counter
 
@@ -2633,8 +2736,8 @@ class GrowthLogger:
                 except ImportError:
                     pass
 
-        self._manual_event_writer.writerow({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+        row = {
+            "timestamp": event_timestamp,
             "elapsed_s": f"{elapsed_s:.2f}",
             "event_idx": idx,
             "pyrometer_temp_C": (
@@ -2650,8 +2753,18 @@ class GrowthLogger:
             "frame_path": frame_path,
             "note": note,
             **self._capture_columns(capture_metadata),
-        })
+        }
+        self._manual_event_writer.writerow(row)
         self._manual_event_file.flush()
+        self._register_live_point_event(
+            source_kind="manual",
+            source_file="manual_events.csv",
+            source_index=idx,
+            source_row=row,
+            frame_path=frame_path,
+            original_note=note,
+            frame_metadata=capture_metadata,
+        )
         return idx
 
     def record_rheed_view_event(
@@ -3486,6 +3599,232 @@ class GrowthLogger:
             log.error("Live-label CSV committed but its append stream is unavailable")
         return idx
 
+    def unfinished_point_events(self) -> list[dict[str, object]]:
+        """Return active Drafts, with newest manual events first.
+
+        The caller still has to present the choice to the grower.  Ordering a
+        default is not permission to silently bind an Equalizer measurement.
+        """
+        store = self._rheed_point_event_store
+        if store is None:
+            return []
+        events = [
+            state for state in store.states.values()
+            if state.get("status") == "Draft"
+            and state.get("review", {}).get("disposition") == "active"
+        ]
+        events.sort(
+            key=lambda state: (
+                state.get("source", {}).get("kind") == "manual",
+                str(state.get("source", {}).get("original_at_utc") or ""),
+                int(state.get("revision_number") or 0),
+            ),
+            reverse=True,
+        )
+        return events
+
+    def attach_live_equalizer_to_point_event(
+        self,
+        event_id: str,
+        *,
+        live_label_index: int,
+        actor: str,
+        calibration: CalibrationRecord,
+        snapshot: RheedFrameSnapshot,
+        equalizer_payload: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Bind one durable live-label image and measurement to one event.
+
+        ``live_labels.csv`` and its exact BMP remain acquisition evidence.  A
+        separate append-only point-event revision moves only the editable
+        review anchor, then records the auxiliary Equalizer fit.  Failure here
+        never rewrites or removes the already-saved live label; the unique
+        capture/hash can be associated during later review.
+        """
+        store = self._rheed_point_event_store
+        if store is None or self._session_dir is None:
+            raise PointEventError("No point-event review store is active")
+        event = store.get(event_id)
+        if event is None:
+            raise PointEventError(f"Unknown point event: {event_id}")
+        actor = str(actor or "").strip()
+        if not actor:
+            raise PointEventError("Select a grower/reviewer before binding Equalizer")
+        # Validate the complete typed context and its still-active journal
+        # record before touching the point-event journal.  A saved live-label
+        # row is evidence, not permission to combine a stale calibration with
+        # another camera frame.
+        try:
+            self._validate_equalizer_context(calibration, snapshot)
+        except (TypeError, ValueError) as exc:
+            raise PointEventError("Equalizer context is not active and compatible") from exc
+        journaled = self.get_calibration(calibration.calibration_id)
+        if (
+            journaled is None
+            or journaled.to_json_dict() != calibration.to_json_dict()
+        ):
+            raise PointEventError("Equalizer calibration is not active in the journal")
+        validated = validate_equalizer_payload(equalizer_payload)
+        csv_path = self._session_dir / "live_labels.csv"
+        try:
+            if self._live_label_file is not None and not self._live_label_file.closed:
+                self._live_label_file.flush()
+            with open(csv_path, newline="", encoding="utf-8") as stream:
+                matches = [
+                    row for row in csv.DictReader(stream)
+                    if str(row.get("label_idx", "")) == str(int(live_label_index))
+                ]
+        except (OSError, TypeError, ValueError) as exc:
+            raise PointEventError("Could not resolve saved live-label evidence") from exc
+        if len(matches) != 1:
+            raise PointEventError("Live-label evidence is missing or ambiguous")
+        row = matches[0]
+
+        # Resolve and validate every immutable identity before appending even
+        # the move_anchor revision.  This keeps all mismatch failures atomic
+        # with respect to the point-event journal.
+        try:
+            row_sequence = int(str(row.get("capture_sequence") or ""))
+        except (TypeError, ValueError) as exc:
+            raise PointEventError("Live-label capture_sequence is invalid") from exc
+        if row_sequence != snapshot.capture_sequence:
+            raise PointEventError("Live-label capture_sequence does not match snapshot")
+
+        row_captured_at = str(row.get("captured_at_utc") or "").strip()
+        if row_captured_at:
+            try:
+                row_captured_at = normalize_utc_timestamp(
+                    row_captured_at,
+                    field_name="live-label captured_at_utc",
+                )
+            except ValueError as exc:
+                raise PointEventError("Live-label captured_at_utc is invalid") from exc
+            if row_captured_at != snapshot.captured_at_utc:
+                raise PointEventError("Live-label captured_at_utc does not match snapshot")
+
+        required_identity = (
+            ("calibration_id", calibration.calibration_id),
+            ("basis_bundle_id", calibration.basis_bundle_id),
+            ("capture_geometry_id", snapshot.capture_geometry_id),
+        )
+        for field, expected in required_identity:
+            if str(row.get(field) or "") != str(expected):
+                raise PointEventError(f"Live-label {field} does not match calibration")
+
+        optional_identity = (
+            ("capture_backend", snapshot.capture_backend),
+            ("source_hwnd", snapshot.source_hwnd),
+            ("session_id", snapshot.session_id),
+            ("view_segment_id", snapshot.view_segment_id),
+            ("visual_history_generation", snapshot.visual_history_generation),
+        )
+        for field, expected in optional_identity:
+            value = str(row.get(field) or "").strip()
+            if value and value != str(expected):
+                raise PointEventError(f"Live-label {field} does not match snapshot")
+
+        try:
+            decoded_active_classes = json.loads(
+                str(row.get("equalizer_active_classes") or ""),
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise PointEventError("Live-label active classes are invalid") from exc
+        if not isinstance(decoded_active_classes, list):
+            raise PointEventError("Live-label active classes are invalid")
+        row_active_classes = tuple(str(label) for label in decoded_active_classes)
+        if row_active_classes != tuple(calibration.active_classes):
+            raise PointEventError("Live-label active classes do not match calibration")
+
+        try:
+            frame_path = self._resolve_existing_event_frame(
+                self._session_dir, str(row.get("frame_path") or ""),
+            )
+        except ValueError as exc:
+            raise PointEventError("Saved live-label frame is unavailable") from exc
+        if frame_path.suffix.lower() not in {".bmp", ".png"}:
+            raise PointEventError("Saved live-label frame must be BMP or PNG")
+        try:
+            from PIL import Image
+
+            with Image.open(frame_path) as image:
+                decoded_rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
+        except Exception as exc:
+            raise PointEventError("Saved live-label frame cannot be decoded") from exc
+        if decoded_rgb.shape != snapshot.rgb.shape or (
+            decoded_rgb.shape[1] != snapshot.camera_width
+            or decoded_rgb.shape[0] != snapshot.camera_height
+        ):
+            raise PointEventError("Saved live-label frame dimensions do not match snapshot")
+
+        row_hash = str(row.get("equalizer_frame_sha256") or "").strip().lower()
+        if str(row.get("equalizer_frame_sha256_algorithm") or "") != "rgb-array-v1":
+            raise PointEventError("Live-label frame hash algorithm is not rgb-array-v1")
+        if len(row_hash) != 64 or any(ch not in "0123456789abcdef" for ch in row_hash):
+            raise PointEventError("Live-label frame hash is invalid")
+        decoded_hash = frame_rgb_sha256(decoded_rgb)
+        snapshot_hash = frame_rgb_sha256(snapshot.rgb)
+        if row_hash != decoded_hash or row_hash != snapshot_hash:
+            raise PointEventError("Saved live-label pixels do not match frozen snapshot")
+
+        anchor = make_review_anchor(
+            frame_path=frame_path,
+            capture_sequence=row_sequence,
+            captured_at_utc=snapshot.captured_at_utc,
+            elapsed_s=row.get("elapsed_s"),
+            view_segment_id=snapshot.view_segment_id,
+            capture_geometry_id=snapshot.capture_geometry_id,
+        )
+        moved = store.move_review_anchor(
+            event_id,
+            actor=actor,
+            anchor=anchor,
+            base_revision_id=str(event.get("revision_id") or ""),
+        )
+        measurement = {
+            "valid": True,
+            "measurement_type": "equalizer_visual_basis_fit",
+            "measured_at_utc": datetime.now(timezone.utc).isoformat(),
+            "calibration_id": calibration.calibration_id,
+            "basis_bundle_id": calibration.basis_bundle_id,
+            "frame_sha256": anchor["image_sha256"],
+            "frame_sha256_algorithm": "raw-file-bytes-v1",
+            "capture_sequence": snapshot.capture_sequence,
+            "active_classes": list(calibration.active_classes),
+            "weights": {
+                "raw": validated["raw_weights"],
+                "final": validated["final_weights"],
+                "normalized": validated["normalized_weights"],
+            },
+            "fit_mode": validated["fit_mode"],
+            "normalization_applied": validated["normalization_applied"],
+            "fit_residual": validated["residual_rms"],
+            "valid_coverage": validated["valid_coverage"],
+            "confidence": validated["confidence"],
+            "HTR": None,
+            "calibration": {
+                "matrix": calibration.matrix.tolist(),
+                "parity": calibration.parity,
+                "endpoint_order": calibration.endpoint_order,
+                "rotation_deg": calibration.rotation_deg,
+                "scale": calibration.scale,
+                "rms_residual_px": calibration.rms_residual_px,
+                "max_residual_px": calibration.max_residual_px,
+                "valid_coverage": calibration.valid_coverage,
+                "orientation_evidence_kind": (
+                    calibration.orientation_evidence_kind
+                ),
+            },
+            "scientific_meaning": (
+                "visual_basis_fit_not_human_label_not_model_probability"
+            ),
+        }
+        return store.set_equalizer(
+            event_id,
+            actor=actor,
+            equalizer=measurement,
+            base_revision_id=str(moved.get("revision_id") or ""),
+        )
+
     def log_heartbeat(
         self,
         elapsed_s: float,
@@ -3496,6 +3835,13 @@ class GrowthLogger:
         """Append a row to heartbeat_log.csv. Pairs with save_heartbeat_frame."""
         if not self._heartbeat_writer:
             return
+        metadata = capture_metadata or {}
+        frame_width = metadata.get("frame_width")
+        if frame_width in (None, ""):
+            frame_width = metadata.get("camera_width", "")
+        frame_height = metadata.get("frame_height")
+        if frame_height in (None, ""):
+            frame_height = metadata.get("camera_height", "")
         self._heartbeat_writer.writerow({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": f"{elapsed_s:.2f}",
@@ -3504,7 +3850,20 @@ class GrowthLogger:
                 f"{pyro_temp:.1f}" if pyro_temp is not None else ""
             ),
             "frame_path": frame_path,
-            **self._capture_columns(capture_metadata),
+            **self._capture_columns(metadata),
+            "captured_monotonic_ns": metadata.get(
+                "captured_monotonic_ns", "",
+            ),
+            "frame_width": frame_width,
+            "frame_height": frame_height,
+            "view_segment_id": metadata.get("view_segment_id", ""),
+            "visual_history_generation": metadata.get(
+                "visual_history_generation", "",
+            ),
+            "gun_aligned": metadata.get("gun_aligned", ""),
+            "realignment_active": metadata.get("realignment_active", ""),
+            "calibration_id": metadata.get("calibration_id", ""),
+            "basis_bundle_id": metadata.get("basis_bundle_id", ""),
         })
         self._heartbeat_file.flush()
 
@@ -3866,11 +4225,47 @@ class GrowthLogger:
             )
         if not reopened:
             log.error("Auto-capture CSV committed but its append stream is unavailable")
+        point_frame_path = ""
+        point_frame_metadata: Mapping[str, object] = {}
+        if final_dir is not None and manifest_rows:
+            trigger_sequence = str(row.get("capture_sequence") or "").strip()
+            exact_trigger_rows = [
+                manifest for manifest in manifest_rows
+                if trigger_sequence
+                and str(manifest.get("capture_sequence") or "").strip()
+                == trigger_sequence
+            ]
+            if len(exact_trigger_rows) == 1:
+                point_frame_metadata = exact_trigger_rows[0]
+                point_frame_path = str(
+                    final_dir / exact_trigger_rows[0]["frame_path"]
+                )
+            elif len(exact_trigger_rows) > 1:
+                log.error(
+                    "Auto-capture event %d has ambiguous trigger sequence %s",
+                    event_idx,
+                    trigger_sequence,
+                )
+            else:
+                log.error(
+                    "Auto-capture event %d has no saved frame for trigger sequence %s",
+                    event_idx,
+                    trigger_sequence or "<missing>",
+                )
+        point_event_id = self._register_live_point_event(
+            source_kind="auto_capture",
+            source_file="auto_capture_events.csv",
+            source_index=event_idx,
+            source_row=row,
+            frame_path=point_frame_path,
+            frame_metadata=point_frame_metadata,
+        )
         return AutoCaptureCommitResult(
             buffer_count=buffer_count,
             buffer_dir=buffer_dir,
             committed=True,
             writer_ready=bool(reopened and self._auto_capture_stream_ready()),
+            point_event_id=point_event_id,
         )
 
     def log_auto_capture_event(
@@ -3930,6 +4325,13 @@ class GrowthLogger:
             )
         finally:
             self._open_auto_capture_stream_for_append()
+        if write_ok:
+            self._register_live_point_event(
+                source_kind="auto_capture",
+                source_file="auto_capture_events.csv",
+                source_index=event_idx,
+                source_row=row,
+            )
         return write_ok
 
     def update_auto_capture_state(
@@ -4603,6 +5005,11 @@ class GrowthLogger:
             "session_end", "gui",
             details={"sensor_row_count": self._sensor_row_counter},
         )
+        if self._rheed_point_event_store is not None:
+            try:
+                self._rheed_point_event_store.materialize_summary()
+            except OSError as exc:
+                log.error("Could not refresh point-event summary: %s", exc)
         for f in (
             self._sensor_file, self._commit_file,
             self._auto_capture_file, self._heartbeat_file,

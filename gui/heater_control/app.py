@@ -4,6 +4,7 @@ Application entry point — QApplication setup and main().
 
 import sys
 from PyQt6.QtWidgets import QApplication
+from gui.app_icon import install_application_icon
 from gui.heater_control.main_window import MainWindow
 
 
@@ -16,6 +17,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    install_application_icon(app)
 
     window = MainWindow(resource)
     window.show()

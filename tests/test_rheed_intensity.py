@@ -278,6 +278,67 @@ class RheedIntensityLoggerTests(unittest.TestCase):
                 roi.roi_definition_id,
             )
 
+    def test_roi_and_point_event_share_one_session_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            logger = GrowthLogger(directory)
+            logger.start_session("ROI_POINT_EVENT")
+            frame = np.full((20, 30, 3), 25, dtype=np.uint8)
+            state = _state(frame, sequence=8)
+            roi = manual_roi_definition((0.1, 0.1, 0.8, 0.8), state, frame)
+            sample = measure_camera_state(state, roi)
+            self.assertTrue(logger.record_rheed_roi_definition("defined", roi))
+            self.assertTrue(logger.record_rheed_roi_intensity(
+                sample,
+                elapsed_s=1.25,
+                view_segment_id=2,
+                visual_history_generation=3,
+            ))
+            capture_metadata = {
+                "capture_backend": state.capture_backend,
+                "captured_at_utc": state.captured_at_utc,
+                "capture_sequence": state.capture_sequence,
+                "frame_age_ms": state.frame_age_ms,
+                "source_hwnd": state.source_hwnd,
+                "captured_monotonic_ns": state.captured_monotonic_ns,
+                "capture_geometry_id": state.capture_geometry_id,
+            }
+            self.assertEqual(logger.record_manual_event(
+                elapsed_s=1.5,
+                frame=frame,
+                note="combined lifecycle",
+                capture_metadata=capture_metadata,
+                event_at_utc=state.captured_at_utc,
+            ), 1)
+            event_id = logger.last_point_event_id
+            self.assertTrue(event_id)
+            session_dir = logger.session_dir
+
+            logger.end_session()
+
+            with (session_dir / "rheed_roi_intensity.csv").open(
+                newline="", encoding="utf-8",
+            ) as stream:
+                self.assertEqual(len(list(csv.DictReader(stream))), 1)
+            self.assertTrue(
+                (session_dir / "rheed_roi_definitions.jsonl").read_text(
+                    encoding="utf-8",
+                ).strip()
+            )
+            summary = json.loads(
+                (session_dir / "rheed_point_events.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+            self.assertEqual(
+                [event["event_id"] for event in summary["events"]],
+                [event_id],
+            )
+            self.assertTrue(
+                (session_dir / "rheed_event_revisions.jsonl").read_text(
+                    encoding="utf-8",
+                ).strip()
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

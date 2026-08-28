@@ -266,6 +266,19 @@ class _AppHarness:
         self.invalidations: list[str] = []
         self.auto_capture_state_at_worker_stop = None
         self._latest_classifier = None
+        # Grower exposure control added an announcement hop at the top of
+        # _on_camera_state. Bind the real implementation rather than a no-op,
+        # so this harness cannot silently diverge from production. It
+        # short-circuits on states without an exposure_us, which is every
+        # state this file constructs.
+        self._reported_camera_exposure_us = None
+        from gui.growth_app import GrowthApp
+        self._announce_camera_exposure = (
+            GrowthApp._announce_camera_exposure.__get__(self)
+        )
+        self._return_to_idle_if_arm_failed = (
+            GrowthApp._return_to_idle_if_arm_failed.__get__(self)
+        )
 
     def _stop_workers(self, *workers) -> tuple[object, ...]:
         self.stopped_workers = workers

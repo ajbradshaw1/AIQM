@@ -245,6 +245,7 @@ class _Value:
 class _Monitor:
     def __init__(self) -> None:
         self.config_camera_mode = _Value("dummy")
+        self.config_camera_exposure_ms = SimpleNamespace(value=lambda: 0.0)
         self.config_pyrometer_mode = _Value("dummy")
         self.config_mistral_mode = _Value("dummy")
         self.config_evap_mode = _Value("dummy")
@@ -254,6 +255,9 @@ class _Monitor:
         self.config_weak_primary_shadow_enabled = _Value(True)
         self.classifier_states = []
         self.state = "idle"
+
+    def clear_camera_provenance(self) -> None:
+        pass
 
     def update_classifier_state(self, state) -> None:
         self.classifier_states.append(state)
@@ -284,6 +288,10 @@ class _ArmHarness:
         self.growth_log = SimpleNamespace(active=False)
         self._status_bar = _StatusBar()
         self._chamber_config = SimpleNamespace(
+            camera_index=0,
+            camera_fps=1.0,
+            pyrometer_port="COM_TEST",
+            pyrometer_device_id=1,
             pyrometer_rts=False,
             pyrometer_modbus_backend="raw_serial",
         )

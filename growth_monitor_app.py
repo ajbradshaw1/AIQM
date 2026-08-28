@@ -41,11 +41,13 @@ if _qt_plugins.exists() and "QT_QPA_PLATFORM_PLUGIN_PATH" not in os.environ:
     os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(_qt_plugins / "platforms")
 
 from PyQt6.QtWidgets import QApplication
+from gui.app_icon import install_application_icon
 from gui.growth_app import GrowthApp
 
 
 def main():
     app = QApplication(sys.argv)
+    install_application_icon(app)
     window = GrowthApp()
     window.show()
     sys.exit(app.exec())

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>__REPORT_TITLE__</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --background: light-dark(#ffffff, #111318);
+      --foreground: light-dark(#191b22, #f2f3f5);
+      --muted-foreground: light-dark(#5d6472, #aeb5c1);
+      --border: light-dark(#d8dbe2, #3c414c);
+      --popover: light-dark(#ffffff, #20242d);
+      --popover-foreground: light-dark(#191b22, #f2f3f5);
+      --accent: light-dark(#dbeafe, #1e3a5f);
+      --accent-foreground: light-dark(#1e40af, #bfdbfe);
+      --destructive: light-dark(#b91c1c, #fca5a5);
+      --primary: light-dark(#1f2937, #e5e7eb);
+      --primary-foreground: light-dark(#ffffff, #111318);
+      --input: light-dark(#ffffff, #20242d);
+      --viz-series-1: light-dark(#2563eb, #6ea8fe);
+      --viz-series-2: light-dark(#d97706, #f6ad55);
+      --viz-series-3: light-dark(#059669, #4ade80);
+      --viz-series-4: light-dark(#dc2626, #fb7185);
+      --viz-series-5: light-dark(#7c3aed, #c084fc);
+      --viz-series-6: light-dark(#64748b, #cbd5e1);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      color: var(--foreground);
+      background: var(--background);
+      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1440px; margin: 0 auto; }
+    h2 { margin: 0 0 4px; font-size: 24px; font-weight: 500; }
+    h3 { font-size: 15px; }
+    p { margin: 0 0 12px; }
+    .text-small { font-size: 12px; }
+    .btn {
+      color: var(--foreground);
+      background: transparent;
+      border: 1px solid var(--border);
+      padding: 7px;
+      cursor: pointer;
+      font: inherit;
+    }
+    .btn:hover, .btn:focus-visible { outline: 2px solid var(--viz-series-1); outline-offset: 2px; }
+    .btn-primary { color: var(--primary-foreground); background: var(--primary); }
+    .form-control,
+    .form-select {
+      color: var(--foreground);
+      background: var(--input);
+      border: 1px solid var(--border);
+      padding: 7px;
+      font: inherit;
+    }
+    .form-control:focus-visible,
+    .form-select:focus-visible,
+    .form-range:focus-visible {
+      outline: 2px solid var(--viz-series-1);
+      outline-offset: 2px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+__FRAGMENT__
+  </main>
+</body>
+</html>
