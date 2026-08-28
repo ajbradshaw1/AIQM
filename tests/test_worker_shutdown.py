@@ -10,7 +10,9 @@ with::
 from __future__ import annotations
 
 import os
+import json
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -287,6 +289,9 @@ class _AppHarness:
         self._return_to_idle_if_arm_failed = (
             GrowthApp._return_to_idle_if_arm_failed.__get__(self)
         )
+        self._session_metadata_with_camera = (
+            GrowthApp._session_metadata_with_camera.__get__(self)
+        )
 
     def _stop_workers(self, *workers) -> tuple[object, ...]:
         self.stopped_workers = workers
@@ -494,6 +499,79 @@ class StopWorkersTests(unittest.TestCase):
         self.assertEqual(app.auto_capture_engine.reset_count, 1)
         self.assertEqual(app.monitor.state, "armed")
         self.assertFalse(app.monitor.start_btn.enabled)
+
+    def test_close_persists_camera_open_settings_after_worker_shutdown(self):
+        app = _AppHarness()
+        snapshot = {
+            "read_at_utc": "2026-08-28T12:00:00Z",
+            "access_mode": "full",
+            "gain": 17,
+        }
+        app.camera_worker = types.SimpleNamespace(
+            sensor_settings_at_connect=snapshot,
+        )
+        app.growth_log.active = True
+        event = _CloseEvent()
+
+        GrowthApp.closeEvent(app, event)
+
+        self.assertTrue(event.accepted)
+        self.assertEqual(
+            app.growth_log.saved_metadata[
+                "camera_sensor_settings_at_connect"
+            ],
+            snapshot,
+        )
+
+    def test_connect_snapshot_survives_crash_and_failed_reconnect(self):
+        """The session sidecar exists without requiring STOP or close."""
+
+        app = _AppHarness()
+        snapshot = {
+            "read_at_utc": "2026-08-28T12:00:00Z",
+            "access_mode": "full",
+            "capture_geometry_id": "vimba-geometry-v1:sha256:" + "a" * 64,
+            "capture_geometry": {
+                "readback_complete": True,
+                "fields": {"offset_x": 0, "offset_y": 0},
+            },
+        }
+        app.camera_worker = types.SimpleNamespace(
+            sensor_settings_at_connect=snapshot,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            app.growth_log.session_dir = Path(directory)
+            self.assertTrue(GrowthApp._persist_camera_connect_snapshot(app))
+
+            # Model an abrupt process exit: do not call STOP, closeEvent, or
+            # save_session_metadata. The atomic connect sidecar is already a
+            # complete, independently parseable record.
+            sidecar = Path(directory) / "camera_sensor_settings_at_connect.json"
+            record = json.loads(sidecar.read_text(encoding="utf-8"))
+            self.assertEqual(record["snapshot_status"], "captured")
+            self.assertEqual(
+                record["camera_sensor_settings_at_connect"], snapshot,
+            )
+            self.assertEqual(list(Path(directory).glob(".*.tmp")), [])
+
+            # A failed reconnect exposes no current-cycle settings. The
+            # session cache and sidecar must still describe the settings that
+            # were proven when this session began.
+            app.camera_worker = types.SimpleNamespace(
+                sensor_settings_at_connect={},
+            )
+            metadata = GrowthApp._session_metadata_with_camera(app)
+            self.assertEqual(
+                metadata["camera_sensor_settings_at_connect"], snapshot,
+            )
+            self.assertEqual(
+                metadata["camera_sensor_settings_at_connect_file"],
+                sidecar.name,
+            )
+            self.assertEqual(
+                json.loads(sidecar.read_text(encoding="utf-8")), record,
+            )
 
     def test_queued_camera_and_capture_signals_are_ignored_after_refused_close(self):
         app = _AppHarness()

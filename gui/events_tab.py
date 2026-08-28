@@ -1,12 +1,11 @@
 """Point-event review UI for live and completed RHEED sessions.
 
 The acquisition CSV files and saved frames are immutable evidence.  This tab
-edits only the append-only ``rheed-point-events-v2`` review journal.  A point
+edits only the append-only ``rheed-point-events-v3`` review journal.  A point
 event can contain several small, explicit human labels:
 
-* a reconstruction appeared or disappeared;
-* pattern clarity became Good or Bad; and
-* surface quality became Good or Bad.
+* a reconstruction appeared or disappeared; and
+* pattern clarity became Good or Bad.
 
 The point controls save immediately.  Anchors are selected separately for the
 derived stable state interval after a point, rather than being treated as an
@@ -53,8 +52,8 @@ from gui.growth_logger import GrowthLogger
 from gui.rheed_point_events import (
     PointEventCompletionError,
     PointEventError,
+    V2_SCHEMA_ID,
     make_review_anchor,
-    sha256_file,
 )
 from gui.widgets import ScalingImageLabel
 
@@ -75,12 +74,6 @@ CLARITY_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Bad", "bad"),
 )
 CLARITY_DISPLAY = dict((value, label) for label, value in CLARITY_OPTIONS)
-
-QUALITY_OPTIONS: tuple[tuple[str, str], ...] = (
-    ("Good", "good"),
-    ("Bad", "bad"),
-)
-QUALITY_DISPLAY = dict((value, label) for label, value in QUALITY_OPTIONS)
 
 COL_EVENT_IDX = 0  # Historical public name; the cell now holds a stable event ID.
 COL_EVENT_ID = COL_EVENT_IDX
@@ -374,8 +367,8 @@ class EventsTab(QWidget):
         form.addRow("Review provenance:", blind_row)
 
         initial_state = QLabel(
-            "Start of session is fixed as 1x1 with Bad clarity. "
-            "Choose only its initial surface quality."
+            "Start of session is fixed as 1x1 with unknown pattern clarity. "
+            "This is an auditable baseline, not an appearance event."
         )
         initial_state.setWordWrap(True)
         initial_state.setStyleSheet("color: #888; font-size: 10px;")
@@ -405,13 +398,6 @@ class EventsTab(QWidget):
         self._clarity_combo.addItem("Became Bad (unclear features)", "bad")
         self._clarity_combo.currentIndexChanged.connect(self._on_clarity_change)
         form.addRow("Pattern clarity:", self._clarity_combo)
-
-        self._quality_combo = QComboBox()
-        self._quality_combo.addItem("No change / not chosen", "")
-        self._quality_combo.addItem("Became Good (surface quality)", "good")
-        self._quality_combo.addItem("Became Bad (surface quality)", "bad")
-        self._quality_combo.currentIndexChanged.connect(self._on_quality_change)
-        form.addRow("Surface quality:", self._quality_combo)
 
         self._notes_input = QLineEdit()
         self._notes_input.setPlaceholderText("Optional note; not an event name")
@@ -783,15 +769,14 @@ class EventsTab(QWidget):
                     str(label.get("value")), str(label.get("value") or "?"),
                 ))
             elif label.get("kind") == "surface_quality":
-                parts.append("Quality→" + QUALITY_DISPLAY.get(
-                    str(label.get("value")), str(label.get("value") or "?"),
-                ))
+                value = str(label.get("value") or "?")
+                parts.append("Legacy quality→" + value.capitalize())
         return ", ".join(parts) if parts else "—"
 
     def _refresh_unreviewed_badge(self) -> None:
         # Autosave has no per-event Complete/Apply ceremony, therefore an
-        # "unfinished" badge would be misleading. Missing initial quality or
-        # interval representatives are shown in the interval UI itself.
+        # "unfinished" badge would be misleading. Missing interval
+        # representatives are shown in the interval UI itself.
         self.unreviewed_count_changed.emit(0)
 
     # ------------------------------------------------------------ selection
@@ -1101,6 +1086,7 @@ class EventsTab(QWidget):
 
             source_kind = str(source.get("kind") or "")
             initial_state = source_kind == "initial_assumption"
+            legacy_v2 = str(state.get("schema") or "") == V2_SCHEMA_ID
             labels = [
                 item for item in review.get("labels") or []
                 if isinstance(item, Mapping)
@@ -1120,24 +1106,34 @@ class EventsTab(QWidget):
                 str(item.get("value")) for item in labels
                 if item.get("kind") == "pattern_clarity"
             ), "")
-            quality = next((
-                str(item.get("value")) for item in labels
-                if item.get("kind") == "surface_quality"
-            ), "")
             self._clarity_combo.blockSignals(True)
             self._clarity_combo.setCurrentIndex(max(
-                self._clarity_combo.findData("bad" if initial_state else clarity), 0,
+                self._clarity_combo.findData(
+                    "bad" if initial_state and legacy_v2
+                    else "" if initial_state else clarity
+                ),
+                0,
             ))
             self._clarity_combo.blockSignals(False)
-            self._quality_combo.blockSignals(True)
-            self._quality_combo.setCurrentIndex(max(
-                self._quality_combo.findData(quality), 0,
-            ))
-            self._quality_combo.blockSignals(False)
 
             self._set_edit_controls_enabled(True)
             self._initial_state_notice.setVisible(initial_state)
             if initial_state:
+                if legacy_v2:
+                    quality = next((
+                        str(item.get("value")) for item in labels
+                        if item.get("kind") == "surface_quality"
+                    ), "unknown")
+                    self._initial_state_notice.setText(
+                        "Frozen v2 starting state: 1x1 with Bad pattern clarity; "
+                        f"recorded surface quality is {quality.capitalize()}."
+                    )
+                else:
+                    self._initial_state_notice.setText(
+                        "Start of session is fixed as 1x1 with unknown pattern "
+                        "clarity. This is an auditable baseline, not an "
+                        "appearance event."
+                    )
                 for combo in self._reconstruction_change_combos.values():
                     combo.setEnabled(False)
                 self._clarity_combo.setEnabled(False)
@@ -1149,11 +1145,19 @@ class EventsTab(QWidget):
                     "next labeled point ends this interval automatically."
                 )
             if initial_state:
-                self._interval_explanation.setText(
-                    "This is the first derived interval: 1x1 is present and clarity "
-                    "is Bad. Choose whether its surface quality is Good or Bad, then "
-                    "select the clearest characteristic frame in this interval."
-                )
+                if legacy_v2:
+                    self._interval_explanation.setText(
+                        "This frozen v2 interval starts with 1x1 present and Bad "
+                        "clarity. Its original surface-quality label is shown "
+                        "without reinterpretation."
+                    )
+                else:
+                    self._interval_explanation.setText(
+                        "This is the first derived interval: 1x1 is present and "
+                        "clarity is unknown. Select the clearest characteristic "
+                        "frame in this interval without inventing a change at the "
+                        "first frame."
+                    )
             legacy_read_only = bool(
                 self._point_store is not None
                 and getattr(self._point_store, "read_only_legacy", False)
@@ -1161,17 +1165,18 @@ class EventsTab(QWidget):
             if legacy_read_only:
                 self._set_edit_controls_enabled(False)
                 self._completion_help.setText(
-                    "Legacy v1 event journal: shown read-only. It is not guessed or "
-                    "silently converted into the new point-label meanings."
+                    "Legacy event journal: integrity-checked and shown read-only. "
+                    "Its labels are not guessed or silently converted into v3 "
+                    "point-label meanings."
                 )
             elif initial_state:
                 self._completion_help.setText(
-                    "Initial state is not an appearance event. Surface quality and "
-                    "the interval representative save immediately when selected."
+                    "Initial state is not an appearance event and has no semantic "
+                    "change label. Its interval representative saves immediately."
                 )
             else:
                 self._completion_help.setText(
-                    "Every reconstruction, clarity, quality, and note edit is saved "
+                    "Every reconstruction, clarity, and note edit is saved "
                     "immediately. There is no separate Save or Apply step."
                 )
         finally:
@@ -1181,7 +1186,6 @@ class EventsTab(QWidget):
         widgets = [
             *self._reconstruction_change_combos.values(),
             self._clarity_combo,
-            self._quality_combo,
             self._notes_input,
             self._move_review_button,
             self._representative_button,
@@ -1290,12 +1294,6 @@ class EventsTab(QWidget):
             kind="pattern_clarity", change="became", value=value,
         )
 
-    def _on_quality_change(self, _index: int = 0) -> None:
-        value = str(self._quality_combo.currentData())
-        self._set_semantic_choice(
-            kind="surface_quality", change="became", value=value,
-        )
-
     def _queue_review_field_save(self) -> None:
         if not self._populating_form:
             self._review_save_timer.start()
@@ -1359,14 +1357,33 @@ class EventsTab(QWidget):
         captured_at = str(metadata.get("captured_at_utc") or source.get("original_at_utc") or "")
         elapsed = _frame_elapsed_from_capture(metadata, source)
         try:
+            archive_member = path.relative_to(self._session_dir).as_posix()
+        except (OSError, TypeError, ValueError):
+            archive_member = str(metadata.get("archive_member") or "")
+        image_sha256 = str(
+            metadata.get("image_sha256") or metadata.get("frame_sha256") or ""
+        )
+        image_sha256_algorithm = str(
+            metadata.get("image_sha256_algorithm")
+            or metadata.get("frame_sha256_algorithm")
+            or ("raw-file-bytes-v1" if image_sha256 else "")
+        )
+        try:
             return make_review_anchor(
                 frame_path=path,
-                image_sha256=sha256_file(path),
                 capture_sequence=metadata.get("capture_sequence", source.get("capture_sequence")),
+                image_sha256=image_sha256,
+                image_sha256_algorithm=image_sha256_algorithm,
                 captured_at_utc=captured_at,
                 elapsed_s=elapsed,
                 view_segment_id=metadata.get("view_segment_id"),
                 capture_geometry_id=str(metadata.get("capture_geometry_id") or ""),
+                session_identity=str(
+                    source.get("session_identity")
+                    or (self._session_dir.name if self._session_dir else "")
+                ),
+                frame_index=metadata.get("frame_index"),
+                archive_member=archive_member,
             )
         except (OSError, PointEventError) as exc:
             QMessageBox.warning(self, "Frame cannot be selected", str(exc))
@@ -1445,11 +1462,14 @@ class EventsTab(QWidget):
             "source_index": source_index,
             "parent_event_id": self._currently_displayed_event_id or "",
             "frame_path": anchor["frame_path"],
-            "image_sha256": anchor["image_sha256"],
             "capture_sequence": anchor.get("capture_sequence"),
             "captured_at_utc": anchor.get("captured_at_utc"),
             "elapsed_s": anchor.get("elapsed_s"),
+            "archive_member": anchor.get("archive_member", ""),
+            "frame_index": anchor.get("frame_index"),
         }
+        if anchor.get("image_sha256"):
+            source_row["image_sha256"] = anchor["image_sha256"]
         try:
             state = self._point_store.create_event(
                 source_kind="posthoc",
@@ -1462,7 +1482,7 @@ class EventsTab(QWidget):
                 original_elapsed_s=anchor.get("elapsed_s"),
                 capture_sequence=anchor.get("capture_sequence"),
                 original_frame_path=str(anchor["frame_path"]),
-                original_image_sha256=str(anchor["image_sha256"]),
+                original_image_sha256=str(anchor.get("image_sha256") or ""),
                 review_anchor=anchor,
                 current_software=True,
             )

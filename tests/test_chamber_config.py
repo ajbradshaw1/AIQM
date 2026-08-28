@@ -185,6 +185,32 @@ class TestChMbeConfig(unittest.TestCase):
     def test_evap_mode_default(self):
         self.assertEqual(CHALCOGENIDE_MBE.evap_mode_default, "elog")
 
+    def test_elog_map_uses_verified_chmbe_names(self):
+        self.assertEqual(
+            CHALCOGENIDE_MBE.evap_elog_var_map,
+            {
+                "MBE.Pressure": "chamber_pressure_mbar",
+                "Manipulator.PV": "substrate_temp_pv_C",
+                "HTEZ_Fe.PV": "cell_Fe_pv_C",
+                "NTEZ1_Te.PV": "cell_Te_pv_C",
+                "NTEZ2_Se.PV": "cell_Se_pv_C",
+            },
+        )
+
+    def test_elog_sources_are_separate_from_numbered_ads_cells(self):
+        self.assertEqual(
+            CHALCOGENIDE_MBE.elog_source_display,
+            [
+                {"label": "Fe (HTEZ)", "state_field": "cell_Fe_pv_C"},
+                {"label": "Te (NTEZ1)", "state_field": "cell_Te_pv_C"},
+                {"label": "Se (NTEZ2)", "state_field": "cell_Se_pv_C"},
+            ],
+        )
+        self.assertTrue(all(
+            cell["state_field"] is None
+            for cell in CHALCOGENIDE_MBE.cell_display
+        ))
+
     def test_seven_cells(self):
         self.assertEqual(len(CHALCOGENIDE_MBE.cell_display), 7)
 

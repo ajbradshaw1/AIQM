@@ -1,4 +1,4 @@
-"""V2 semantic point-event journal tests."""
+"""V3 semantic point-event journal and frozen legacy replay tests."""
 
 from __future__ import annotations
 
@@ -12,10 +12,12 @@ import pytest
 from gui.rheed_point_events import (
     JOURNAL_NAME,
     LEGACY_SCHEMA_ID,
+    SCHEMA_ID,
     STATUS_COMPLETE,
     STATUS_DRAFT,
     SUMMARY_NAME,
     TRANSACTION_NAME,
+    V2_SCHEMA_ID,
     PointEventCompletionError,
     PointEventError,
     PointEventIntegrityError,
@@ -31,6 +33,8 @@ def _anchor(path: Path, elapsed: float, sequence: int, payload: bytes) -> dict:
         frame_path=path, capture_sequence=sequence,
         captured_at_utc=f"2026-08-17T12:00:{sequence:02d}+00:00",
         elapsed_s=elapsed, view_segment_id=3, capture_geometry_id="geom-a",
+        session_identity="growth_sample_20260817_120000",
+        frame_index=sequence, archive_member=path.name,
     )
 
 
@@ -46,7 +50,7 @@ def _create(
         original_at_utc=anchor["captured_at_utc"],
         original_elapsed_s=anchor["elapsed_s"], capture_sequence=anchor["capture_sequence"],
         original_frame_path=anchor["frame_path"],
-        original_image_sha256=anchor["image_sha256"], review_anchor=anchor,
+        original_image_sha256=anchor.get("image_sha256", ""), review_anchor=anchor,
     )
 
 
@@ -99,7 +103,7 @@ def test_non_rejected_complete_requires_saved_frame_review_point(tmp_path):
         original_elapsed_s=anchor["elapsed_s"],
         capture_sequence=anchor["capture_sequence"],
         original_frame_path=anchor["frame_path"],
-        original_image_sha256=anchor["image_sha256"],
+        original_image_sha256=anchor.get("image_sha256", ""),
         review_anchor=None,
     )
     event = store.add_label(
@@ -181,7 +185,7 @@ def test_auto_candidate_requires_decision_and_rejected_candidate_can_complete(tm
     assert event["review"]["labels"] == []
 
 
-def test_initial_one_by_one_state_is_deterministic_and_exactly_once(tmp_path):
+def test_initial_one_by_one_unknown_state_completes_without_semantic_delta(tmp_path):
     anchor = _anchor(tmp_path / "first.bmp", 0, 1, b"first")
     store = PointEventStore(tmp_path)
     first = store.ensure_initial_assumption(
@@ -196,19 +200,38 @@ def test_initial_one_by_one_state_is_deterministic_and_exactly_once(tmp_path):
     assert first["review"]["labels"] == []
     assert len(store.states) == 1
 
-    with pytest.raises(
-        PointEventCompletionError,
-        match="initial surface quality must be selected",
-    ):
-        store.complete(first["event_id"], actor="grower")
-
-    first = store.add_label(first["event_id"], actor="grower", label={
-        "kind": "surface_quality", "change": "became", "value": "good",
-    })
+    with pytest.raises(PointEventError, match="cannot contain semantic change labels"):
+        store.add_label(first["event_id"], actor="grower", label={
+            "kind": "pattern_clarity", "change": "became", "value": "good",
+        })
     first = store.move_representative_anchor(
         first["event_id"], actor="grower", anchor=anchor,
     )
     assert store.complete(first["event_id"], actor="grower")["status"] == STATUS_COMPLETE
+
+
+def test_review_anchor_uses_stable_identity_without_computing_hash(tmp_path):
+    path = tmp_path / "hashless.bmp"
+    path.write_bytes(b"frame-bytes")
+    anchor = make_review_anchor(
+        frame_path=path, capture_sequence=41, session_identity="session-a",
+        frame_index=7, archive_member="frames/hashless.bmp",
+    )
+    assert anchor["session_identity"] == "session-a"
+    assert anchor["capture_sequence"] == 41
+    assert anchor["frame_index"] == 7
+    assert anchor["archive_member"] == "frames/hashless.bmp"
+    assert anchor["image_sha256"] == ""
+    assert anchor["image_sha256_algorithm"] == ""
+
+    digest = "a" * 64
+    evidenced = make_review_anchor(
+        frame_path=path, capture_sequence=41, session_identity="session-a",
+        frame_index=7, archive_member="frames/hashless.bmp",
+        image_sha256=digest,
+    )
+    assert evidenced["image_sha256"] == digest
+    assert evidenced["image_sha256_algorithm"] == "raw-file-bytes-v1"
 
 
 def test_representative_anchor_must_lie_in_following_interval(tmp_path):
@@ -373,6 +396,194 @@ def test_rehashed_journal_cannot_disguise_multi_label_mutation(tmp_path, action)
         PointEventStore(tmp_path)
 
 
+def _frozen_v2_records() -> tuple[list[dict], str, dict[str, str]]:
+    """Return fixed old-v2 states with a valid global hash chain."""
+
+    event_id = "11111111-1111-4111-8111-111111111111"
+    revision_ids = [
+        "22222222-2222-4222-8222-222222222221",
+        "22222222-2222-4222-8222-222222222222",
+        "22222222-2222-4222-8222-222222222223",
+        "22222222-2222-4222-8222-222222222224",
+    ]
+    old_label = {
+        "label_id": "33333333-3333-4333-8333-333333333333",
+        "kind": "surface_quality",
+        "change": "became",
+        "value": "good",
+    }
+    anchor = {
+        "frame_path": "frames/rheed_000001.bmp",
+        "image_sha256": "a" * 64,
+        "image_sha256_algorithm": "raw-file-bytes-v1",
+        "capture_sequence": 1,
+        "captured_at_utc": "2026-08-17T12:00:00+00:00",
+        "elapsed_s": 0.0,
+        "view_segment_id": 1,
+        "capture_geometry_id": "geometry-v2",
+    }
+    source = {
+        "kind": "initial_assumption",
+        "session_identity": "frozen-v2-session",
+        "source_file": "initial_assumption",
+        "source_index": "0",
+        "source_row_sha256": "b" * 64,
+        "source_row_hash_algorithm": "sha256-canonical-json-row-v1",
+        "original_at_utc": "2026-08-17T12:00:00+00:00",
+        "original_elapsed_s": 0.0,
+        "original_frame_path": anchor["frame_path"],
+        "original_image_sha256": anchor["image_sha256"],
+        "original_image_sha256_algorithm": "raw-file-bytes-v1",
+        "capture_sequence": 1,
+        "original_note": (
+            "Initial state is 1x1 with Bad clarity; grower selects "
+            "initial surface quality."
+        ),
+    }
+    review = {
+        "anchor": anchor,
+        "representative_anchor": None,
+        "labels": [],
+        "candidate_decision": "confirmed",
+        "comment": source["original_note"],
+        "disposition": "active",
+        "disposition_reason": "",
+    }
+    base_state = {
+        "schema": V2_SCHEMA_ID,
+        "event_id": event_id,
+        "source": source,
+        "review": review,
+        "status": STATUS_DRAFT,
+        "created_at_utc": "2026-08-17T12:00:00.000+00:00",
+        "revision_id": "",
+        "revision_number": 0,
+        "updated_at_utc": "",
+    }
+    states: list[dict] = []
+    for index, revision_id in enumerate(revision_ids, 1):
+        state = copy.deepcopy(base_state if not states else states[-1])
+        if index == 2:
+            state["review"]["labels"] = [copy.deepcopy(old_label)]
+        elif index == 3:
+            state["review"]["representative_anchor"] = copy.deepcopy(anchor)
+        elif index == 4:
+            state["status"] = STATUS_COMPLETE
+        state["revision_id"] = revision_id
+        state["revision_number"] = index
+        state["updated_at_utc"] = f"2026-08-17T12:00:0{index}.000+00:00"
+        states.append(state)
+
+    actions = ["create", "add_label", "move_representative_anchor", "complete"]
+    records: list[dict] = []
+    previous_hash = ""
+    for index, (action, state) in enumerate(zip(actions, states)):
+        record = {
+            "schema": V2_SCHEMA_ID,
+            "revision_id": state["revision_id"],
+            "event_id": event_id,
+            "actor": "frozen-v2-grower",
+            "recorded_at_utc": state["updated_at_utc"],
+            "action": action,
+            "base_revision_id": (
+                None if index == 0 else states[index - 1]["revision_id"]
+            ),
+            "before": None if index == 0 else copy.deepcopy(states[index - 1]),
+            "after": copy.deepcopy(state),
+            "previous_record_sha256": previous_hash,
+        }
+        record["record_sha256"] = PointEventStore._record_hash(record)
+        previous_hash = record["record_sha256"]
+        records.append(record)
+    return records, event_id, old_label
+
+
+def _write_records(path: Path, records: list[dict]) -> None:
+    (path / JOURNAL_NAME).write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+
+def _rehash_v2_records(records: list[dict]) -> None:
+    previous_hash = ""
+    for record in records:
+        record["previous_record_sha256"] = previous_hash
+        record["record_sha256"] = PointEventStore._record_hash(record)
+        previous_hash = record["record_sha256"]
+
+
+def test_frozen_v2_journal_replays_exact_labels_and_is_read_only(tmp_path):
+    records, event_id, old_label = _frozen_v2_records()
+    _write_records(tmp_path, records)
+
+    store = PointEventStore(tmp_path)
+
+    assert store.read_only_legacy is True
+    state = store.get(event_id)
+    assert state is not None
+    assert state["schema"] == V2_SCHEMA_ID
+    assert state["review"]["labels"] == [old_label]
+    assert state["review"]["labels"][0]["kind"] == "surface_quality"
+    summary = json.loads((tmp_path / SUMMARY_NAME).read_text(encoding="utf-8"))
+    assert summary["schema"] == V2_SCHEMA_ID
+    assert summary["read_only_legacy"] is True
+    assert summary["events"][0]["review"]["labels"] == [old_label]
+
+    with pytest.raises(PointEventError, match="read-only"):
+        store.edit_review(event_id, actor="new-software", comment="rewrite")
+    with pytest.raises(PointEventError, match="read-only"):
+        store.set_equalizer(event_id, actor="new-software")
+
+
+def test_v2_replay_validates_global_hash_chain(tmp_path):
+    records, _event_id, _old_label = _frozen_v2_records()
+    records[1]["previous_record_sha256"] = "f" * 64
+    records[1]["record_sha256"] = PointEventStore._record_hash(records[1])
+    _write_records(tmp_path, records)
+
+    with pytest.raises(PointEventIntegrityError, match="global revision hash chain"):
+        PointEventStore(tmp_path)
+
+
+def test_v2_replay_validates_frozen_revision_transition(tmp_path):
+    records, _event_id, _old_label = _frozen_v2_records()
+    records[1]["action"] = "edit"
+    _rehash_v2_records(records)
+    _write_records(tmp_path, records)
+
+    with pytest.raises(PointEventIntegrityError, match="edit transition"):
+        PointEventStore(tmp_path)
+
+
+def test_v3_rejects_surface_quality_on_write_and_replay(tmp_path):
+    anchor = _anchor(tmp_path / "frame.bmp", 1, 1, b"frame")
+    store = PointEventStore(tmp_path)
+    event = _create(store, anchor)
+    assert event["schema"] == SCHEMA_ID
+
+    old_label = {
+        "kind": "surface_quality", "change": "became", "value": "good",
+    }
+    with pytest.raises(PointEventError, match="kind is invalid"):
+        store.add_label(event["event_id"], actor="grower", label=old_label)
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / JOURNAL_NAME).read_text(
+            encoding="utf-8",
+        ).splitlines()
+    ]
+    records[0]["after"]["review"]["labels"] = [{
+        "label_id": "44444444-4444-4444-8444-444444444444",
+        **old_label,
+    }]
+    records[0]["record_sha256"] = PointEventStore._record_hash(records[0])
+    _write_records(tmp_path, records)
+    with pytest.raises(PointEventIntegrityError, match="kind is invalid"):
+        PointEventStore(tmp_path)
+
+
 def test_v1_journal_is_validated_and_opened_read_only(tmp_path):
     event_id, revision_id = str(uuid.uuid4()), str(uuid.uuid4())
     state = {
@@ -410,7 +621,7 @@ def test_pending_transaction_recovers_exactly_once(tmp_path):
     assert not (tmp_path / TRANSACTION_NAME).exists()
     assert len((tmp_path / JOURNAL_NAME).read_text(encoding="utf-8").splitlines()) == 1
     summary = json.loads((tmp_path / SUMMARY_NAME).read_text(encoding="utf-8"))
-    assert summary["schema"] == "rheed-point-events-v2"
+    assert summary["schema"] == "rheed-point-events-v3"
 
 
 def test_source_events_dismiss_and_only_posthoc_deletes(tmp_path):

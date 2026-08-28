@@ -45,11 +45,7 @@ def clarity(value: str) -> EventLabel:
     return EventLabel("pattern_clarity", "became", value)
 
 
-def quality(value: str) -> EventLabel:
-    return EventLabel("surface_quality", "became", value)
-
-
-def test_default_initial_state_is_one_by_one_bad_clarity_unknown_quality() -> None:
+def test_default_initial_state_is_one_by_one_with_unknown_clarity() -> None:
     first = replay_event_states([], frame_count=12, session_identity="session-a")
     second = replay_event_states([], frame_count=12, session_identity="session-a")
 
@@ -57,8 +53,7 @@ def test_default_initial_state_is_one_by_one_bad_clarity_unknown_quality() -> No
     segment = first.segments[0]
     assert (segment.start_frame, segment.end_frame_exclusive) == (1, 13)
     assert segment.reconstructions == frozenset({"one_by_one"})
-    assert segment.clarity == "bad"
-    assert segment.quality == "unknown"
+    assert segment.clarity == "unknown"
     assert segment.boundary_event_ids == ()
     assert segment.anchor is None
     assert segment.segment_id == second.segments[0].segment_id
@@ -68,12 +63,12 @@ def test_unsorted_events_replay_into_complete_half_open_states() -> None:
     events = [
         event(
             "later", 7,
-            disappeared("rt13"), appeared("htr"), clarity("bad"), quality("bad"),
+            disappeared("rt13"), appeared("htr"), clarity("bad"),
             status="Complete",
         ),
         event(
             "earlier", 4,
-            disappeared("one_by_one"), appeared("rt13"), clarity("good"), quality("good"),
+            disappeared("one_by_one"), appeared("rt13"), clarity("good"),
         ),
     ]
 
@@ -89,9 +84,6 @@ def test_unsorted_events_replay_into_complete_half_open_states() -> None:
         frozenset({"htr"}),
     ]
     assert [item.clarity for item in result.segments] == [
-        "bad", "good", "bad",
-    ]
-    assert [item.quality for item in result.segments] == [
         "unknown", "good", "bad",
     ]
     assert result.segment_at(6) == result.segments[1]
@@ -134,8 +126,7 @@ def test_pending_rejected_deleted_and_dismissed_events_do_not_change_state() -> 
 
     assert len(result.segments) == 1
     assert result.segments[0].reconstructions == frozenset({"one_by_one"})
-    assert result.segments[0].clarity == "bad"
-    assert result.segments[0].quality == "unknown"
+    assert result.segments[0].clarity == "unknown"
     assert result.inactive_event_ids == (
         "deleted", "dismissed", "empty", "pending", "rejected",
     )
@@ -181,31 +172,14 @@ def test_good_to_good_and_bad_to_bad_are_rejected(value: str) -> None:
         )
 
 
-@pytest.mark.parametrize("value", ["good", "bad"])
-def test_quality_good_to_good_and_bad_to_bad_are_rejected(value: str) -> None:
-    with pytest.raises(
-        TransitionValidationError,
-        match=rf"quality {value.title()} cannot change to {value.title()}",
-    ):
-        replay_event_states(
-            [event("first", 2, quality(value)), event("repeat", 5, quality(value))],
-            frame_count=8,
-        )
-
-
-def test_clarity_and_quality_change_atomically_but_independently() -> None:
+def test_clarity_changes_at_an_atomic_boundary() -> None:
     result = replay_event_states(
-        [
-            event("clarity", 3, clarity("good")),
-            event("quality", 3, quality("bad")),
-        ],
+        [event("clarity", 3, clarity("good"))],
         frame_count=5,
     )
 
-    assert result.segments[0].clarity == "bad"
-    assert result.segments[0].quality == "unknown"
+    assert result.segments[0].clarity == "unknown"
     assert result.segments[1].clarity == "good"
-    assert result.segments[1].quality == "bad"
 
 
 def test_anchor_is_independent_and_must_lie_inside_its_segment() -> None:

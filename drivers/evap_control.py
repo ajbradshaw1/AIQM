@@ -249,14 +249,26 @@ class ElogReader:
         "Plasma.forward": "plasma_forward_W",
         "Plasma.reflected": "plasma_reflected_W",
     }
+    # EvapControl normally appends at about 1 Hz.  Five seconds tolerates
+    # scheduler jitter and brief file locking while still making a stopped
+    # LabVIEW logger visible well before a grower could mistake it for live.
+    DEFAULT_SOURCE_STALE_AFTER_S = 5.0
 
     def __init__(
         self,
         log_dir: Optional[str] = None,
         var_map: Optional[dict[str, str]] = None,
+        source_stale_after_s: float = DEFAULT_SOURCE_STALE_AFTER_S,
     ):
+        if (
+            isinstance(source_stale_after_s, bool)
+            or not math.isfinite(float(source_stale_after_s))
+            or float(source_stale_after_s) <= 0
+        ):
+            raise ValueError("source_stale_after_s must be a positive finite value")
         self._log_dir = log_dir or self._resolve_log_dir()
         self._var_map = var_map or self.DEFAULT_VAR_MAP
+        self._source_stale_after_s = float(source_stale_after_s)
         self._connected = False
         self._last_log_path: Optional[Path] = None
         # Cached schema intersection: which of our wanted vars actually
@@ -265,6 +277,11 @@ class ElogReader:
         self._schema_present: Optional[list[str]] = None
         self._schema_log_path: Optional[Path] = None
         self._last_source_at_utc: Optional[str] = None
+        self._last_source_age_ms: Optional[float] = None
+        self._source_record_advanced = False
+        self._source_stale = False
+        self._source_status = "unavailable"
+        self._latest_observed_source_ts: Optional[datetime] = None
 
     @property
     def source_path(self) -> str:
@@ -310,6 +327,10 @@ class ElogReader:
         # This property describes only the current read attempt. Clearing it
         # prevents a failed tail read from being paired with an older record.
         self._last_source_at_utc = None
+        self._last_source_age_ms = None
+        self._source_record_advanced = False
+        self._source_stale = False
+        self._source_status = "unavailable"
         if not self._connected:
             return result
 
@@ -352,12 +373,34 @@ class ElogReader:
         # Batch read all present vars in one open+schema+tail.
         try:
             source_ts, var_values = latest_record(path, self._schema_present)
-        except (KeyError, OSError, ValueError) as exc:
+        except (KeyError, OSError, OverflowError, ValueError) as exc:
             log.debug("ElogReader read failed: %s", exc)
             return result
         if source_ts.tzinfo is None:
             source_ts = source_ts.replace(tzinfo=timezone.utc)
-        self._last_source_at_utc = source_ts.astimezone(timezone.utc).isoformat()
+        source_ts = source_ts.astimezone(timezone.utc)
+        self._last_source_at_utc = source_ts.isoformat()
+        self._last_source_age_ms = max(
+            0.0,
+            (datetime.now(timezone.utc) - source_ts).total_seconds() * 1000.0,
+        )
+        self._source_stale = (
+            self._last_source_age_ms > self._source_stale_after_s * 1000.0
+        )
+        previous_ts = self._latest_observed_source_ts
+        self._source_record_advanced = (
+            previous_ts is None or source_ts > previous_ts
+        )
+        if self._source_record_advanced:
+            self._latest_observed_source_ts = source_ts
+        if self._source_stale:
+            self._source_status = "stale"
+        elif self._source_record_advanced:
+            self._source_status = "advanced"
+        elif previous_ts is not None and source_ts < previous_ts:
+            self._source_status = "regressed"
+        else:
+            self._source_status = "unchanged"
 
         for elog_name, (val, _fmt) in var_values.items():
             out_key = self._var_map[elog_name]
@@ -385,6 +428,11 @@ class ElogReader:
         self._schema_present = None
         self._schema_log_path = None
         self._last_source_at_utc = None
+        self._last_source_age_ms = None
+        self._source_record_advanced = False
+        self._source_stale = False
+        self._source_status = "unavailable"
+        self._latest_observed_source_ts = None
         self._connected = False
 
     @property
@@ -395,6 +443,26 @@ class ElogReader:
     def last_source_at_utc(self) -> Optional[str]:
         """UTC timestamp embedded in the last successfully read Elog record."""
         return self._last_source_at_utc
+
+    @property
+    def last_source_age_ms(self) -> Optional[float]:
+        """Host-observed age of the record parsed by the current read attempt."""
+        return self._last_source_age_ms
+
+    @property
+    def source_record_advanced(self) -> bool:
+        """Whether the current record timestamp strictly advanced."""
+        return self._source_record_advanced
+
+    @property
+    def source_stale(self) -> bool:
+        """Whether the current record exceeds the configured source timeout."""
+        return self._source_stale
+
+    @property
+    def source_status(self) -> str:
+        """One of unavailable, advanced, unchanged, regressed, or stale."""
+        return self._source_status
 
     @property
     def hwnd(self) -> int:

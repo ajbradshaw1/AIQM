@@ -43,7 +43,6 @@ from .rheed_point_events import (
     PointEventError,
     PointEventStore,
     make_review_anchor,
-    sha256_file,
 )
 
 
@@ -107,6 +106,7 @@ RHEED_VIEW_EVENT_TYPES = frozenset({
 class GrowthLogger:
     """Logs sensor data and timestamped entries during a growth session."""
 
+    ACQUISITION_SCHEMA_VERSION = 2
     LIVE_LABEL_TRANSACTION_FILE = ".live_label_transaction.pending.json"
     LIVE_LABEL_TRANSACTION_SCHEMA_VERSION = 1
     CALIBRATION_TRANSACTION_FILE = ".equalizer_calibration.pending.json"
@@ -156,6 +156,7 @@ class GrowthLogger:
         "substrate_temp_pv_C", "substrate_temp_setpoint_C",
         "cell_HTEC2_pv_C",
         "cell_Y_pv_C", "cell_Sr_pv_C", "cell_Eu_pv_C", "cell_Er_pv_C",
+        "cell_Fe_pv_C", "cell_Te_pv_C", "cell_Se_pv_C",
         "plasma_dc_bias_V", "plasma_forward_W", "plasma_reflected_W",
         # ADS union schema (7-cell superset — both chambers).
         # Ch-MBE (mode="ads"): all 7 cells populate per cadence.
@@ -207,6 +208,17 @@ class GrowthLogger:
         "mistral_processing_duration_ms",
         "evap_mode", "evap_worker_to_gui_ms", "evap_valid", "evap_error",
         "evap_capture_at_utc", "evap_processing_duration_ms",
+        # Session-level acquisition provenance. Appended so every historical
+        # field above keeps its name and ordinal position.
+        "sensor_row_idx", "elapsed_monotonic_s", "pyrometer_emissivity",
+        "pressure_source", "rheed_connected", "pyrometer_connected",
+        "mistral_connected", "evap_connected",
+        # Latest EvapControl source attempt, including rejected duplicate or
+        # stale records. These remain separate from evap_source/received above,
+        # which identify the latest accepted sample generation.
+        "evap_attempt_source_at_utc", "evap_source_age_ms",
+        "evap_source_record_advanced", "evap_source_stale",
+        "evap_source_status",
     ]
     COMMIT_FIELDS = [
         "timestamp", "time_display", "elapsed_s", "sample_id", "grower",
@@ -307,6 +319,7 @@ class GrowthLogger:
         "view_segment_id", "visual_history_generation",
         "gun_aligned", "realignment_active",
         "calibration_id", "basis_bundle_id",
+        "sensor_row_idx",
     ]
     SET_CHANGE_FIELDS = [
         "timestamp", "elapsed_s", "event_idx",
@@ -2038,6 +2051,7 @@ class GrowthLogger:
         self._human_labeling_state_trusted = False
         self._sensor_row_counter = 0
         self._session_start: Optional[datetime] = None
+        self._session_start_monotonic_ns: Optional[int] = None
         self._entries: list[dict] = []  # Accumulated entries for export
         self._recover_pending_live_label_transactions()
 
@@ -2049,6 +2063,11 @@ class GrowthLogger:
     @property
     def session_dir(self) -> Optional[Path]:
         return self._session_dir
+
+    @property
+    def latest_sensor_row_idx(self) -> int:
+        """One-based index of the latest successfully written sensor row."""
+        return self._sensor_row_counter
 
     @property
     def point_event_store(self) -> Optional[PointEventStore]:
@@ -2204,6 +2223,7 @@ class GrowthLogger:
         self._rheed_roi_sample_keys.clear()
         self._sensor_row_counter = 0
         self._session_start = datetime.now()
+        self._session_start_monotonic_ns = time.perf_counter_ns()
         self._entries = []
 
     def record_rheed_roi_definition(
@@ -2351,6 +2371,7 @@ class GrowthLogger:
         v_set=None, v_actual=None, i_set=None, i_actual=None,
         chamber_pressure_mbar=None,
         pyro_temp_std=None, pyro_temp_n=None,
+        pyrometer_emissivity=None, pressure_source="none",
         # Elog-direct extensions (Jun 23 2026 — EvapControl mode="elog").
         # All optional; blank in the CSV when None. Order matches
         # EvapControlState field order so the call site can pass through
@@ -2359,6 +2380,7 @@ class GrowthLogger:
         cell_HTEC2_pv_C=None,
         cell_Y_pv_C=None, cell_Sr_pv_C=None,
         cell_Eu_pv_C=None, cell_Er_pv_C=None,
+        cell_Fe_pv_C=None, cell_Te_pv_C=None, cell_Se_pv_C=None,
         plasma_dc_bias_V=None, plasma_forward_W=None,
         plasma_reflected_W=None,
         # ADS-mode extensions (Jul 23 2026 — MistralWorker mode="ads").
@@ -2391,6 +2413,10 @@ class GrowthLogger:
         populated only when EvapControl is in ``elog`` mode (reading the
         .elo binary log directly). In ``screengrab`` mode they default
         to None and the columns are blank.
+
+        ``elapsed_s`` is retained for compatibility with existing exports.
+        ``elapsed_monotonic_s`` is generated here from ``perf_counter_ns``
+        and is the authoritative session duration for ordering and timing.
         """
         if not self._sensor_writer:
             return
@@ -2405,6 +2431,22 @@ class GrowthLogger:
         pyrometer_timing = dict(pyrometer_timing or {})
         mistral_timing = dict(mistral_timing or {})
         evap_timing = dict(evap_timing or {})
+        row_idx = self._sensor_row_counter + 1
+        logged_monotonic_ns = time.perf_counter_ns()
+        elapsed_monotonic_s = None
+        if self._session_start_monotonic_ns is not None:
+            elapsed_monotonic_s = max(
+                0.0,
+                (
+                    logged_monotonic_ns - self._session_start_monotonic_ns
+                ) / 1_000_000_000.0,
+            )
+        pressure_source = str(pressure_source or "none").strip().lower()
+        if pressure_source not in {"evap", "ads", "none"}:
+            log.warning(
+                "Unknown pressure source %r; recording none", pressure_source,
+            )
+            pressure_source = "none"
         self._sensor_writer.writerow({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": f"{elapsed_s:.2f}",
@@ -2425,6 +2467,9 @@ class GrowthLogger:
             "cell_Sr_pv_C":    _f(cell_Sr_pv_C, 1),
             "cell_Eu_pv_C":    _f(cell_Eu_pv_C, 1),
             "cell_Er_pv_C":    _f(cell_Er_pv_C, 1),
+            "cell_Fe_pv_C":    _f(cell_Fe_pv_C, 1),
+            "cell_Te_pv_C":    _f(cell_Te_pv_C, 1),
+            "cell_Se_pv_C":    _f(cell_Se_pv_C, 1),
             "plasma_dc_bias_V":   _f(plasma_dc_bias_V, 1),
             "plasma_forward_W":   _f(plasma_forward_W, 1),
             "plasma_reflected_W": _f(plasma_reflected_W, 1),
@@ -2534,9 +2579,37 @@ class GrowthLogger:
             "evap_processing_duration_ms": _f(
                 evap_timing.get("processing_duration_ms"), 3,
             ),
+            "sensor_row_idx": row_idx,
+            "elapsed_monotonic_s": _f(elapsed_monotonic_s, 6),
+            "pyrometer_emissivity": _f(pyrometer_emissivity, 4),
+            "pressure_source": pressure_source,
+            "rheed_connected": bool(rheed_timing.get("connected", False)),
+            "pyrometer_connected": bool(
+                pyrometer_timing.get("connected", False)
+            ),
+            "mistral_connected": bool(
+                mistral_timing.get("connected", False)
+            ),
+            "evap_connected": bool(evap_timing.get("connected", False)),
+            "evap_attempt_source_at_utc": (
+                evap_timing.get("attempt_source_at_utc") or ""
+            ),
+            "evap_source_age_ms": _f(
+                evap_timing.get("source_age_ms"), 3,
+            ),
+            "evap_source_record_advanced": bool(
+                evap_timing.get("source_record_advanced", False)
+            ),
+            "evap_source_stale": bool(
+                evap_timing.get("source_stale", False)
+            ),
+            "evap_source_status": evap_timing.get(
+                "source_status", "unavailable",
+            ),
         })
         self._sensor_file.flush()
-        self._sensor_row_counter += 1
+        self._sensor_row_counter = row_idx
+        return row_idx
 
     def log_temporal_event(
         self,
@@ -2678,13 +2751,34 @@ class GrowthLogger:
             return ""
         metadata = dict(frame_metadata or {})
         anchor = None
-        frame_hash = ""
+        frame_hash = str(
+            metadata.get("image_sha256")
+            or metadata.get("frame_sha256")
+            or source_row.get("image_sha256")
+            or source_row.get("frame_sha256")
+            or ""
+        ).strip().lower()
+        frame_hash_algorithm = str(
+            metadata.get("image_sha256_algorithm")
+            or metadata.get("frame_sha256_algorithm")
+            or source_row.get("image_sha256_algorithm")
+            or source_row.get("frame_sha256_algorithm")
+            or ""
+        ).strip().lower()
+        if not frame_hash:
+            frame_hash_algorithm = ""
         if frame_path:
             try:
-                frame_hash = sha256_file(frame_path)
+                try:
+                    archive_member = Path(frame_path).relative_to(
+                        self._session_dir
+                    ).as_posix()
+                except ValueError:
+                    archive_member = ""
                 anchor = make_review_anchor(
                     frame_path=frame_path,
                     image_sha256=frame_hash,
+                    image_sha256_algorithm=frame_hash_algorithm,
                     capture_sequence=metadata.get(
                         "capture_sequence", source_row.get("capture_sequence"),
                     ),
@@ -2697,6 +2791,12 @@ class GrowthLogger:
                         "capture_geometry_id",
                         source_row.get("capture_geometry_id", ""),
                     ) or ""),
+                    session_identity=self._session_dir.name,
+                    frame_index=metadata.get(
+                        "frame_index",
+                        source_row.get("frame_index", source_row.get("heartbeat_idx")),
+                    ),
+                    archive_member=archive_member,
                 )
             except (OSError, PointEventError) as exc:
                 log.error("Could not bind saved frame to point event: %s", exc)
@@ -2748,9 +2848,28 @@ class GrowthLogger:
             return ""
         metadata = dict(capture_metadata or {})
         try:
+            frame_hash = str(
+                metadata.get("image_sha256")
+                or metadata.get("frame_sha256")
+                or ""
+            ).strip().lower()
+            frame_hash_algorithm = str(
+                metadata.get("image_sha256_algorithm")
+                or metadata.get("frame_sha256_algorithm")
+                or ""
+            ).strip().lower()
+            if not frame_hash:
+                frame_hash_algorithm = ""
+            try:
+                archive_member = Path(frame_path).relative_to(
+                    self._session_dir
+                ).as_posix()
+            except ValueError:
+                archive_member = ""
             anchor = make_review_anchor(
                 frame_path=frame_path,
-                image_sha256=sha256_file(frame_path),
+                image_sha256=frame_hash,
+                image_sha256_algorithm=frame_hash_algorithm,
                 capture_sequence=metadata.get("capture_sequence"),
                 captured_at_utc=str(metadata.get("captured_at_utc") or ""),
                 elapsed_s=float(elapsed_s),
@@ -2758,6 +2877,11 @@ class GrowthLogger:
                 capture_geometry_id=str(
                     metadata.get("capture_geometry_id") or ""
                 ),
+                session_identity=self._session_dir.name,
+                frame_index=metadata.get(
+                    "frame_index", metadata.get("heartbeat_idx")
+                ),
+                archive_member=archive_member,
             )
             state = store.ensure_initial_assumption(
                 actor="system-initial-assumption",
@@ -3733,6 +3857,7 @@ class GrowthLogger:
             "realignment_active": metadata.get("realignment_active", ""),
             "calibration_id": metadata.get("calibration_id", ""),
             "basis_bundle_id": metadata.get("basis_bundle_id", ""),
+            "sensor_row_idx": self.latest_sensor_row_idx or "",
         })
         self._heartbeat_file.flush()
 
@@ -4772,13 +4897,42 @@ class GrowthLogger:
         if self._session_dir is None:
             return
         now = datetime.now()
+        duration_monotonic_s = None
+        if self._session_start_monotonic_ns is not None:
+            duration_monotonic_s = max(
+                0.0,
+                (
+                    time.perf_counter_ns()
+                    - self._session_start_monotonic_ns
+                ) / 1_000_000_000.0,
+            )
         meta = {
             **metadata,
+            "acquisition_schema_version": self.ACQUISITION_SCHEMA_VERSION,
+            "sensor_log_schema": {
+                "file": "sensor_log.csv",
+                "row_index": "sensor_row_idx",
+                "heartbeat_reference": "heartbeat_log.csv.sensor_row_idx",
+                "legacy_elapsed_field": "elapsed_s",
+                "monotonic_elapsed_field": "elapsed_monotonic_s",
+                "pressure_source_values": ["evap", "ads", "none"],
+            },
+            "clock_basis": {
+                "timestamp": "host_utc_at_sensor_row_write",
+                "elapsed_s": "legacy_gui_wall_clock",
+                "elapsed_monotonic_s": "time.perf_counter_ns",
+                "source_at_utc": "instrument_native_when_available",
+                "received_at_utc": "host_utc_after_source_read",
+            },
             "session_start": self._session_start.isoformat() if self._session_start else None,
             "session_end": now.isoformat(),
             "session_duration_s": (
                 round((now - self._session_start).total_seconds(), 1)
                 if self._session_start else None
+            ),
+            "session_duration_monotonic_s": (
+                round(duration_monotonic_s, 6)
+                if duration_monotonic_s is not None else None
             ),
             "sensor_row_count": self._sensor_row_counter,
             "commit_entry_count": len(self._entries),

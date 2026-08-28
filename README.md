@@ -199,7 +199,7 @@ Each session creates a directory containing:
   explicit `qc_pass`/`qc_reject` image-usability event names retained for
   file compatibility
 - `rheed_event_revisions.jsonl` — append-only point-event review history
-- `rheed_point_events.json` — rebuildable `rheed-point-events-v2` state,
+- `rheed_point_events.json` — rebuildable `rheed-point-events-v3` state,
   including the fixed initial state (`1x1` present, clarity unknown), event
   decisions, concise semantic labels, derived full-state intervals, and their
   representative Anchors. The initial state is not an `appeared` event.
@@ -298,7 +298,8 @@ diagnostic charts and reports after the fact — no lab PC required.
 | `scripts/validate_angle_robustness.py` | HTML report + CSV | Classifier sensitivity to camera-angle rotations against an archived session |
 | `python -m tools.rheed_postprocessing_labeling desktop` | Interactive local report + JSON/CSV sidecar | Review the explicit initial state plus `manual`, `auto_capture`, and `posthoc` RHEED change events; confirm/reject automatic candidates; edit semantic labels and interval Anchors; preserve legacy interval annotations as read-only; see `tools/rheed_postprocessing_labeling/README.md` |
 
-The `rheed-point-events-v2` vocabulary is intentionally small: reconstruction
+The current `rheed-point-events-v3` vocabulary is intentionally small:
+reconstruction
 `appeared`/`disappeared` for `1x1`, Twinned `2x1`, `c(6x2)`, RT13, or HTR;
 and pattern clarity `became` Good/Bad. Good/Bad is not image usability,
 chemical surface quality, or FeSe film quality. The initial state is explicitly
@@ -310,7 +311,16 @@ its derived interval; the initial-state item needs reviewer and first-interval
 Anchor only. Comment is optional. Editing completed review content reopens Draft. Durable revisions
 and Complete use the desktop service on `127.0.0.1`; static HTML supports only
 local Draft editing. Equalizer, if used as a diagnostic elsewhere, is separate
+from the event schema. Legacy `rheed-point-events-v2` evidence, including its
+deprecated `surface_quality` field, is validated and preserved read-only; it
+is never reinterpreted as v3 pattern clarity.
 and is not shown or stored as an event-label input.
+
+Routine live, posthoc, and Anchor edits identify a saved frame by stable
+session identity, capture sequence, and its archive member, frame index, or
+saved path. An already-recorded image SHA-256 may be retained as optional
+evidence, but the labeling workflow never computes a hash solely to create,
+move, report, or select an event or Anchor.
 
 ```bash
 # Five-chart + HTML report

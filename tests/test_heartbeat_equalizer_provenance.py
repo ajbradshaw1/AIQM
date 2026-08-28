@@ -23,6 +23,7 @@ APPENDED_HEARTBEAT_FIELDS = [
     "view_segment_id", "visual_history_generation",
     "gun_aligned", "realignment_active",
     "calibration_id", "basis_bundle_id",
+    "sensor_row_idx",
 ]
 
 
@@ -95,6 +96,20 @@ def test_old_capture_metadata_keeps_appended_columns_blank(tmp_path) -> None:
     assert all(row[field] == "" for field in APPENDED_HEARTBEAT_FIELDS)
     assert row["capture_backend"] == "vimba"
     assert row["capture_sequence"] == "1"
+
+
+def test_heartbeat_references_latest_successful_sensor_row(tmp_path) -> None:
+    logger = GrowthLogger(base_dir=tmp_path)
+    logger.start_session("heartbeat-sensor-link")
+    assert logger.log_sensors(500.0, 1.0) == 1
+    logger.log_heartbeat(
+        elapsed_s=1.2,
+        frame_path="frames/heartbeat_001.bmp",
+    )
+
+    row = _read_only_row(logger)
+
+    assert row["sensor_row_idx"] == "1"
 
 
 def test_growth_app_heartbeat_metadata_uses_saved_shape_and_accepted_calibration() -> None:

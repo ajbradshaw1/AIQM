@@ -94,7 +94,7 @@ def test_loopback_rejects_equalizer_revision_even_if_legacy_callbacks_exist() ->
                     },
                 )
             assert rejected.value.code == 400
-            assert b"not part of rheed-point-events-v2" in rejected.value.read()
+            assert b"not part of rheed-point-events-v3" in rejected.value.read()
         finally:
             service.stop()
         assert not service.running
@@ -245,10 +245,18 @@ def test_loopback_service_persists_revision_via_injected_fail_closed_callback() 
             assert calls == [{"event_id": "event-1", "action": "update"}]
             _, imported = _json_request(
                 service.base_url + "/api/events/import", token=service.token,
-                payload={"document": {"schema_version": "rheed-point-events-v2"}},
+                payload={"document": {"schema_version": "rheed-point-events-v3"}},
             )
             assert imported["ok"] is True
-            assert imports == [{"schema_version": "rheed-point-events-v2"}]
+            assert imports == [{"schema_version": "rheed-point-events-v3"}]
+            with pytest.raises(urllib.error.HTTPError) as legacy:
+                _json_request(
+                    service.base_url + "/api/events/import", token=service.token,
+                    payload={"document": {"schema_version": "rheed-point-events-v2"}},
+                )
+            assert legacy.value.code == 400
+            assert b"read-only evidence" in legacy.value.read()
+            assert imports == [{"schema_version": "rheed-point-events-v3"}]
         finally:
             service.stop()
 

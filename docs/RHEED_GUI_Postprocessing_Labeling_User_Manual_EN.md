@@ -251,11 +251,13 @@ Keep `interactive_report.html`, `images/`, `vendor/`, `run_manifest.json`, and `
 2. Confirm or reject a candidate, edit its concise labels, and identify the reviewer.
 3. Select the representative interval Anchor, save the Draft, then explicitly click Complete.
 
-There are no **Mark In**, **Mark Out**, interval-overlap, or inclusive-end rules in `rheed-point-events-v2`. Each editable change is a point. Multiple events may share one timestamp or one saved frame and still retain different IDs. The timeline has three separate tracks: draggable event points, automatically derived full-state intervals, and one Anchor per interval.
+There are no **Mark In**, **Mark Out**, interval-overlap, or inclusive-end rules in `rheed-point-events-v3`. Each editable change is a point. Multiple events may share one timestamp or one saved frame and still retain different IDs. The timeline has three separate tracks: draggable event points, automatically derived full-state intervals, and one Anchor per interval.
+
+Legacy `rheed-point-events-v2` evidence is validated and displayed read-only. Its deprecated `surface_quality` field is preserved exactly and is never reinterpreted as v3 pattern clarity. Start a separate v3 annotation sidecar if further editing is required.
 
 ### Original point and review point
 
-The **original point** is immutable evidence: event ID, source, original time, original frame if available, capture sequence, image SHA-256, original note, and source-row SHA-256. The **review point** is the editable event location and may move only by snapping to an actual saved frame. Moving it never changes the original point. The timeline therefore preserves both what was recorded live and where the reviewer finally places the event.
+The **original point** is immutable evidence: event ID, source, original time, original frame if available, capture sequence, any pre-existing image SHA-256 evidence, original note, and source-row SHA-256. The **review point** is the editable event location and may move only by snapping to an actual saved frame. Moving it never changes the original point. The timeline therefore preserves both what was recorded live and where the reviewer finally places the event.
 
 ### Concise semantic labels
 
@@ -281,6 +283,13 @@ The star-shaped **Anchor** belongs to a derived state interval and selects the s
 Each interval has exactly one Anchor slot. It may be empty only while the
 interval is Unfinished; duplicate Anchors are invalid, and Complete requires
 that the slot identify one actual saved frame inside the interval.
+
+Routine live, posthoc, report, event-movement, and Anchor-selection operations
+identify that frame by stable session identity plus capture sequence and saved
+path, archive member, or frame index. They do not compute a content hash solely
+for annotation. A hash already present remains optional fail-closed evidence;
+registered archive and evaluation protocols retain their separate hash
+requirements.
 
 ### Required review actions
 

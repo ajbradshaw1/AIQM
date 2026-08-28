@@ -583,10 +583,12 @@ The desktop application always refuses a non-empty output directory. CLI \texttt
 
 \inbrief{Select an Unfinished point, confirm or reject candidates, edit concise semantic labels, choose the representative interval Anchor, identify the reviewer, and explicitly click Complete. Comments are optional.}
 
-The \texttt{rheed-point-events-v2} schema has three editable change-event sources: \texttt{manual}, \texttt{auto\_capture}, and \texttt{posthoc}, plus the separate initial-state audit item. Multiple events may share one timestamp or frame while keeping different IDs. Current events use UUIDs; legacy IDs deterministically include session, source file, source index, time, and capture sequence. The editor shows three tracks: event points, automatically derived full-state intervals, and interval Anchors. Mark In/Out controls are not part of this workflow.
+The \texttt{rheed-point-events-v3} schema has three editable change-event sources: \texttt{manual}, \texttt{auto\_capture}, and \texttt{posthoc}, plus the separate initial-state audit item. Multiple events may share one timestamp or frame while keeping different IDs. Current events use UUIDs; legacy IDs deterministically include session, source file, source index, time, and capture sequence. The editor shows three tracks: event points, automatically derived full-state intervals, and interval Anchors. Mark In/Out controls are not part of this workflow.
+
+Legacy \texttt{rheed-point-events-v2} evidence is validated and displayed read-only. Its deprecated \texttt{surface\_quality} field is preserved exactly and is never reinterpreted as v3 pattern clarity. Start a separate v3 annotation sidecar if further editing is required.
 
 \subsection{Immutable original point and editable review point}
-The original point retains event ID, source, time, source frame when available, capture sequence, image SHA-256, original note, and source-row SHA-256. It never moves. The review point is the editable event location and can move only by snapping to an actual saved frame. Moving it never changes the original evidence, so the timeline preserves both what was recorded live and where the reviewer finally placed the event.
+The original point retains event ID, source, time, source frame when available, capture sequence, any pre-existing image SHA-256 evidence, original note, and source-row SHA-256. It never moves. The review point is the editable event location and can move only by snapping to an actual saved frame. Moving it never changes the original evidence, so the timeline preserves both what was recorded live and where the reviewer finally placed the event.
 
 \subsection{Concise semantic labels}
 Each event can contain one or more editable labels:
@@ -605,6 +607,8 @@ Accepted point changes are replayed from the initial state. Every unique boundar
 The star-shaped \textbf{Anchor} belongs to one derived state interval and selects the saved frame that most clearly represents that complete state. It is not a second event and is exported under the interval. Set or drag it only to an actual saved frame inside that interval. Events at the same time share one following interval and one Anchor. Moving a boundary invalidates an Anchor that no longer lies in its interval and returns the affected review to Draft.
 
 Each interval has exactly one Anchor slot. It may be empty only while the interval is Unfinished; duplicate Anchors are invalid, and Complete requires that the slot identify one actual saved frame inside the interval.
+
+Routine live, posthoc, report, event-movement, and Anchor-selection operations identify a frame by stable session identity, capture sequence, and a saved-frame locator such as archive member, frame index, or frame path. A hash already present may remain as optional fail-closed evidence, but the labeling workflow never computes one solely to create, move, report, or select an annotation. Registered archive and evaluation protocols retain their separate hash-integrity requirements.
 
 \step{1}{Select an event in \textbf{Unfinished}, or choose \textbf{Add posthoc event at playhead} on an actual saved frame.}
 \step{2}{Compare the immutable original marker with the movable review marker. Move only when another saved frame is a better review anchor.}

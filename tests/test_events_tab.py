@@ -24,7 +24,7 @@ _app = QApplication.instance() or QApplication(sys.argv)
 
 from gui.events_tab import COL_EVENT_ID, COLUMN_HEADERS, EventsTab  # noqa: E402
 from gui.growth_logger import GrowthLogger  # noqa: E402
-from gui.rheed_point_events import make_review_anchor, sha256_file  # noqa: E402
+from gui.rheed_point_events import make_review_anchor  # noqa: E402
 
 
 class EventFixture(unittest.TestCase):
@@ -80,9 +80,12 @@ class EventFixture(unittest.TestCase):
             writer.writeheader()
             writer.writerow(self.source_row)
         anchor = make_review_anchor(
-            frame_path=self.frames[0], image_sha256=sha256_file(self.frames[0]),
+            frame_path=self.frames[0],
             capture_sequence=100, captured_at_utc="2026-08-20T12:00:10+00:00",
             elapsed_s=10.0, view_segment_id=1, capture_geometry_id="geometry-a",
+            session_identity=self.session_dir.name,
+            frame_index=1,
+            archive_member=self.frames[0].relative_to(self.session_dir).as_posix(),
         )
         state = self.store.create_event(
             source_kind="manual", actor="grower-a",
@@ -91,7 +94,7 @@ class EventFixture(unittest.TestCase):
             source_row=self.source_row,
             original_at_utc=self.source_row["timestamp"], original_elapsed_s=10.0,
             capture_sequence=100, original_frame_path=str(self.frames[0]),
-            original_image_sha256=sha256_file(self.frames[0]), review_anchor=anchor,
+            original_image_sha256="", review_anchor=anchor,
         )
         self.event_id = str(state["event_id"])
         self.tab = EventsTab()
@@ -124,17 +127,24 @@ class EventsTabConstructionTests(unittest.TestCase):
         self.assertEqual(self.tab.events_table.columnCount(), len(COLUMN_HEADERS))
         for name in (
             "_labeler_input", "_reconstruction_change_combos", "_clarity_combo",
-            "_quality_combo", "_representative_button",
+            "_representative_button",
         ):
             self.assertTrue(hasattr(self.tab, name), name)
         for removed in (
             "_primary_recon_combo", "_change_from_combo", "_change_to_combo",
             "_classifier_result_label", "_equalizer_button", "_equalizer_window",
             "_reviewer_input", "_confidence_combo", "_add_label_button",
-            "_complete_button", "_reopen_button",
+            "_complete_button", "_reopen_button", "_quality_combo",
         ):
             self.assertFalse(hasattr(self.tab, removed), removed)
         self.assertTrue(self.tab.events_table.isColumnHidden(COL_EVENT_ID))
+
+    def test_frozen_v2_surface_quality_is_displayed_as_legacy_evidence(self) -> None:
+        summary = self.tab._labels_summary([{
+            "label_id": "33333333-3333-4333-8333-333333333333",
+            "kind": "surface_quality", "change": "became", "value": "good",
+        }])
+        self.assertEqual(summary, "Legacy quality→Good")
 
     def test_constructs_without_session_and_emits_badge(self) -> None:
         self.assertIsNone(self.tab._session_dir)

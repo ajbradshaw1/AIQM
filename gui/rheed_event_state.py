@@ -32,7 +32,6 @@ RECONSTRUCTION_VALUES = frozenset({
     "htr",
 })
 CLARITY_VALUES = frozenset({"unknown", "good", "bad"})
-QUALITY_VALUES = frozenset({"unknown", "good", "bad"})
 ACTIVE_DECISIONS = frozenset({"accepted", "confirmed"})
 INACTIVE_DECISIONS = frozenset({"pending", "rejected"})
 DISPOSITIONS = frozenset({"active", "dismissed", "deleted"})
@@ -59,17 +58,15 @@ class AnchorValidationError(EventStateError):
 
 @dataclass(frozen=True)
 class RheedState:
-    """Complete reconstruction-presence, clarity, and quality state."""
+    """Complete reconstruction-presence and visible-pattern clarity state."""
 
     reconstructions: frozenset[str]
-    clarity: str = "bad"
-    quality: str = "unknown"
+    clarity: str = "unknown"
 
 
 DEFAULT_INITIAL_STATE = RheedState(
     reconstructions=frozenset({"one_by_one"}),
-    clarity="bad",
-    quality="unknown",
+    clarity="unknown",
 )
 
 
@@ -122,7 +119,6 @@ class StateSegment:
     end_frame_exclusive: int
     reconstructions: frozenset[str]
     clarity: str
-    quality: str
     boundary_event_ids: tuple[str, ...]
     anchor: SegmentAnchor | None = None
 
@@ -194,8 +190,7 @@ def _validate_state(value: RheedState | Mapping[str, object] | None) -> RheedSta
             ) from exc
         state = RheedState(
             reconstructions=reconstructions,
-            clarity=str(value.get("clarity", "bad")),
-            quality=str(value.get("quality", "unknown")),
+            clarity=str(value.get("clarity", "unknown")),
         )
     else:
         raise EventValidationError("initial_state must be RheedState or a mapping")
@@ -209,13 +204,7 @@ def _validate_state(value: RheedState | Mapping[str, object] | None) -> RheedSta
         raise EventValidationError(
             "initial clarity must be unknown, good, or bad"
         )
-    if state.quality not in QUALITY_VALUES:
-        raise EventValidationError(
-            "initial quality must be unknown, good, or bad"
-        )
-    return RheedState(
-        frozenset(state.reconstructions), state.clarity, state.quality,
-    )
+    return RheedState(frozenset(state.reconstructions), state.clarity)
 
 
 def _coerce_label(value: EventLabel | Mapping[str, object]) -> EventLabel:
@@ -244,11 +233,6 @@ def _coerce_label(value: EventLabel | Mapping[str, object]) -> EventLabel:
             raise EventValidationError("pattern-clarity labels must use became")
         if label.value not in {"good", "bad"}:
             raise EventValidationError("pattern clarity must become good or bad")
-    elif label.kind == "surface_quality":
-        if label.change != "became":
-            raise EventValidationError("surface-quality labels must use became")
-        if label.value not in {"good", "bad"}:
-            raise EventValidationError("surface quality must become good or bad")
     else:
         raise EventValidationError(f"unknown event-label kind: {label.kind or '<blank>'}")
     return label
@@ -333,7 +317,6 @@ def _apply_atomic_boundary(
     appeared: list[str] = []
     disappeared: list[str] = []
     clarity_changes: list[str] = []
-    quality_changes: list[str] = []
     for event in events:
         for label in event.labels:
             if label.kind == "reconstruction":
@@ -341,8 +324,6 @@ def _apply_atomic_boundary(
                 target.append(label.value)
             elif label.kind == "pattern_clarity":
                 clarity_changes.append(label.value)
-            else:
-                quality_changes.append(label.value)
 
     duplicate_appeared = sorted({value for value in appeared if appeared.count(value) > 1})
     if duplicate_appeared:
@@ -390,23 +371,10 @@ def _apply_atomic_boundary(
                 f"frame {frame_index}: {display} cannot change to {display}"
             )
 
-    if len(quality_changes) > 1:
-        raise TransitionValidationError(
-            f"frame {frame_index}: only one quality Good/Bad change is allowed"
-        )
-    next_quality = state.quality
-    if quality_changes:
-        next_quality = quality_changes[0]
-        if next_quality == state.quality:
-            display = "Good" if next_quality == "good" else "Bad"
-            raise TransitionValidationError(
-                f"frame {frame_index}: quality {display} cannot change to {display}"
-            )
-
     next_reconstructions = (
         state.reconstructions - frozenset(disappeared)
     ) | frozenset(appeared)
-    return RheedState(next_reconstructions, next_clarity, next_quality)
+    return RheedState(next_reconstructions, next_clarity)
 
 
 def _coerce_anchor(value: SegmentAnchor | Mapping[str, object]) -> SegmentAnchor:
@@ -515,8 +483,8 @@ def replay_event_states(
         Number of saved frames.  Valid event and Anchor indices are 1 through
         ``frame_count``.
     initial_state:
-        Defaults to 1x1 present, clarity Bad, and quality unknown.  Quality
-        remains unknown until the grower explicitly selects Good or Bad.
+        Defaults to 1x1 present with unknown visible-pattern clarity.  The
+        baseline is an explicit assumption, not an appearance event.
     anchors:
         Independent interval Anchor records keyed by deterministic
         ``segment_id``.  A first replay without anchors can be used to obtain
@@ -564,7 +532,6 @@ def replay_event_states(
                 end_frame_exclusive=frame_index,
                 reconstructions=current_state.reconstructions,
                 clarity=current_state.clarity,
-                quality=current_state.quality,
                 boundary_event_ids=boundary_ids,
             ))
         current_state = _apply_atomic_boundary(
@@ -583,7 +550,6 @@ def replay_event_states(
         end_frame_exclusive=count + 1,
         reconstructions=current_state.reconstructions,
         clarity=current_state.clarity,
-        quality=current_state.quality,
         boundary_event_ids=boundary_ids,
     ))
     return ReplayResult(
@@ -596,7 +562,6 @@ __all__ = [
     "ACTIVE_DECISIONS",
     "AnchorValidationError",
     "CLARITY_VALUES",
-    "QUALITY_VALUES",
     "DEFAULT_INITIAL_STATE",
     "DISPOSITIONS",
     "EventLabel",

@@ -204,7 +204,9 @@ def parse_validation_response(payload: str) -> ValidationResult:
         raise ValueError("Validation worker returned an invalid item count")
     if (
         count_key == "event_count"
-        and value.get("schema_version") != "rheed-point-events-v2"
+        and value.get("schema_version") not in {
+            "rheed-point-events-v2", "rheed-point-events-v3",
+        }
     ):
         raise ValueError("Validation worker returned an invalid point-event schema")
     return ValidationResult(
@@ -774,11 +776,15 @@ class LabelingDesktopLauncher(QMainWindow):
             and report_payload.get("config", {}).get("annotation_schema")
                 != POINT_EVENT_SCHEMA
         ):
+            source_schema = str(
+                report_payload.get("config", {}).get("annotation_schema", "")
+            )
             self._information(
                 "Legacy report is read-only",
-                "This rheed-temporal-segments-v1 report cannot be edited through "
-                "the point-event desktop Labeler. It remains available only to "
-                "the legacy validator; rebuild the report to create point events.",
+                f"This {source_schema or 'legacy'} report cannot be edited through "
+                f"the {POINT_EVENT_SCHEMA} desktop Labeler. Its existing labels "
+                "remain read-only evidence; rebuild the report to start a separate "
+                "v3 annotation journal.",
             )
             return False
         if not session_path.is_file() or session_path.suffix.lower() != ".zip":

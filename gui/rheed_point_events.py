@@ -1,9 +1,9 @@
 """Append-only semantic RHEED point-event review records.
 
-V2 separates immutable acquisition evidence, a movable event-boundary frame,
-and the representative frame for the stable interval after an event.  V1
-journals remain integrity-checked and read-only; ambiguous v1 transitions are
-never silently converted into v2 semantic labels.
+V3 records only reconstruction and visible-pattern-clarity changes, with an
+explicit 1x1/unknown-clarity initial state.  The earlier v1 and v2 journal
+contracts remain fully integrity-checked and replayable, but are permanently
+read-only: their labels are evidence and are never migrated or reinterpreted.
 """
 
 from __future__ import annotations
@@ -23,8 +23,10 @@ from typing import Any, Mapping, Optional
 from gui.rheed_event_state import EventStateError, replay_event_states
 
 
-SCHEMA_ID = "rheed-point-events-v2"
+SCHEMA_ID = "rheed-point-events-v3"
+V2_SCHEMA_ID = "rheed-point-events-v2"
 LEGACY_SCHEMA_ID = "rheed-point-events-v1"
+LEGACY_SCHEMA_IDS = frozenset({LEGACY_SCHEMA_ID, V2_SCHEMA_ID})
 JOURNAL_NAME = "rheed_event_revisions.jsonl"
 SUMMARY_NAME = "rheed_point_events.json"
 TRANSACTION_NAME = ".rheed_event_revision.pending.json"
@@ -131,23 +133,37 @@ def new_label_id() -> str:
 def make_review_anchor(
     *, frame_path: str | Path, capture_sequence: str | int | None,
     image_sha256: Optional[str] = None,
-    image_sha256_algorithm: str = "raw-file-bytes-v1",
+    image_sha256_algorithm: str = "",
     captured_at_utc: str = "", elapsed_s: float | str | None = None,
     view_segment_id: str | int | None = None, capture_geometry_id: str = "",
+    session_identity: str = "", frame_index: str | int | None = None,
+    archive_member: str = "",
 ) -> dict[str, Any]:
-    """Bind a marker to one exact, losslessly saved frame."""
+    """Bind a marker to a saved frame without computing a labeling hash.
 
-    algorithm = str(image_sha256_algorithm or "raw-file-bytes-v1").lower()
-    if algorithm not in {"sha256", "raw-file-bytes-v1"}:
-        raise PointEventError("Review anchors require raw-file-bytes SHA-256")
+    Stable session/capture/path-or-index fields are the primary identity.
+    A pre-existing content hash may be carried as optional evidence, but this
+    routine never reads frame bytes merely to create or move an annotation.
+    """
+
     path = Path(frame_path)
     if not path.is_file():
         raise PointEventError(f"Review anchor is not a saved frame: {path}")
-    digest = (image_sha256 or sha256_file(path)).lower()
-    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
-        raise PointEventError("Review anchor requires a valid SHA-256")
-    if sha256_file(path) != digest:
-        raise PointEventIntegrityError("Review anchor frame SHA-256 does not match")
+    digest = str(image_sha256 or "").strip().lower()
+    algorithm = str(image_sha256_algorithm or "").strip().lower()
+    if digest:
+        if len(digest) != 64 or any(
+            ch not in "0123456789abcdef" for ch in digest
+        ):
+            raise PointEventError("Review anchor SHA-256 evidence is invalid")
+        if not algorithm:
+            algorithm = "raw-file-bytes-v1"
+        if algorithm not in {"sha256", "raw-file-bytes-v1"}:
+            raise PointEventError("Review anchor hash evidence algorithm is invalid")
+    elif algorithm:
+        raise PointEventError(
+            "Review anchor hash algorithm cannot be set without hash evidence"
+        )
     try:
         elapsed = None if elapsed_s in (None, "") else float(elapsed_s)
     except (TypeError, ValueError) as exc:
@@ -156,11 +172,14 @@ def make_review_anchor(
         raise PointEventError("Review anchor elapsed_s must be finite and non-negative")
     return {
         "frame_path": str(path), "image_sha256": digest,
-        "image_sha256_algorithm": "raw-file-bytes-v1",
+        "image_sha256_algorithm": algorithm,
         "capture_sequence": capture_sequence,
         "captured_at_utc": str(captured_at_utc or ""), "elapsed_s": elapsed,
         "view_segment_id": view_segment_id,
         "capture_geometry_id": str(capture_geometry_id or ""),
+        "session_identity": str(session_identity or ""),
+        "frame_index": frame_index,
+        "archive_member": str(archive_member or ""),
     }
 
 
@@ -171,10 +190,53 @@ def _validate_anchor_shape(anchor: object, *, required: bool = False) -> None:
         return
     if not isinstance(anchor, Mapping):
         raise PointEventIntegrityError("Frame anchor must be an object")
+    if not str(anchor.get("frame_path") or anchor.get("archive_member") or "").strip():
+        raise PointEventIntegrityError(
+            "Frame anchor requires a saved path or archive member"
+        )
     digest = str(anchor.get("image_sha256") or "").lower()
-    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+    algorithm = str(anchor.get("image_sha256_algorithm") or "").lower()
+    if digest and (
+        len(digest) != 64
+        or any(ch not in "0123456789abcdef" for ch in digest)
+    ):
+        raise PointEventIntegrityError("Frame anchor SHA-256 evidence is invalid")
+    if digest and algorithm not in {"sha256", "raw-file-bytes-v1"}:
+        raise PointEventIntegrityError("Frame anchor hash evidence algorithm is invalid")
+    if not digest and algorithm:
+        raise PointEventIntegrityError(
+            "Frame anchor hash algorithm exists without hash evidence"
+        )
+    try:
+        elapsed = anchor.get("elapsed_s")
+        if elapsed not in (None, "") and (
+            not math.isfinite(float(elapsed)) or float(elapsed) < 0
+        ):
+            raise ValueError
+    except (TypeError, ValueError):
+        raise PointEventIntegrityError("Frame anchor elapsed_s is invalid") from None
+
+
+def _validate_v2_anchor_shape(
+    anchor: object, *, required: bool = False,
+) -> None:
+    """Validate the original v2 content-bound anchor contract."""
+
+    if anchor is None:
+        if required:
+            raise PointEventIntegrityError("A saved frame anchor is required")
+        return
+    if not isinstance(anchor, Mapping):
+        raise PointEventIntegrityError("Frame anchor must be an object")
+    digest = str(anchor.get("image_sha256") or "").lower()
+    if len(digest) != 64 or any(
+        ch not in "0123456789abcdef" for ch in digest
+    ):
         raise PointEventIntegrityError("Frame anchor SHA-256 is invalid")
-    if str(anchor.get("image_sha256_algorithm") or "").lower() != "raw-file-bytes-v1":
+    if (
+        str(anchor.get("image_sha256_algorithm") or "").lower()
+        != "raw-file-bytes-v1"
+    ):
         raise PointEventIntegrityError("Frame anchor hash algorithm is invalid")
     try:
         elapsed = anchor.get("elapsed_s")
@@ -187,7 +249,7 @@ def _validate_anchor_shape(anchor: object, *, required: bool = False) -> None:
 
 
 def validate_semantic_label(label: Mapping[str, Any]) -> dict[str, str]:
-    """Validate and canonicalize one stable-ID human label."""
+    """Validate and canonicalize one v3 stable-ID human label."""
 
     if not isinstance(label, Mapping):
         raise PointEventError("Semantic label must be an object")
@@ -201,6 +263,39 @@ def validate_semantic_label(label: Mapping[str, Any]) -> dict[str, str]:
     if result["kind"] == "reconstruction":
         if result["change"] not in {"appeared", "disappeared"}:
             raise PointEventError("Reconstruction change must be appeared or disappeared")
+        if result["value"] not in RECONSTRUCTION_VALUES:
+            raise PointEventError("Reconstruction value is invalid")
+    elif result["kind"] == "pattern_clarity":
+        if result["change"] != "became":
+            raise PointEventError("Pattern clarity change must be became")
+        if result["value"] not in PATTERN_CLARITY_VALUES:
+            raise PointEventError("Pattern clarity value must be good or bad")
+    else:
+        raise PointEventError("Semantic label kind is invalid")
+    return result
+
+
+def _validate_v2_semantic_label(
+    label: Mapping[str, Any],
+) -> dict[str, str]:
+    """Validate one frozen v2 label without changing the stored object."""
+
+    if not isinstance(label, Mapping):
+        raise PointEventError("Semantic label must be an object")
+    result = {str(key): str(value) for key, value in label.items()}
+    if set(result) != {"label_id", "kind", "change", "value"}:
+        raise PointEventError(
+            "Semantic label fields must be label_id, kind, change, value"
+        )
+    try:
+        uuid.UUID(result["label_id"])
+    except (ValueError, AttributeError) as exc:
+        raise PointEventError("Semantic label_id must be a UUID") from exc
+    if result["kind"] == "reconstruction":
+        if result["change"] not in {"appeared", "disappeared"}:
+            raise PointEventError(
+                "Reconstruction change must be appeared or disappeared"
+            )
         if result["value"] not in RECONSTRUCTION_VALUES:
             raise PointEventError("Reconstruction value is invalid")
     elif result["kind"] == "pattern_clarity":
@@ -235,10 +330,48 @@ def _validate_labels(labels: object) -> list[dict[str, str]]:
     meanings: set[tuple[str, str, str]] = set()
     reconstruction_values: set[str] = set()
     clarity_seen = False
-    quality_seen = False
     for raw in labels:
         try:
             label = validate_semantic_label(raw)
+        except PointEventError as exc:
+            raise PointEventIntegrityError(str(exc)) from exc
+        meaning = (label["kind"], label["change"], label["value"])
+        if label["label_id"] in identifiers:
+            raise PointEventIntegrityError("Semantic label_id is duplicated")
+        if meaning in meanings:
+            raise PointEventIntegrityError("Duplicate semantic label at one event")
+        if label["kind"] == "pattern_clarity":
+            if clarity_seen:
+                raise PointEventIntegrityError(
+                    "An event can contain only one pattern-clarity change"
+                )
+            clarity_seen = True
+        elif label["value"] in reconstruction_values:
+            raise PointEventIntegrityError(
+                "A reconstruction cannot both appear and disappear at one event"
+            )
+        else:
+            reconstruction_values.add(label["value"])
+        identifiers.add(label["label_id"])
+        meanings.add(meaning)
+        checked.append(label)
+    return checked
+
+
+def _validate_v2_labels(labels: object) -> list[dict[str, str]]:
+    """Validate the frozen v2 vocabulary, including surface quality."""
+
+    if not isinstance(labels, list):
+        raise PointEventIntegrityError("review.labels must be an array")
+    checked: list[dict[str, str]] = []
+    identifiers: set[str] = set()
+    meanings: set[tuple[str, str, str]] = set()
+    reconstruction_values: set[str] = set()
+    clarity_seen = False
+    quality_seen = False
+    for raw in labels:
+        try:
+            label = _validate_v2_semantic_label(raw)
         except PointEventError as exc:
             raise PointEventIntegrityError(str(exc)) from exc
         meaning = (label["kind"], label["change"], label["value"])
@@ -300,11 +433,52 @@ def _legacy_completion_errors(event: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def _v2_completion_errors(event: Mapping[str, Any]) -> list[str]:
+    """Return the frozen v2 completion requirements."""
+
+    review = event.get("review")
+    if not isinstance(review, Mapping):
+        return ["review content is missing"]
+    errors: list[str] = []
+    if review.get("disposition") != "active":
+        errors.append("dismissed or deleted events cannot be completed")
+    decision = str(review.get("candidate_decision") or "")
+    source_kind = str(event.get("source", {}).get("kind") or "")
+    if decision not in CANDIDATE_DECISIONS:
+        errors.append("candidate decision is invalid")
+    elif source_kind in CANDIDATE_SOURCES and decision == "pending":
+        errors.append("candidate must be confirmed or rejected")
+    if decision == "rejected":
+        if source_kind not in CANDIDATE_SOURCES:
+            errors.append("only automatic candidates can be rejected")
+    else:
+        if review.get("anchor") is None:
+            errors.append("a saved-frame review point is required")
+        try:
+            labels = _validate_v2_labels(review.get("labels"))
+        except PointEventIntegrityError as exc:
+            errors.append(str(exc))
+        else:
+            if source_kind == "initial_assumption":
+                if (
+                    len(labels) != 1
+                    or labels[0]["kind"] != "surface_quality"
+                ):
+                    errors.append(
+                        "initial surface quality must be selected as good or bad"
+                    )
+            elif not labels:
+                errors.append("at least one semantic label is required")
+    return errors
+
+
 def completion_errors(event: Mapping[str, Any]) -> list[str]:
-    """Return unmet per-event v2 Complete requirements."""
+    """Return unmet completion requirements for a replayable event."""
 
     if event.get("schema") == LEGACY_SCHEMA_ID:
         return _legacy_completion_errors(event)
+    if event.get("schema") == V2_SCHEMA_ID:
+        return _v2_completion_errors(event)
     review = event.get("review")
     if not isinstance(review, Mapping):
         return ["review content is missing"]
@@ -329,8 +503,8 @@ def completion_errors(event: Mapping[str, Any]) -> list[str]:
             errors.append(str(exc))
         else:
             if source_kind == "initial_assumption":
-                if len(labels) != 1 or labels[0]["kind"] != "surface_quality":
-                    errors.append("initial surface quality must be selected as good or bad")
+                if labels:
+                    errors.append("initial state cannot contain semantic change labels")
             elif not labels:
                 errors.append("at least one semantic label is required")
     return errors
@@ -440,7 +614,7 @@ _V2_ACTIONS = frozenset({
 
 
 def _validate_v2_event(event: Mapping[str, Any]) -> None:
-    if event.get("schema") != SCHEMA_ID:
+    if event.get("schema") != V2_SCHEMA_ID:
         raise PointEventIntegrityError("Point-event schema is invalid")
     try:
         uuid.UUID(str(event.get("event_id") or ""))
@@ -458,12 +632,15 @@ def _validate_v2_event(event: Mapping[str, Any]) -> None:
     early_v2 = expected | {"reviewer", "confidence"}
     if set(review) != expected and set(review) != early_v2:
         raise PointEventIntegrityError("Point-event v2 review fields are invalid")
-    _validate_anchor_shape(review.get("anchor"))
-    _validate_anchor_shape(review.get("representative_anchor"))
-    _validate_labels(review.get("labels"))
+    _validate_v2_anchor_shape(review.get("anchor"))
+    _validate_v2_anchor_shape(review.get("representative_anchor"))
+    _validate_v2_labels(review.get("labels"))
     if source.get("kind") == "initial_assumption" and (
         len(review["labels"]) > 1
-        or any(label["kind"] != "surface_quality" for label in review["labels"])
+        or any(
+            label["kind"] != "surface_quality"
+            for label in review["labels"]
+        )
     ):
         raise PointEventIntegrityError(
             "Initial state accepts only one surface-quality selection"
@@ -488,28 +665,88 @@ def _validate_v2_event(event: Mapping[str, Any]) -> None:
         raise PointEventIntegrityError("Acquisition source events cannot be deleted")
     if disposition != "active" and not str(review.get("disposition_reason") or "").strip():
         raise PointEventIntegrityError("Inactive point event requires a reason")
-    if event.get("status") == STATUS_COMPLETE and completion_errors(event):
+    if event.get("status") == STATUS_COMPLETE and _v2_completion_errors(event):
         raise PointEventIntegrityError(
-            "Invalid Complete point-event state: " + "; ".join(completion_errors(event))
+            "Invalid Complete point-event state: "
+            + "; ".join(_v2_completion_errors(event))
         )
 
 
-def _validate_revision_transition(
+def _validate_v3_event(event: Mapping[str, Any]) -> None:
+    if event.get("schema") != SCHEMA_ID:
+        raise PointEventIntegrityError("Point-event schema is invalid")
+    try:
+        uuid.UUID(str(event.get("event_id") or ""))
+    except ValueError as exc:
+        raise PointEventIntegrityError("Point-event event_id is invalid") from exc
+    source, review = event.get("source"), event.get("review")
+    if (
+        not isinstance(source, Mapping)
+        or source.get("kind") not in LABELABLE_SOURCES
+    ):
+        raise PointEventIntegrityError("Point-event source evidence is invalid")
+    if not isinstance(review, Mapping):
+        raise PointEventIntegrityError("Point-event review state is invalid")
+    expected = {
+        "anchor", "representative_anchor", "labels", "candidate_decision",
+        "comment", "disposition", "disposition_reason",
+    }
+    if set(review) != expected:
+        raise PointEventIntegrityError("Point-event v3 review fields are invalid")
+    _validate_anchor_shape(review.get("anchor"))
+    _validate_anchor_shape(review.get("representative_anchor"))
+    _validate_labels(review.get("labels"))
+    if source.get("kind") == "initial_assumption" and review["labels"]:
+        raise PointEventIntegrityError(
+            "Initial state cannot contain semantic change labels"
+        )
+    decision = review.get("candidate_decision")
+    if decision not in CANDIDATE_DECISIONS:
+        raise PointEventIntegrityError(
+            "Point-event candidate decision is invalid"
+        )
+    if source.get("kind") not in CANDIDATE_SOURCES and decision == "rejected":
+        raise PointEventIntegrityError("A human-created event cannot be rejected")
+    if decision == "rejected" and (
+        review.get("labels")
+        or review.get("representative_anchor") is not None
+    ):
+        raise PointEventIntegrityError(
+            "A rejected candidate cannot retain semantic labels or a "
+            "representative anchor"
+        )
+    if event.get("status") not in {STATUS_DRAFT, STATUS_COMPLETE}:
+        raise PointEventIntegrityError("Point-event status is invalid")
+    disposition = review.get("disposition")
+    if disposition not in {"active", "dismissed", "deleted"}:
+        raise PointEventIntegrityError("Point-event disposition is invalid")
+    if disposition == "deleted" and source.get("kind") != "posthoc":
+        raise PointEventIntegrityError("Acquisition source events cannot be deleted")
+    if (
+        disposition != "active"
+        and not str(review.get("disposition_reason") or "").strip()
+    ):
+        raise PointEventIntegrityError("Inactive point event requires a reason")
+    if event.get("status") == STATUS_COMPLETE and completion_errors(event):
+        raise PointEventIntegrityError(
+            "Invalid Complete point-event state: "
+            + "; ".join(completion_errors(event))
+        )
+
+
+def _validate_point_transition(
     before: Optional[Mapping[str, Any]], after: Mapping[str, Any], *,
-    action: str, actor: str,
+    action: str, actor: str, validate_event, complete_errors,
 ) -> None:
-    if after.get("schema") == LEGACY_SCHEMA_ID:
-        _validate_legacy_transition(before, after, action=action, actor=actor)
-        return
     if action not in _V2_ACTIONS or not str(actor or "").strip():
         raise PointEventIntegrityError("Point-event revision action or actor is invalid")
-    _validate_v2_event(after)
+    validate_event(after)
     review = after["review"]
     if before is None:
         if action != "create" or after.get("status") != STATUS_DRAFT or int(after.get("revision_number", 0)) != 1:
             raise PointEventIntegrityError("Point-event create transition is invalid")
         return
-    _validate_v2_event(before)
+    validate_event(before)
     if before.get("event_id") != after.get("event_id") or before.get("source") != after.get("source"):
         raise PointEventIntegrityError("Immutable source evidence was modified")
     protected = set(before) | set(after)
@@ -574,7 +811,12 @@ def _validate_revision_transition(
     elif action in fields:
         valid = changed == {fields[action]} and after_status == STATUS_DRAFT
     elif action == "complete":
-        valid = not changed and before_status == STATUS_DRAFT and after_status == STATUS_COMPLETE and not completion_errors(after)
+        valid = (
+            not changed
+            and before_status == STATUS_DRAFT
+            and after_status == STATUS_COMPLETE
+            and not complete_errors(after)
+        )
     elif action == "reopen":
         valid = not changed and before_status == STATUS_COMPLETE and after_status == STATUS_DRAFT
     elif action == "dismiss":
@@ -585,6 +827,43 @@ def _validate_revision_transition(
         valid = False
     if not valid:
         raise PointEventIntegrityError(f"Point-event {action} transition is semantically invalid")
+
+
+def _validate_v2_transition(
+    before: Optional[Mapping[str, Any]], after: Mapping[str, Any], *,
+    action: str, actor: str,
+) -> None:
+    _validate_point_transition(
+        before, after, action=action, actor=actor,
+        validate_event=_validate_v2_event,
+        complete_errors=_v2_completion_errors,
+    )
+
+
+def _validate_v3_transition(
+    before: Optional[Mapping[str, Any]], after: Mapping[str, Any], *,
+    action: str, actor: str,
+) -> None:
+    _validate_point_transition(
+        before, after, action=action, actor=actor,
+        validate_event=_validate_v3_event,
+        complete_errors=completion_errors,
+    )
+
+
+def _validate_revision_transition(
+    before: Optional[Mapping[str, Any]], after: Mapping[str, Any], *,
+    action: str, actor: str,
+) -> None:
+    schema = after.get("schema")
+    if schema == LEGACY_SCHEMA_ID:
+        _validate_legacy_transition(before, after, action=action, actor=actor)
+    elif schema == V2_SCHEMA_ID:
+        _validate_v2_transition(before, after, action=action, actor=actor)
+    elif schema == SCHEMA_ID:
+        _validate_v3_transition(before, after, action=action, actor=actor)
+    else:
+        raise PointEventIntegrityError("Point-event schema is invalid")
 
 
 class PointEventStore:
@@ -608,7 +887,7 @@ class PointEventStore:
 
     @property
     def read_only_legacy(self) -> bool:
-        return self._journal_schema == LEGACY_SCHEMA_ID
+        return self._journal_schema in LEGACY_SCHEMA_IDS
 
     @property
     def states(self) -> dict[str, dict[str, Any]]:
@@ -653,9 +932,14 @@ class PointEventStore:
         for record in self._read_records():
             schema = str(record.get("schema") or "")
             schemas.add(schema)
-            if schema not in {SCHEMA_ID, LEGACY_SCHEMA_ID} or len(schemas) > 1:
+            if (
+                schema not in {SCHEMA_ID, V2_SCHEMA_ID, LEGACY_SCHEMA_ID}
+                or len(schemas) > 1
+            ):
                 raise PointEventIntegrityError("Unsupported or mixed point-event journal schema")
-            if schema == SCHEMA_ID and str(record.get("previous_record_sha256") or "") != previous_hash:
+            if schema in {SCHEMA_ID, V2_SCHEMA_ID} and str(
+                record.get("previous_record_sha256") or ""
+            ) != previous_hash:
                 raise PointEventIntegrityError("Point-event global revision hash chain is broken")
             revision_id, event_id = str(record.get("revision_id") or ""), str(record.get("event_id") or "")
             if not revision_id or revision_id in revision_ids or not event_id:
@@ -663,6 +947,10 @@ class PointEventStore:
             before, after = record.get("before"), record.get("after")
             if not isinstance(after, dict) or after.get("event_id") != event_id:
                 raise PointEventIntegrityError("Point-event after-state identity is invalid")
+            if after.get("schema") != schema:
+                raise PointEventIntegrityError(
+                    "Point-event record and state schemas do not match"
+                )
             previous = states.get(event_id)
             if previous is None:
                 if record.get("action") != "create" or before is not None:
@@ -678,7 +966,7 @@ class PointEventStore:
         self._states, self._revision_ids = states, revision_ids
         self._journal_schema = next(iter(schemas), SCHEMA_ID)
         self._last_record_sha256 = previous_hash
-        if self._journal_schema == SCHEMA_ID:
+        if self._journal_schema in {SCHEMA_ID, V2_SCHEMA_ID}:
             for event_id, event in states.items():
                 if event.get("status") == STATUS_COMPLETE:
                     errors = self._interval_errors(event_id, state=states)
@@ -740,7 +1028,10 @@ class PointEventStore:
 
     def _assert_writable(self) -> None:
         if self.read_only_legacy:
-            raise PointEventError("rheed-point-events-v1 journals are read-only; start a v2 annotation sidecar")
+            raise PointEventError(
+                f"{self._journal_schema} journals are read-only; "
+                "start a rheed-point-events-v3 annotation sidecar"
+            )
 
     def _commit(
         self, *, event_id: str, actor: str, action: str,
@@ -809,14 +1100,7 @@ class PointEventStore:
                 frame_count=max(1, len(coordinates)),
                 initial_state={
                     "reconstructions": ["one_by_one"],
-                    "clarity": "bad",
-                    "quality": next((
-                        label["value"]
-                        for candidate in candidate_states.values()
-                        if candidate.get("source", {}).get("kind") == "initial_assumption"
-                        for label in candidate.get("review", {}).get("labels", [])
-                        if label.get("kind") == "surface_quality"
-                    ), "unknown"),
+                    "clarity": "unknown",
                 },
                 session_identity=str(
                     next_state.get("source", {}).get("session_identity", "")
@@ -917,6 +1201,7 @@ class PointEventStore:
         """Create exactly one deterministic review item for the default 1x1 state."""
 
         with self._lock:
+            self._assert_writable()
             existing = [item for item in self._states.values() if item.get("source", {}).get("kind") == "initial_assumption"]
             if len(existing) > 1:
                 raise PointEventIntegrityError("Multiple initial assumptions exist")
@@ -926,7 +1211,9 @@ class PointEventStore:
         row = {
             "kind": "initial_assumption", "default": "one_by_one",
             "capture_sequence": anchor.get("capture_sequence"),
-            "image_sha256": anchor["image_sha256"],
+            "frame_path": anchor.get("frame_path", ""),
+            "frame_index": anchor.get("frame_index"),
+            "archive_member": anchor.get("archive_member", ""),
         }
         timestamp = original_at_utc or str(anchor.get("captured_at_utc") or "")
         event_id = deterministic_legacy_event_id(
@@ -941,17 +1228,18 @@ class PointEventStore:
             source_index=0, source_row=row, original_at_utc=timestamp,
             original_elapsed_s=anchor.get("elapsed_s"),
             original_note=(
-                "Initial state is 1x1 with Bad clarity; grower selects "
-                "initial surface quality."
+                "Initial state is 1x1 with unknown pattern clarity."
             ),
             capture_sequence=anchor.get("capture_sequence"),
             original_frame_path=str(anchor.get("frame_path") or ""),
-            original_image_sha256=anchor["image_sha256"], review_anchor=anchor,
+            original_image_sha256=str(anchor.get("image_sha256") or ""),
+            review_anchor=anchor,
             event_id=event_id, current_software=False,
             initial_labels=[],
         )
 
     def _current(self, event_id: str, base_revision_id: Optional[str]) -> dict[str, Any]:
+        self._assert_writable()
         current = self._states.get(str(event_id))
         if current is None:
             raise PointEventError(f"Unknown point event: {event_id}")
@@ -990,9 +1278,9 @@ class PointEventStore:
         supplied = dict(label)
         supplied.setdefault("label_id", new_label_id())
         checked = validate_semantic_label(supplied)
-        if initial and checked["kind"] != "surface_quality":
+        if initial:
             raise PointEventError(
-                "The initial state accepts only a surface-quality selection"
+                "The initial state cannot contain semantic change labels"
             )
         def update(review):
             labels = [*review["labels"], checked]
@@ -1013,9 +1301,9 @@ class PointEventStore:
             raise PointEventError("Semantic label_id cannot be changed")
         supplied["label_id"] = str(label_id)
         checked = validate_semantic_label(supplied)
-        if initial and checked["kind"] != "surface_quality":
+        if initial:
             raise PointEventError(
-                "The initial state accepts only a surface-quality selection"
+                "The initial state cannot contain semantic change labels"
             )
         def update(review):
             matches = [index for index, item in enumerate(review["labels"]) if item["label_id"] == label_id]
@@ -1090,7 +1378,8 @@ class PointEventStore:
         return self._review_update(event_id, actor=actor, action="move_representative_anchor", base_revision_id=base_revision_id, updater=lambda review: review.update({"representative_anchor": verified}))
 
     def set_equalizer(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise PointEventError("Equalizer is not part of rheed-point-events-v2")
+        self._assert_writable()
+        raise PointEventError("Equalizer is not part of rheed-point-events-v3")
 
     @staticmethod
     def _anchor_coordinate(
@@ -1119,11 +1408,19 @@ class PointEventStore:
 
     @staticmethod
     def _representative_anchor_identity(
-        anchor: Mapping[str, Any],
-    ) -> tuple[str, str]:
+        anchor: Mapping[str, Any], *, schema: str,
+    ) -> tuple[str, ...]:
+        if schema == V2_SCHEMA_ID:
+            return (
+                str(anchor.get("capture_sequence", "")),
+                str(anchor.get("image_sha256", "")).lower(),
+            )
         return (
+            str(anchor.get("session_identity", "")),
             str(anchor.get("capture_sequence", "")),
-            str(anchor.get("image_sha256", "")).lower(),
+            str(anchor.get("archive_member", "")),
+            str(anchor.get("frame_index", "")),
+            str(anchor.get("frame_path", "")),
         )
 
     def _interval_errors(
@@ -1170,7 +1467,9 @@ class PointEventStore:
             )
         ]
         anchors = {
-            self._representative_anchor_identity(anchor): anchor
+            self._representative_anchor_identity(
+                anchor, schema=str(current.get("schema") or SCHEMA_ID),
+            ): anchor
             for anchor in raw_anchors
         }
         if not anchors:
@@ -1259,11 +1558,12 @@ class PointEventStore:
 
 __all__ = [
     "CANDIDATE_DECISIONS", "CANDIDATE_SOURCES", "JOURNAL_NAME",
-    "LABELABLE_SOURCES", "LEGACY_SCHEMA_ID", "PATTERN_CLARITY_VALUES",
+    "LABELABLE_SOURCES", "LEGACY_SCHEMA_ID", "LEGACY_SCHEMA_IDS",
+    "PATTERN_CLARITY_VALUES",
     "PointEventCompletionError", "PointEventError", "PointEventIntegrityError",
     "PointEventStore", "RECONSTRUCTION_VALUES", "SCHEMA_ID", "STATUS_COMPLETE",
-    "SURFACE_QUALITY_VALUES",
-    "STATUS_DRAFT", "SUMMARY_NAME", "TRANSACTION_NAME", "completion_errors",
+    "STATUS_DRAFT", "SUMMARY_NAME", "SURFACE_QUALITY_VALUES",
+    "TRANSACTION_NAME", "V2_SCHEMA_ID", "completion_errors",
     "deterministic_legacy_event_id", "make_review_anchor", "make_semantic_label",
     "new_event_id", "new_label_id", "sha256_file", "sha256_value",
     "source_identity_row", "source_row_sha256", "validate_semantic_label",

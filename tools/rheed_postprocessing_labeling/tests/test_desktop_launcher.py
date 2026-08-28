@@ -472,7 +472,7 @@ def test_validation_response_is_strict(payload: str) -> None:
         parse_validation_response(payload)
 
 
-def test_validation_response_accepts_only_exact_success_schema() -> None:
+def test_validation_response_accepts_current_and_read_only_point_schemas() -> None:
     segment_result = parse_validation_response(
         '{"valid":true,"dataset_id":" run-123 ","segment_count":4}'
     )
@@ -487,6 +487,12 @@ def test_validation_response_accepts_only_exact_success_schema() -> None:
     assert event_result.dataset_id == "run-456"
     assert event_result.event_count == 5
     assert event_result.item_kind == "event"
+    current_result = parse_validation_response(
+        '{"valid":true,"dataset_id":"run-789",'
+        '"schema_version":"rheed-point-events-v3","event_count":6}'
+    )
+    assert current_result.dataset_id == "run-789"
+    assert current_result.event_count == 6
 
 
 def test_model_pairs_move_together_and_remain_ordered(

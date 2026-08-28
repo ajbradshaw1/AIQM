@@ -7,10 +7,11 @@ and ARM / START / STOP / DISARM session state transitions.
 from __future__ import annotations
 
 import logging
+import json
 import os
 import sys
 import time
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -145,6 +146,7 @@ SET_V_CHANGE_TOLERANCE = 0.05  # volts
 SET_I_CHANGE_TOLERANCE = 0.01  # amps
 
 WORKSPACE_DIR = Path(__file__).resolve().parents[1]
+CAMERA_CONNECT_SNAPSHOT_NAME = "camera_sensor_settings_at_connect.json"
 
 
 def resolve_workspace_folder(folder: str | Path) -> Path:
@@ -227,6 +229,7 @@ class GrowthApp(QMainWindow):
         self._shutdown_pending = False
         session_root = os.environ.get("AIQM_SESSION_ROOT", "logs/growths")
         self.growth_log = GrowthLogger(base_dir=session_root)
+        self._session_camera_settings_at_connect: Optional[dict] = None
 
         # Periodic sensor logging timer (1 second interval while running)
         self._sensor_log_timer = QTimer(self)
@@ -833,7 +836,23 @@ class GrowthApp(QMainWindow):
 
         sample_id = self.monitor.sample_id_input.text().strip() or "unnamed"
         self.growth_log.start_session(sample_id)
-        session_dir = self.growth_log.session_dir
+        # Persist the point-in-time camera readback as soon as the session
+        # directory exists.  STOP/close later fold the same cached snapshot
+        # into session_metadata.json, but this atomic sidecar survives a hard
+        # process exit before either orderly path can run.
+        if not self._persist_camera_connect_snapshot():
+            log.error(
+                "START aborted: camera connect provenance could not be "
+                "persisted atomically"
+            )
+            self.growth_log.end_session()
+            self.statusBar().showMessage(
+                "START blocked: camera connect provenance could not be saved; "
+                "inspect the retained session directory.",
+                9000,
+            )
+            return
+        session_dir = getattr(self.growth_log, "session_dir", None)
         self.monitor.live_equalizer_tab.set_session_id(
             session_dir.name if session_dir is not None else "",
         )
@@ -978,7 +997,7 @@ class GrowthApp(QMainWindow):
         )
         self.monitor.set_auto_capture_pause_enabled(False)
 
-        metadata = self.monitor.get_session_metadata()
+        metadata = self._session_metadata_with_camera()
 
         # Save session metadata
         self.growth_log.save_session_metadata(metadata)
@@ -1133,8 +1152,91 @@ class GrowthApp(QMainWindow):
             )
 
     def _equalizer_session_id(self) -> str:
-        session_dir = self.growth_log.session_dir
+        session_dir = getattr(self.growth_log, "session_dir", None)
         return session_dir.name if session_dir is not None else ""
+
+    def _read_camera_connect_settings(self) -> dict:
+        """Read one defensive worker snapshot without blocking shutdown."""
+
+        try:
+            return deepcopy(
+                getattr(
+                    self.camera_worker,
+                    "sensor_settings_at_connect",
+                    None,
+                )
+                or {},
+            )
+        except Exception as exc:  # noqa: BLE001 — provenance is non-fatal
+            log.warning(
+                "Camera-open settings could not be read: %s", exc,
+            )
+            return {}
+
+    def _persist_camera_connect_snapshot(self) -> bool:
+        """Atomically persist connect provenance at session creation.
+
+        The cache is intentionally frozen even if a later reconnect fails and
+        clears the worker's current-cycle snapshot.  This method writes a
+        same-directory temporary followed by durable replace via GrowthLogger,
+        so a process crash can leave either the prior complete file or the new
+        complete file, never a truncated JSON document.
+        """
+
+        session_dir = getattr(self.growth_log, "session_dir", None)
+        if session_dir is None:
+            return False
+        settings = GrowthApp._read_camera_connect_settings(self)
+        self._session_camera_settings_at_connect = deepcopy(settings)
+        payload = {
+            "schema": "aiqm-camera-connect-snapshot-v1",
+            "persisted_at_utc": utc_now_iso(),
+            "session_identity": session_dir.name,
+            "snapshot_status": "captured" if settings else "unavailable",
+            "camera_sensor_settings_at_connect": settings,
+        }
+        try:
+            serialized = (
+                json.dumps(
+                    payload, sort_keys=True, indent=2,
+                    ensure_ascii=False, allow_nan=False,
+                )
+                + "\n"
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            log.error("Camera-open settings are not JSON-safe: %s", exc)
+            return False
+        path = session_dir / CAMERA_CONNECT_SNAPSHOT_NAME
+        written = GrowthLogger._atomic_write_bytes(path, serialized)
+        if not written:
+            log.error("Could not persist camera-open settings to %s", path)
+        return written
+
+    def _session_metadata_with_camera(self) -> dict:
+        """Add non-authoritative camera-open settings to session metadata.
+
+        The direct camera snapshot is read at ARM/connect time and carries
+        its own UTC timestamp; it is not a claim that an external application
+        left those values unchanged for the full session.  Metadata collection
+        is best-effort: a missing/stopped/custom worker must never prevent STOP
+        or window-close from preserving the rest of the session.
+        """
+        metadata = self.monitor.get_session_metadata()
+        cached = getattr(self, "_session_camera_settings_at_connect", None)
+        settings = (
+            deepcopy(cached)
+            if cached else GrowthApp._read_camera_connect_settings(self)
+        )
+        if settings:
+            metadata["camera_sensor_settings_at_connect"] = settings
+        metadata["camera_sensor_settings_at_connect_status"] = (
+            "captured" if settings else "unavailable"
+        )
+        if getattr(self.growth_log, "session_dir", None) is not None:
+            metadata["camera_sensor_settings_at_connect_file"] = (
+                CAMERA_CONNECT_SNAPSHOT_NAME
+            )
+        return metadata
 
     def _current_auto_capture_metadata(self) -> dict:
         """Bind each buffered frame to its session, basis, and calibration."""
@@ -2163,6 +2265,12 @@ class GrowthApp(QMainWindow):
         _evap_p = e.chamber_pressure_mbar if evap_ok else None
         _ads_p  = ads_cells.get("ion_gauge_1_P") if ads_cells else None
         _pressure = _evap_p if _evap_p is not None else _ads_p
+        if _evap_p is not None:
+            pressure_source = "evap"
+        elif _ads_p is not None:
+            pressure_source = "ads"
+        else:
+            pressure_source = "none"
         snapshot_monotonic_ns = time.perf_counter_ns()
         snapshot_at_utc = utc_now_iso()
         previous_tick_ns = self._last_sensor_log_tick_ns
@@ -2201,6 +2309,24 @@ class GrowthApp(QMainWindow):
         pyro_timing = snapshots["pyrometer"].to_dict()
         mistral_timing = snapshots["mistral"].to_dict()
         evap_timing = snapshots["evap"].to_dict()
+        if e is not None:
+            # The generic timing snapshot remains bound to the last accepted
+            # sample.  Preserve the latest Elog attempt too, so an unchanged
+            # or stale source record is auditable instead of looking like a
+            # newly received sample.
+            evap_timing.update({
+                "attempt_source_at_utc": getattr(
+                    e, "attempt_source_at_utc", None,
+                ),
+                "source_age_ms": getattr(e, "source_age_ms", None),
+                "source_record_advanced": bool(getattr(
+                    e, "source_record_advanced", False,
+                )),
+                "source_stale": bool(getattr(e, "source_stale", False)),
+                "source_status": str(getattr(
+                    e, "source_status", "unavailable",
+                ) or "unavailable"),
+            })
         write_started_ns = time.perf_counter_ns()
         self.growth_log.log_sensors(
             pyro_temp,
@@ -2212,6 +2338,10 @@ class GrowthApp(QMainWindow):
             chamber_pressure_mbar=_pressure,
             pyro_temp_std=pyro_temp_std,
             pyro_temp_n=pyro_temp_n,
+            pyrometer_emissivity=(
+                pyro.emissivity if pyro is not None else None
+            ),
+            pressure_source=pressure_source,
             # Elog-direct fields (None outside elog mode — see
             # drivers.evap_control.ElogReader).
             substrate_temp_pv_C=(
@@ -2225,6 +2355,9 @@ class GrowthApp(QMainWindow):
             cell_Sr_pv_C=e.cell_Sr_pv_C if evap_ok else None,
             cell_Eu_pv_C=e.cell_Eu_pv_C if evap_ok else None,
             cell_Er_pv_C=e.cell_Er_pv_C if evap_ok else None,
+            cell_Fe_pv_C=e.cell_Fe_pv_C if evap_ok else None,
+            cell_Te_pv_C=e.cell_Te_pv_C if evap_ok else None,
+            cell_Se_pv_C=e.cell_Se_pv_C if evap_ok else None,
             plasma_dc_bias_V=e.plasma_dc_bias_V if evap_ok else None,
             plasma_forward_W=e.plasma_forward_W if evap_ok else None,
             plasma_reflected_W=e.plasma_reflected_W if evap_ok else None,
@@ -3194,7 +3327,7 @@ class GrowthApp(QMainWindow):
         # before either accepting the window close or showing an explicit
         # fail-closed shutdown-pending state.
         if self.growth_log.active:
-            metadata = self.monitor.get_session_metadata()
+            metadata = self._session_metadata_with_camera()
             self.growth_log.save_session_metadata(metadata)
             self._invalidate_equalizer_calibration("GUI closed")
             self.growth_log.end_session()

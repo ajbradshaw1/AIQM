@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Offline browser acceptance for rheed-point-events-v2. Synthetic source
+// Offline browser acceptance for rheed-point-events-v3. Synthetic source
 // events are injected into a generated standalone report; no experimental
 // archive is copied into the repository or changed by this verifier.
 const fs = require('fs');
@@ -41,7 +41,7 @@ function assert(condition, message, detail) {
 }
 
 const clone = value => JSON.parse(JSON.stringify(value));
-const checkpoint = message => process.stdout.write(`[browser-v2] ${message}\n`);
+const checkpoint = message => process.stdout.write(`[browser-v3] ${message}\n`);
 
 function expectedSegmentId(datasetId, startFrame, boundaryEventIds) {
   const namespace = Buffer.from('877062c884f35bc59bd0e032edcbaeb5', 'hex');
@@ -85,9 +85,15 @@ function reportFixture(reportPath) {
   );
   assert(times.length >= 6, 'Browser fixture requires at least six saved frames');
 
+  const sessionIdentity = String(
+    config.frame_contexts[0]?.session_id || config.dataset.acquisition_run ||
+    config.dataset.dataset_id || ''
+  );
+
   const archiveMember = index => String(config.image_pattern || '')
     .replace('{index}', String(index + 1).padStart(4, '0'));
   const anchor = index => ({
+    session_identity: sessionIdentity,
     frame_index: index + 1,
     heartbeat_idx: heartbeats[index],
     elapsed_s: Number(times[index].toFixed(3)),
@@ -95,7 +101,10 @@ function reportFixture(reportPath) {
     capture_sequence: sequences[index],
     image_sha256: hashes[index],
     image_sha256_algorithm: 'raw-file-bytes-v1',
-    archive_member: archiveMember(index),
+    frame_path: String(config.frame_contexts[index].frame_path || ''),
+    archive_member: String(
+      config.frame_contexts[index].archive_member || archiveMember(index)
+    ),
   });
   const sourceEvent = ({
     id,
@@ -105,11 +114,11 @@ function reportFixture(reportPath) {
     labels = [],
     decision = 'pending',
   }) => ({
-    schema: 'rheed-point-events-v2',
+    schema: 'rheed-point-events-v3',
     event_id: id,
     source: {
       kind,
-      session_identity: 'browser-v2-fixture',
+      session_identity: sessionIdentity,
       source_file: kind === 'auto_capture'
         ? 'auto_capture_events.csv'
         : 'session_metadata.json',
@@ -151,13 +160,13 @@ function reportFixture(reportPath) {
   // its saved evidence image is frame 2. Sensor context must follow the event
   // timestamp, not silently substitute the captured-image timestamp.
   const autoConfirmEvent = sourceEvent({
-    id: 'auto-candidate-confirm-browser-v2',
+    id: 'auto-candidate-confirm-browser-v3',
     kind: 'auto_capture',
     eventIndex: 4,
     frameIndex: 1,
   });
   const autoRejectEvent = sourceEvent({
-    id: 'auto-candidate-reject-browser-v2',
+    id: 'auto-candidate-reject-browser-v3',
     kind: 'auto_capture',
     eventIndex: 5,
     frameIndex: 5,
@@ -169,7 +178,7 @@ function reportFixture(reportPath) {
     }],
   });
   const deletedEvent = sourceEvent({
-    id: 'deleted-posthoc-browser-v2',
+    id: 'deleted-posthoc-browser-v3',
     kind: 'posthoc',
     eventIndex: 2,
     labels: [{
@@ -183,7 +192,7 @@ function reportFixture(reportPath) {
   deletedEvent.review.disposition = 'deleted';
   deletedEvent.review.disposition_reason = 'Synthetic tombstone for inactive-state replay';
 
-  config.annotation_schema = 'rheed-point-events-v2';
+  config.annotation_schema = 'rheed-point-events-v3';
   config.point_events = [initialEvent, autoConfirmEvent, autoRejectEvent, deletedEvent];
   config.source_event_revisions = [];
   config.source_event_journal = null;
@@ -322,8 +331,9 @@ async function selectEvent(page, eventId) {
   const button = page.locator(`[data-point-event-list-id="${eventId}"]`).first();
   await button.click();
   await page.waitForFunction(
-    expected => (document.querySelector('#arp-point-editor-heading')?.textContent || '')
-      .includes(expected),
+    expected => Array.from(document.querySelectorAll('[data-point-event-list-id]'))
+      .some(element => element.dataset.pointEventListId === expected &&
+        element.getAttribute('aria-pressed') === 'true'),
     eventId,
   );
 }
@@ -377,10 +387,19 @@ function parseCsv(text) {
 
 async function addLabel(page, kind, change, value) {
   const before = await page.locator('[data-point-label-id]').count();
-  await page.locator('#arp-point-label-kind').selectOption(kind);
-  await page.locator('#arp-point-label-change').selectOption(change);
-  await page.locator('#arp-point-label-value').selectOption(value);
-  await page.locator('#arp-point-label-add').click();
+  if (kind === 'reconstruction') {
+    await page.locator('#arp-point-reconstruction-choice').selectOption(value);
+    const button = change === 'appeared'
+      ? '#arp-point-reconstruction-appeared'
+      : '#arp-point-reconstruction-disappeared';
+    await page.locator(button).click();
+  } else if (kind === 'pattern_clarity' && change === 'became') {
+    await page.locator(
+      `[data-point-quick-kind="pattern_clarity"][data-point-quick-value="${value}"]`,
+    ).click();
+  } else {
+    throw new Error(`Unsupported quick label: ${kind}/${change}/${value}`);
+  }
   await page.waitForFunction(
     expected => document.querySelectorAll('[data-point-label-id]').length === expected,
     before + 1,
@@ -428,20 +447,32 @@ async function dragMarkerToFrame(page, fixture, eventId, role, targetIndex) {
   await page.mouse.down();
   await page.mouse.move(targetX, targetY, { steps: 12 });
   await page.mouse.up();
-  const evidenceTerm = role === 'review' ? 'Review event point' : 'Interval Anchor';
   try {
-    await page.waitForFunction(
-      ({ term, ordinal }) => {
-        const host = document.querySelector('#arp-point-evidence');
-        const dt = [...(host?.querySelectorAll('dt') || [])]
-          .find(item => item.textContent.trim() === term);
-        return (dt?.nextElementSibling?.textContent || '').includes(`#${ordinal}`);
-      },
-      { term: evidenceTerm, ordinal: targetIndex + 1 },
-      { timeout: 3000 },
-    );
+    if (role === 'review') {
+      await page.waitForFunction(
+        ({ ordinal }) => {
+          const host = document.querySelector('#arp-point-evidence');
+          const dt = [...(host?.querySelectorAll('dt') || [])]
+            .find(item => item.textContent.trim() === 'Review event point');
+          return (dt?.nextElementSibling?.textContent || '').includes(`#${ordinal}`);
+        },
+        { ordinal: targetIndex + 1 },
+        { timeout: 3000 },
+      );
+    } else {
+      await page.waitForFunction(
+        ({ markerSelector, ordinal }) => {
+          const markerNode = document.querySelector(markerSelector);
+          return markerNode?.getAttribute('data-anchor-valid') === 'true' &&
+            (markerNode.querySelector('title')?.textContent || '')
+              .includes(`frame #${ordinal}`);
+        },
+        { markerSelector: selector, ordinal: targetIndex + 1 },
+        { timeout: 3000 },
+      );
+    }
   } catch (error) {
-    const diagnostic = await page.evaluate(({ markerSelector, term }) => {
+    const diagnostic = await page.evaluate(({ markerSelector, roleName }) => {
       const host = document.querySelector('#arp-point-evidence');
       const evidence = Object.fromEntries([...host.querySelectorAll('dt')].map(item => [
         item.textContent.trim(),
@@ -451,11 +482,13 @@ async function dragMarkerToFrame(page, fixture, eventId, role, targetIndex) {
       return {
         evidence,
         markerTransform: markerNode?.getAttribute('transform') || null,
+        markerTitle: markerNode?.querySelector('title')?.textContent || '',
+        markerValid: markerNode?.getAttribute('data-anchor-valid') || '',
         status: document.querySelector('#arp-point-status')?.textContent || '',
         selectedFrame: document.querySelector('#arp-frame-scrubber-point')?.value || '',
-        requestedTerm: term,
+        requestedRole: roleName,
       };
-    }, { markerSelector: selector, term: evidenceTerm });
+    }, { markerSelector: selector, roleName: role });
     throw new Error(`Drag did not snap to frame #${targetIndex + 1}: ${JSON.stringify(diagnostic)}`, {
       cause: error,
     });
@@ -559,7 +592,7 @@ function desktopApi(fixture, token) {
     const revisionId = `desktop-revision-${revisionCounter}`;
     event.revision_id = revisionId;
     const revision = {
-      schema_version: 'rheed-point-events-v2',
+      schema_version: 'rheed-point-events-v3',
       revision_id: revisionId,
       base_revision_id: command.base_revision_id || '',
       actor: command.actor,
@@ -593,7 +626,7 @@ function desktopApi(fixture, token) {
         revisions: clone(revisions),
         unfinished_count: events.filter(item => item.status !== 'Complete').length,
         annotation_set: {
-          annotation_set_id: 'desktop-browser-v2-annotation-set',
+          annotation_set_id: 'desktop-browser-v3-annotation-set',
           reviewer: '',
         },
       });
@@ -618,9 +651,24 @@ async function changeTextField(page, selector, value) {
   );
 }
 
+async function waitForSelectedStatus(page, status) {
+  await page.waitForFunction(
+    expected => (document.querySelector('#arp-point-editor-heading')?.textContent || '')
+      .trim().endsWith(`· ${expected}`),
+    status,
+  );
+}
+
+async function selectedEventId(page) {
+  const selected = page.locator(
+    '[data-point-event-list-id][aria-pressed="true"]',
+  ).first();
+  return String(await selected.getAttribute('data-point-event-list-id') || '');
+}
+
 async function verifyDesktopCompletion(browser, reportPath, fixture, externalRequests) {
   checkpoint('checking desktop Complete/Reopen gates');
-  const token = 'browser-test-v2-bridge-token-0123456789abcdef';
+  const token = 'browser-test-v3-bridge-token-0123456789abcdef';
   const server = await startLocalServer(reportPath, {
     reportHtml: fixture.html,
     api: desktopApi(fixture, token),
@@ -661,11 +709,11 @@ async function verifyDesktopCompletion(browser, reportPath, fixture, externalReq
     'Initial-state audit exposed candidate, delta-label, or dismissal controls');
     assert(await page.locator('#arp-point-complete').isDisabled(),
       'Initial-state audit without reviewer or Anchor enabled Complete');
-    await changeTextField(page, '#arp-point-reviewer', 'Desktop Reviewer');
+    await changeTextField(page, '#arp-point-grower', 'Desktop Reviewer');
     assert(await page.locator('#arp-point-complete').isDisabled(),
       'Initial-state reviewer without first-segment Anchor enabled Complete');
     await setFrame(page, 0);
-    await page.locator('#arp-point-anchor').click();
+    await page.locator('#arp-point-interval-anchor').click();
     await page.waitForSelector(
       `[data-point-event-id="${fixture.initialEvent.event_id}"]`
         + '[data-point-role="representative-anchor"]',
@@ -673,16 +721,12 @@ async function verifyDesktopCompletion(browser, reportPath, fixture, externalReq
     assert(!await page.locator('#arp-point-complete').isDisabled(),
       'Initial-state reviewer plus first-segment Anchor did not enable Complete');
     await page.locator('#arp-point-complete').click();
-    await page.waitForFunction(
-      id => (document.querySelector('#arp-point-editor-heading')?.textContent || '')
-        .includes(`· Complete · ${id}`),
-      fixture.initialEvent.event_id,
-    );
+    await waitForSelectedStatus(page, 'Complete');
 
     await selectEvent(page, fixture.autoConfirmEvent.event_id);
     assert(await page.locator('#arp-point-complete').isDisabled(),
       'Pending candidate without reviewer, labels, and Anchor enabled Complete');
-    await changeTextField(page, '#arp-point-reviewer', 'Desktop Reviewer');
+    await changeTextField(page, '#arp-point-grower', 'Desktop Reviewer');
     assert(await page.locator('#arp-point-complete').isDisabled(),
       'Reviewer alone enabled Complete');
     await page.locator('#arp-point-candidate-decision').selectOption('confirmed');
@@ -697,7 +741,7 @@ async function verifyDesktopCompletion(browser, reportPath, fixture, externalReq
     assert(await page.locator('#arp-point-complete').isDisabled(),
       'Candidate without representative Anchor enabled Complete');
     await setFrame(page, 3);
-    await page.locator('#arp-point-anchor').click();
+    await page.locator('#arp-point-interval-anchor').click();
     await page.waitForSelector(
       `[data-point-event-id="${fixture.autoConfirmEvent.event_id}"]`
         + '[data-point-role="representative-anchor"]',
@@ -707,36 +751,20 @@ async function verifyDesktopCompletion(browser, reportPath, fixture, externalReq
     assert(await page.locator('#arp-point-comment').inputValue() === '',
       'Desktop completion fixture unexpectedly required a comment');
     await page.locator('#arp-point-complete').click();
-    await page.waitForFunction(
-      id => (document.querySelector('#arp-point-editor-heading')?.textContent || '')
-        .includes(`· Complete · ${id}`),
-      fixture.autoConfirmEvent.event_id,
-    );
+    await waitForSelectedStatus(page, 'Complete');
 
     const labelRow = page.locator('[data-point-label-id]').first();
     await labelRow.locator('[data-point-label-field="value"]').selectOption('htr');
-    await page.waitForFunction(
-      id => (document.querySelector('#arp-point-editor-heading')?.textContent || '')
-        .includes(`· Draft · ${id}`),
-      fixture.autoConfirmEvent.event_id,
-    );
+    await waitForSelectedStatus(page, 'Draft');
     assert(!await page.locator('#arp-point-complete').isDisabled(),
       'Editing a completed event did not return an otherwise valid event to Draft');
     await page.locator('#arp-point-complete').click();
-    await page.waitForFunction(
-      id => (document.querySelector('#arp-point-editor-heading')?.textContent || '')
-        .includes(`· Complete · ${id}`),
-      fixture.autoConfirmEvent.event_id,
-    );
+    await waitForSelectedStatus(page, 'Complete');
     await page.locator('#arp-point-reopen').click();
-    await page.waitForFunction(
-      id => (document.querySelector('#arp-point-editor-heading')?.textContent || '')
-        .includes(`· Draft · ${id}`),
-      fixture.autoConfirmEvent.event_id,
-    );
+    await waitForSelectedStatus(page, 'Draft');
 
     await selectEvent(page, fixture.autoRejectEvent.event_id);
-    await changeTextField(page, '#arp-point-reviewer', 'Desktop Reviewer');
+    await changeTextField(page, '#arp-point-grower', 'Desktop Reviewer');
     await page.locator('#arp-point-candidate-decision').selectOption('rejected');
     await page.waitForFunction(
       () => /source evidence was preserved/i.test(
@@ -752,11 +780,7 @@ async function verifyDesktopCompletion(browser, reportPath, fixture, externalReq
     assert(!await page.locator('#arp-point-complete').isDisabled(),
       'Reviewer + rejected candidate did not enable Complete');
     await page.locator('#arp-point-complete').click();
-    await page.waitForFunction(
-      id => (document.querySelector('#arp-point-editor-heading')?.textContent || '')
-        .includes(`· Complete · ${id}`),
-      fixture.autoRejectEvent.event_id,
-    );
+    await waitForSelectedStatus(page, 'Complete');
 
     const exported = JSON.parse(await downloadText(
       page,
@@ -813,7 +837,7 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     && !await page.locator('#arp-mark-out').isVisible(),
   'Mark In/Out segment controls are visible');
   const visibleText = await page.locator('body').innerText();
-  assert(!/equalizer/i.test(visibleText), 'Equalizer is visible in the v2 labeling UI');
+  assert(!/equalizer/i.test(visibleText), 'Equalizer is visible in the v3 labeling UI');
   const laneLabels = await page.locator('.arp-point-track .point-lane-label').allTextContents();
   assert(JSON.stringify(laneLabels) === JSON.stringify([
     'Event points', 'Derived state intervals', 'Interval anchors',
@@ -825,7 +849,7 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     'Initial derived-state interval is missing');
   const baselineState = await baselineInterval.evaluate(element => ({ ...element.dataset }));
   assert(baselineState.stateReconstructions === 'one_by_one'
-    && baselineState.stateQuality === 'unknown'
+    && baselineState.stateClarity === 'unknown'
     && baselineState.boundaryEventIds === '',
   'Pending, rejected, or deleted fixture events changed the initial state', baselineState);
   assert(!/htr|twinned_2x1/i.test(baselineState.stateText || ''),
@@ -873,7 +897,7 @@ async function verifyStaticEditing(page, fixture, outputDir) {
   checkpoint('initial assumption and sensor context passed');
 
   await page.locator('#arp-point-candidate-decision').selectOption('confirmed');
-  await changeTextField(page, '#arp-point-reviewer', 'Offline Browser Reviewer');
+  await changeTextField(page, '#arp-point-grower', 'Offline Browser Reviewer');
   assert(await page.locator('#arp-point-comment').inputValue() === '',
     'Comment is not optional for the synthetic automatic event');
   await addLabel(page, 'reconstruction', 'appeared', 'rt13');
@@ -936,7 +960,7 @@ async function verifyStaticEditing(page, fixture, outputDir) {
   const invalidState = await invalidInterval.evaluate(element => ({ ...element.dataset }));
   assert(invalidState.stateValid === 'false'
     && invalidState.stateReconstructions === 'one_by_one'
-    && invalidState.stateQuality === 'unknown',
+    && invalidState.stateClarity === 'unknown',
   'Contradictory same-frame changes were not rejected atomically', invalidState);
   await page.locator(`[data-point-label-id="${absentHtrId}"]`)
     .locator('[data-point-label-remove]').click();
@@ -949,8 +973,43 @@ async function verifyStaticEditing(page, fixture, outputDir) {
       + `[data-boundary-event-ids*="${fixture.autoConfirmEvent.event_id}"]`,
   ).evaluate(element => ({ ...element.dataset }));
   assert(recoveredState.stateReconstructions === 'rt13'
-    && recoveredState.stateQuality === 'bad',
+    && recoveredState.stateClarity === 'bad',
   'Resolving the contradiction did not restore cumulative state', recoveredState);
+
+  await page.locator('#arp-point-reconstruction-choice').selectOption('rt13');
+  await page.locator('#arp-point-reconstruction-disappeared').click();
+  await page.waitForFunction(
+    id => document.querySelector(`[data-point-label-id="${id}"]`)
+      ?.querySelector('[data-point-label-field="change"]')?.value === 'disappeared',
+    rt13Id,
+  );
+  assert(await page.locator('[data-point-label-id]').count() === 3,
+    'Quick reconstruction toggle duplicated a semantic row');
+  await page.locator('#arp-point-reconstruction-appeared').click();
+  await page.waitForFunction(
+    id => document.querySelector(`[data-point-label-id="${id}"]`)
+      ?.querySelector('[data-point-label-field="change"]')?.value === 'appeared',
+    rt13Id,
+  );
+
+  await page.locator(
+    '[data-point-quick-kind="pattern_clarity"][data-point-quick-value="good"]',
+  ).click();
+  await page.waitForFunction(
+    id => document.querySelector(`[data-point-label-id="${id}"]`)
+      ?.querySelector('[data-point-label-field="value"]')?.value === 'good',
+    clarityId,
+  );
+  assert(await page.locator('[data-point-label-id]').count() === 3,
+    'Quick clarity toggle duplicated a semantic row');
+  await page.locator(
+    '[data-point-quick-kind="pattern_clarity"][data-point-quick-value="bad"]',
+  ).click();
+  await page.waitForFunction(
+    id => document.querySelector(`[data-point-label-id="${id}"]`)
+      ?.querySelector('[data-point-label-field="value"]')?.value === 'bad',
+    clarityId,
+  );
 
   const beforeRejectedSemantics = JSON.parse(await downloadText(
     page,
@@ -960,30 +1019,6 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     item => item.event_id === fixture.autoConfirmEvent.event_id,
   );
   const beforeRejectedRevisions = clone(beforeRejectedSemantics.revisions);
-
-  await page.locator('#arp-point-label-kind').selectOption('reconstruction');
-  await page.locator('#arp-point-label-change').selectOption('disappeared');
-  await page.locator('#arp-point-label-value').selectOption('rt13');
-  await page.locator('#arp-point-label-add').click();
-  await page.waitForFunction(
-    () => /cannot both appear and disappear/i.test(
-      document.querySelector('#arp-point-status')?.textContent || '',
-    ),
-  );
-  assert(await page.locator('[data-point-label-id]').count() === 3,
-    'Rejected −RT13 addition changed the label rows');
-
-  await page.locator('#arp-point-label-kind').selectOption('pattern_clarity');
-  await page.locator('#arp-point-label-change').selectOption('became');
-  await page.locator('#arp-point-label-value').selectOption('good');
-  await page.locator('#arp-point-label-add').click();
-  await page.waitForFunction(
-    () => /only one Good\/Bad clarity change/i.test(
-      document.querySelector('#arp-point-status')?.textContent || '',
-    ),
-  );
-  assert(await page.locator('[data-point-label-id]').count() === 3,
-    'Rejected second clarity addition changed the label rows');
 
   const disappearedId = await labelRowIdForValue(page, 'one_by_one');
   assert(disappearedId, 'Could not find −1×1 label for conflict-edit test');
@@ -1013,7 +1048,7 @@ async function verifyStaticEditing(page, fixture, outputDir) {
   assert(JSON.stringify(afterRejectedSemantics.revisions)
     === JSON.stringify(beforeRejectedRevisions),
   'Rejected semantic-label attempts appended audit revisions');
-  checkpoint('contradictory reconstruction and duplicate clarity attempts were rejected atomically');
+  checkpoint('quick-label toggles and contradictory reconstruction rejection passed');
 
   await dragMarkerToFrame(
     page,
@@ -1023,18 +1058,19 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     3,
   );
   await setFrame(page, 0);
-  await page.locator('#arp-point-anchor').click();
-  await page.waitForFunction(
-    () => /Anchor blocked: choose a saved frame inside/i.test(
-      document.querySelector('#arp-point-status')?.textContent || '',
-    ),
-  );
+  assert(await page.locator('#arp-point-interval-anchor').isDisabled(),
+    'Out-of-interval playhead did not disable the Anchor action');
   assert(await page.locator(
     `[data-point-event-id="${fixture.autoConfirmEvent.event_id}"]`
       + '[data-point-role="representative-anchor"]',
   ).count() === 0, 'Out-of-interval Anchor was stored or rendered');
   await setFrame(page, 5);
-  await page.locator('#arp-point-anchor').click();
+  await page.waitForFunction(
+    () => !document.querySelector('#arp-point-interval-anchor')?.disabled,
+  );
+  assert(!await page.locator('#arp-point-interval-anchor').isDisabled(),
+    'In-interval playhead did not enable the Anchor action');
+  await page.locator('#arp-point-interval-anchor').click();
   await page.waitForSelector(
     `[data-point-event-id="${fixture.autoConfirmEvent.event_id}"]`
       + '[data-point-role="representative-anchor"]',
@@ -1049,30 +1085,33 @@ async function verifyStaticEditing(page, fixture, outputDir) {
   checkpoint('semantic labels and draggable event/Anchor passed');
 
   await selectEvent(page, fixture.initialEvent.event_id);
-  await changeTextField(page, '#arp-point-reviewer', 'Offline Browser Reviewer');
+  await changeTextField(page, '#arp-point-grower', 'Offline Browser Reviewer');
   await setFrame(page, 2);
-  assert(!await page.locator('#arp-point-anchor').isDisabled(),
+  assert(!await page.locator('#arp-point-interval-anchor').isDisabled(),
     'Initial-state audit did not allow a first-interval Anchor');
-  await page.locator('#arp-point-anchor').click();
+  await page.locator('#arp-point-interval-anchor').click();
   await page.waitForSelector(
     `[data-point-event-id="${fixture.initialEvent.event_id}"]`
       + '[data-point-role="representative-anchor"]',
   );
   assert(await page.locator('[data-point-label-id]').count() === 0,
     'Initial-state audit acquired semantic label rows');
-  const initialEvidence = await page.locator('#arp-point-evidence').evaluate(host => {
-    const terms = [...host.querySelectorAll('dt')];
-    return Object.fromEntries(terms.map(term => [
-      term.textContent.trim(),
-      term.nextElementSibling?.textContent.trim() || '',
-    ]));
-  });
-  assert(/^#3 /.test(initialEvidence['Interval Anchor']),
-    'Initial-state audit did not own the first-interval Anchor', initialEvidence);
+  const initialAnchor = await page.locator(
+    `[data-point-event-id="${fixture.initialEvent.event_id}"]`
+      + '[data-point-role="representative-anchor"]',
+  ).evaluate(marker => ({
+    title: marker.querySelector('title')?.textContent || '',
+    valid: marker.getAttribute('data-anchor-valid'),
+    start: marker.getAttribute('data-interval-start-index'),
+    end: marker.getAttribute('data-interval-end-index-exclusive'),
+  }));
+  assert(initialAnchor.valid === 'true' && initialAnchor.start === '0' &&
+    initialAnchor.title.includes('frame #3'),
+  'Initial-state audit did not own the first-interval Anchor', initialAnchor);
   checkpoint('initial-state audit owns the first segment without candidate or delta controls');
 
   await selectEvent(page, fixture.autoRejectEvent.event_id);
-  await changeTextField(page, '#arp-point-reviewer', 'Offline Browser Reviewer');
+  await changeTextField(page, '#arp-point-grower', 'Offline Browser Reviewer');
   await page.locator('#arp-point-candidate-decision').selectOption('rejected');
   await page.waitForFunction(
     () => /source evidence was preserved/i.test(
@@ -1082,12 +1121,10 @@ async function verifyStaticEditing(page, fixture, outputDir) {
 
   await setFrame(page, 5);
   await page.locator('#arp-point-add').click();
-  const firstPosthocId = (await page.locator('#arp-point-editor-heading').textContent())
-    .split(' · ').pop();
+  const firstPosthocId = await selectedEventId(page);
   await addLabel(page, 'reconstruction', 'appeared', 'c_six_by_two');
   await page.locator('#arp-point-add').click();
-  const secondPosthocId = (await page.locator('#arp-point-editor-heading').textContent())
-    .split(' · ').pop();
+  const secondPosthocId = await selectedEventId(page);
   await addLabel(page, 'reconstruction', 'disappeared', 'rt13');
   assert(firstPosthocId && secondPosthocId && firstPosthocId !== secondPosthocId,
     'Two posthoc events at one saved frame did not receive distinct IDs', {
@@ -1100,12 +1137,12 @@ async function verifyStaticEditing(page, fixture, outputDir) {
   const sameFrameState = await sameFrameInterval.evaluate(element => ({ ...element.dataset }));
   assert(sameFrameState.stateValid === 'true'
     && sameFrameState.stateReconstructions === 'c_six_by_two'
-    && sameFrameState.stateQuality === 'bad'
+    && sameFrameState.stateClarity === 'bad'
     && sameFrameState.boundaryEventIds.split('|').sort().join('|')
       === [firstPosthocId, secondPosthocId].sort().join('|'),
   'Same-frame events were not applied atomically into one complete state', sameFrameState);
   await setFrame(page, 5);
-  await page.locator('#arp-point-anchor').click();
+  await page.locator('#arp-point-interval-anchor').click();
   const sameFrameAnchor = page.locator(
     '[data-point-role="representative-anchor"][data-interval-start-index="5"]',
   );
@@ -1118,12 +1155,27 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     () => page.locator('#arp-point-export-json').click(),
   );
   const exported = JSON.parse(jsonText);
-  assert(exported.schema_version === 'rheed-point-events-v2',
+  assert(exported.schema_version === 'rheed-point-events-v3',
     'Unexpected point-event schema', exported.schema_version);
   assert(exported.document_type === 'ai4mbe_rheed_point_event_annotations',
     'Unexpected point-event document type');
   assert(!/equalizer/i.test(JSON.stringify(exported)),
-    'v2 point-event JSON still exposes Equalizer data');
+    'v3 point-event JSON still exposes Equalizer data');
+  assert(exported.annotation_set.reviewer === 'Offline Browser Reviewer',
+    'Export did not keep the Grower at annotation-set scope', exported.annotation_set);
+  for (const event of exported.events) {
+    assert(!Object.hasOwn(event.review, 'reviewer')
+      && !Object.hasOwn(event.review, 'confidence'),
+    'v3 event review leaked session-level reviewer/confidence fields', event.review);
+  }
+  for (const revision of exported.revisions) {
+    for (const snapshot of [revision.before, revision.after]) {
+      if (!snapshot) continue;
+      assert(!Object.hasOwn(snapshot.review, 'reviewer')
+        && !Object.hasOwn(snapshot.review, 'confidence'),
+      'v3 revision snapshot is not canonical for Python hashing', revision);
+    }
+  }
   assert(exported.dataset.dataset_id, 'Missing dataset identity');
   assert(/^[0-9a-f]{64}$/i.test(exported.dataset.source_archive_sha256),
     'Missing source-archive SHA-256');
@@ -1158,8 +1210,6 @@ async function verifyStaticEditing(page, fixture, outputDir) {
   assert(confirmed?.review.candidate_decision === 'confirmed',
     'Confirmed automatic candidate did not round-trip', confirmed);
   assert(confirmed.review.comment === '', 'Optional empty comment did not round-trip');
-  assert(confirmed.review.reviewer === 'Offline Browser Reviewer',
-    'Reviewer did not round-trip');
   assert(confirmed.review.anchor.frame_index === 4,
     'Dragged event diamond did not snap to frame 4', confirmed.review.anchor);
   assert(confirmed.review.representative_anchor?.frame_index === 5,
@@ -1206,8 +1256,8 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     && confirmedSegment.anchor?.frame_index === 5,
   'Confirmed event did not create the expected complete-state interval', confirmedSegment);
   assert(sameFrameSegment.start_frame_index === 6
-    && sameFrameSegment.end_frame_index_exclusive === 7
-    && sameFrameSegment.frame_count === 1
+    && sameFrameSegment.end_frame_index_exclusive === fixture.times.length + 1
+    && sameFrameSegment.frame_count === fixture.times.length - 5
     && sameFrameSegment.boundary_event_ids.slice().sort().join('|')
       === [firstPosthocId, secondPosthocId].sort().join('|')
     && sameFrameSegment.state.reconstructions.join('|') === 'c_six_by_two'
@@ -1229,7 +1279,7 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     && exported.revisions.some(item => item.action === 'move_anchor')
     && exported.revisions.some(item => item.action === 'move_representative_anchor')
     && exported.revisions.some(item => item.action === 'set_candidate_decision'),
-  'Expected v2 edits are missing from revision history',
+  'Expected v3 edits are missing from revision history',
   exported.revisions.map(item => item.action));
 
   const csvText = await downloadText(
@@ -1238,8 +1288,8 @@ async function verifyStaticEditing(page, fixture, outputDir) {
   );
   const csvRows = parseCsv(csvText);
   assert(csvRows.length === exported.segments.length
-    && csvRows.every(row => row.schema_version === 'rheed-point-events-v2'),
-  'CSV did not export one v2 row per derived interval', csvRows);
+    && csvRows.every(row => row.schema_version === 'rheed-point-events-v3'),
+  'CSV did not export one v3 row per derived interval', csvRows);
   const csvInitial = csvRows.find(row => row.start_frame_index === '1');
   assert(csvInitial?.end_frame_index_exclusive === '4'
     && csvInitial.frame_count === '3'
@@ -1258,7 +1308,7 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     && csvConfirmed.boundary_event_ids === fixture.autoConfirmEvent.event_id,
   'Confirmed complete-state interval failed CSV round-trip', csvConfirmed);
   const csvFinal = csvRows.find(row => row.start_frame_index === '6');
-  assert(csvFinal?.end_frame_index_exclusive === '7'
+  assert(csvFinal?.end_frame_index_exclusive === String(fixture.times.length + 1)
     && csvFinal.reconstruction_presence === 'c_six_by_two'
     && csvFinal.clarity === 'bad'
     && csvFinal.anchor_frame_index === '6'
@@ -1276,7 +1326,7 @@ async function verifyStaticEditing(page, fixture, outputDir) {
 
   page.once('dialog', dialog => dialog.accept());
   await page.locator('#arp-point-import').setInputFiles({
-    name: 'v2-roundtrip.json',
+    name: 'v3-roundtrip.json',
     mimeType: 'application/json',
     buffer: Buffer.from(jsonText),
   });
@@ -1290,12 +1340,34 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     () => page.locator('#arp-point-export-json').click(),
   ));
   assert(JSON.stringify(roundTrip.events) === JSON.stringify(exported.events),
-    'JSON import/export changed v2 events');
+    'JSON import/export changed v3 events');
   assert(JSON.stringify(roundTrip.initial_state) === JSON.stringify(exported.initial_state)
     && JSON.stringify(roundTrip.segments) === JSON.stringify(exported.segments),
   'JSON import/export changed materialized state intervals');
   assert(JSON.stringify(roundTrip.revisions) === JSON.stringify(exported.revisions),
-    'JSON import/export changed v2 revisions');
+    'JSON import/export changed v3 revisions');
+
+  const blankGrower = clone(exported);
+  blankGrower.annotation_set.reviewer = '';
+  await page.locator('#arp-point-import').setInputFiles({
+    name: 'blank-grower.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(blankGrower)),
+  });
+  await page.waitForFunction(
+    () => /Import failed:.*Grower is required/i.test(
+      document.querySelector('#arp-point-status')?.textContent || '',
+    ),
+  );
+
+  await changeTextField(page, '#arp-point-grower', '');
+  await page.locator('#arp-point-export-json').click();
+  await page.waitForFunction(
+    () => /Export blocked: enter the Grower name first/i.test(
+      document.querySelector('#arp-point-status')?.textContent || '',
+    ),
+  );
+  await changeTextField(page, '#arp-point-grower', 'Offline Browser Reviewer');
 
   const tamperedSegments = clone(exported);
   tamperedSegments.segments[0].state.clarity = 'good';
@@ -1339,7 +1411,7 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     `[data-point-event-list-id="${fixture.autoConfirmEvent.event_id}"]`,
   ).count() >= 1, 'Stable automatic-event ID was not restored from localStorage');
   await selectEvent(page, fixture.autoConfirmEvent.event_id);
-  assert(await page.locator('#arp-point-reviewer').inputValue()
+  assert(await page.locator('#arp-point-grower').inputValue()
     === 'Offline Browser Reviewer', 'Reviewer was not restored from localStorage');
   assert(await page.locator('[data-point-label-id]').count() === 3,
     'Edited semantic labels were not restored from localStorage');
@@ -1383,7 +1455,7 @@ async function verifyStaticEditing(page, fixture, outputDir) {
     }));
     assert(layout.overflow <= 2 && layout.trackWidth > 0 && layout.editorWidth > 0,
       `Responsive layout failed at ${width}px`, layout);
-    const screenshot = path.join(outputDir, `rheed-point-labeling-v2-${width}.png`);
+    const screenshot = path.join(outputDir, `rheed-point-labeling-v3-${width}.png`);
     await page.screenshot({ path: screenshot, fullPage: false });
     responsive.push({ width, ...layout, screenshot });
   }
@@ -1456,14 +1528,14 @@ async function main() {
     const result = {
       playwrightModule: moduleName,
       report: reportPath,
-      schema: 'rheed-point-events-v2',
+      schema: 'rheed-point-events-v3',
       staticResult,
       desktopResult,
       externalRequests,
       browserErrors,
     };
     fs.writeFileSync(
-      path.join(outputDir, 'rheed-point-labeling-v2-browser-verification.json'),
+      path.join(outputDir, 'rheed-point-labeling-v3-browser-verification.json'),
       `${JSON.stringify(result, null, 2)}\n`,
     );
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

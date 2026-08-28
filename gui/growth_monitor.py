@@ -896,6 +896,14 @@ class GrowthMonitor(QWidget):
         header.setStyleSheet("font-size: 11px; color: #888;")
         header.setWordWrap(True)
         layout.addWidget(header)
+        self._evap_source_status_label = QLabel(
+            "EvapControl source: unavailable"
+        )
+        self._evap_source_status_label.setStyleSheet(
+            "font-size: 11px; color: #888;"
+        )
+        self._evap_source_status_label.setWordWrap(True)
+        layout.addWidget(self._evap_source_status_label)
 
         _field_style = (
             "QFrame { border: 1px solid #555; } "
@@ -933,6 +941,20 @@ class GrowthMonitor(QWidget):
             cells_layout.addWidget(d)
             self._cell_displays.append(d)
         layout.addWidget(cells_group)
+
+        # Ch-MBE direct-log sources are separate from the numbered ADS cell
+        # widgets above. This preserves the verified elog source names without
+        # presenting an unverified ADS CellN -> material assignment as fact.
+        self._elog_source_displays: list = []
+        if self._cfg.elog_source_display:
+            elog_sources_group = QGroupBox("EvapControl log sources")
+            elog_sources_layout = QHBoxLayout(elog_sources_group)
+            for source_def in self._cfg.elog_source_display:
+                d = ValueDisplay(source_def["label"], "°C", 1)
+                d.setStyleSheet(_field_style)
+                elog_sources_layout.addWidget(d)
+                self._elog_source_displays.append(d)
+            layout.addWidget(elog_sources_group)
 
         # --- Plasma section: hidden by default; revealed when any
         #     plasma field is populated. ElogReader treats NaN as
@@ -1612,6 +1634,48 @@ class GrowthMonitor(QWidget):
 
     def update_evap_state(self, state: EvapControlState):
         self._latest_evap = state
+        source_status = str(getattr(state, "source_status", "unavailable") or "unavailable")
+        source_age_ms = getattr(state, "source_age_ms", None)
+        source_age = (
+            f"{source_age_ms / 1000.0:.1f} s old"
+            if source_age_ms is not None else "age unavailable"
+        )
+        attempt_source = str(
+            getattr(state, "attempt_source_at_utc", None) or "unknown source time"
+        )
+        if state.mode != "elog":
+            source_text = (
+                f"EvapControl source freshness: not available in {state.mode or 'unknown'} mode"
+            )
+            source_color = "#888"
+        elif getattr(state, "source_stale", False):
+            source_text = (
+                f"EvapControl source: STALE · {attempt_source} · {source_age}"
+            )
+            source_color = "#ff6b6b"
+        elif source_status in {"unchanged", "regressed"}:
+            source_text = (
+                "EvapControl source: waiting for a new record · "
+                f"{attempt_source} · {source_age} · {source_status}"
+            )
+            source_color = "#f0ad4e"
+        elif state.valid and source_status == "advanced":
+            source_text = (
+                f"EvapControl source: fresh · {attempt_source} · {source_age}"
+            )
+            source_color = "#4caf50"
+        elif state.error:
+            source_text = f"EvapControl source: unavailable · {state.error}"
+            source_color = "#ff6b6b"
+        else:
+            # Compatibility states from older/custom drivers have no source
+            # record contract. Never label them fresh based on values alone.
+            source_text = "EvapControl source freshness: unavailable"
+            source_color = "#888"
+        self._evap_source_status_label.setText(source_text)
+        self._evap_source_status_label.setStyleSheet(
+            f"font-size: 11px; color: {source_color};"
+        )
         # Monitor-tab pressure display (kept as-is; both screengrab
         # and elog modes source it).
         p = state.chamber_pressure_mbar
@@ -1632,14 +1696,28 @@ class GrowthMonitor(QWidget):
         connected = state.connected and state.valid
         # Cell displays: driven by EvapControlState fields when state_field
         # is set (O-MBE elog path). Ch-MBE cells have state_field=None and
-        # are updated from ads_cells in update_mistral_state() instead.
+        # are updated from ads_cells in update_mistral_state() instead, so an
+        # independent EvapControl tick must not clear those ADS-owned widgets.
         for display, cell_def in zip(self._cell_displays, self._cfg.cell_display):
             sf = cell_def.get("state_field")
-            val = getattr(state, sf, None) if (sf and connected) else None
+            if not sf:
+                continue
+            val = getattr(state, sf, None) if connected else None
             if val is None:
                 display.value.setText("---")
             else:
                 display.set_value(val)
+        for display, source_def in zip(
+            self._elog_source_displays, self._cfg.elog_source_display,
+        ):
+            value = (
+                getattr(state, source_def["state_field"], None)
+                if connected else None
+            )
+            if value is None:
+                display.value.setText("---")
+            else:
+                display.set_value(value)
         for display, value in (
             (self.substrate_pv_display,
              state.substrate_temp_pv_C if connected else None),
@@ -2871,6 +2949,18 @@ class GrowthMonitor(QWidget):
             "mistral_mode": mistral_mode,
             "evap_mode": self.config_evap_mode.currentText(),
             "pyrometer_mode": self.config_pyrometer_mode.currentText(),
+            "sensor_log_interval_s": float(
+                self.config_interval_spin.value()
+            ),
+            "heartbeat_interval_s": float(
+                self.config_heartbeat_interval_spin.value()
+            ),
+            "camera_timestamp_kind": "software_receive_not_exposure",
+            "rheed_gun_telemetry_available": False,
+            "rheed_gun_telemetry_fields": [],
+            "mistral_vi_semantics": (
+                "substrate_manipulator_heater_psu_not_rheed_gun"
+            ),
             # Record the effective serial settings, including user-editable
             # COM/baud values and chamber-bound transport fields.  These are
             # provenance only and do not authorize a setpoint change.
@@ -2929,6 +3019,14 @@ class GrowthMonitor(QWidget):
             d.value.setText("---")
         for d in self._cell_displays:
             d.value.setText("---")
+        for d in self._elog_source_displays:
+            d.value.setText("---")
+        self._evap_source_status_label.setText(
+            "EvapControl source: unavailable"
+        )
+        self._evap_source_status_label.setStyleSheet(
+            "font-size: 11px; color: #888;"
+        )
         self.plasma_group.setVisible(False)
         self.rheed_image_label.clear()
         self.reconnect_rheed_btn.hide()

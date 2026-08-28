@@ -13,7 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QMessageBox  # noqa: E402
-from gui.rheed_point_events import make_review_anchor, sha256_file  # noqa: E402
+from gui.rheed_point_events import make_review_anchor  # noqa: E402
 from tests.test_events_tab import EventFixture, _app  # noqa: E402
 
 
@@ -22,27 +22,22 @@ class EditableEventLabelTests(EventFixture):
         super().setUp()
         self.attach_and_select()
 
-    def test_reconstruction_clarity_and_quality_autosave_independently(self) -> None:
+    def test_reconstruction_and_clarity_autosave_independently(self) -> None:
         with patch.object(QMessageBox, "warning") as warning:
             rt13 = self.tab._reconstruction_change_combos["rt13"]
             rt13.setCurrentIndex(rt13.findData("appeared"))
             self.tab._clarity_combo.setCurrentIndex(
                 self.tab._clarity_combo.findData("good")
             )
-            self.tab._quality_combo.setCurrentIndex(
-                self.tab._quality_combo.findData("bad")
-            )
         self.assertFalse(warning.called, warning.call_args)
 
         state = self.store.get(self.event_id)
         labels = state["review"]["labels"]
-        self.assertEqual(len(labels), 3)
+        self.assertEqual(len(labels), 2)
         reconstruction = next(item for item in labels if item["kind"] == "reconstruction")
         clarity = next(item for item in labels if item["kind"] == "pattern_clarity")
-        quality = next(item for item in labels if item["kind"] == "surface_quality")
         self.assertEqual((reconstruction["change"], reconstruction["value"]), ("appeared", "rt13"))
         self.assertEqual((clarity["change"], clarity["value"]), ("became", "good"))
-        self.assertEqual((quality["change"], quality["value"]), ("became", "bad"))
 
         rt13.setCurrentIndex(rt13.findData(""))
         edited = self.store.get(self.event_id)["review"]["labels"]
@@ -59,7 +54,7 @@ class EditableEventLabelTests(EventFixture):
 
         self.tab._clarity_combo.setCurrentIndex(self.tab._clarity_combo.findData(""))
         remaining = self.store.get(self.event_id)["review"]["labels"]
-        self.assertEqual(len(remaining), 2)
+        self.assertEqual(len(remaining), 1)
         self.assertFalse(any(item["kind"] == "pattern_clarity" for item in remaining))
 
     def test_labeler_identity_is_entered_once_for_session(self) -> None:
@@ -74,8 +69,13 @@ class EditableEventLabelTests(EventFixture):
         state = self.store.get(self.event_id)
         self.assertEqual(state["source"], original)
         self.assertEqual(state["review"]["anchor"]["capture_sequence"], "101")
+        self.assertEqual(state["review"]["anchor"]["image_sha256"], "")
         self.assertEqual(
-            state["review"]["anchor"]["image_sha256"], sha256_file(self.frames[1]),
+            state["review"]["anchor"]["session_identity"], self.session_dir.name,
+        )
+        self.assertEqual(
+            state["review"]["anchor"]["archive_member"],
+            self.frames[1].relative_to(self.session_dir).as_posix(),
         )
 
     def test_representative_anchor_belongs_to_derived_interval(self) -> None:
@@ -102,9 +102,11 @@ class EditableEventLabelTests(EventFixture):
 class InitialAssumptionUiTests(EventFixture):
     def test_initial_one_by_one_is_a_state_not_an_appearance_event(self) -> None:
         first_anchor = make_review_anchor(
-            frame_path=self.frames[0], image_sha256=sha256_file(self.frames[0]),
+            frame_path=self.frames[0],
             capture_sequence=100, captured_at_utc="2026-08-20T12:00:10+00:00",
             elapsed_s=0.0, view_segment_id=1, capture_geometry_id="geometry-a",
+            session_identity=self.session_dir.name, frame_index=1,
+            archive_member=self.frames[0].relative_to(self.session_dir).as_posix(),
         )
         initial = self.store.ensure_initial_assumption(
             actor="session", session_identity=self.session_dir.name,
@@ -122,15 +124,10 @@ class InitialAssumptionUiTests(EventFixture):
         self.assertEqual(initial["review"]["labels"], [])
         self.assertIn("Initial state is not an appearance event", self.tab._completion_help.text())
         self.assertFalse(self.tab._clarity_combo.isEnabled())
-        self.assertEqual(self.tab._clarity_combo.currentData(), "bad")
-        self.tab._quality_combo.setCurrentIndex(
-            self.tab._quality_combo.findData("good")
-        )
+        self.assertEqual(self.tab._clarity_combo.currentData(), "")
+        self.assertFalse(hasattr(self.tab, "_quality_combo"))
         labels = self.store.get(initial["event_id"])["review"]["labels"]
-        self.assertEqual(
-            [(item["kind"], item["value"]) for item in labels],
-            [("surface_quality", "good")],
-        )
+        self.assertEqual(labels, [])
 
 
 if __name__ == "__main__":

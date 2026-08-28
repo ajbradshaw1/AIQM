@@ -230,7 +230,7 @@ class LoopbackReportService:
     def append_revision(self, payload: Mapping[str, object]) -> dict[str, object]:
         if str(payload.get("action", "")) == "set_equalizer":
             raise ValueError(
-                "Equalizer is not part of rheed-point-events-v2"
+                "Equalizer is not part of rheed-point-events-v3"
             )
         callback = self._revision_callback
         if callback is None:
@@ -260,6 +260,16 @@ class LoopbackReportService:
         document = payload.get("document")
         if not isinstance(document, Mapping):
             raise ValueError("Draft import requires one annotation document")
+        # The loopback endpoint is a write path.  Old v2 exports may be
+        # validated separately as evidence, but must never reach a current
+        # sidecar callback where they could be rewritten as v3.
+        from .point_events import SCHEMA_VERSION
+
+        if document.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError(
+                "Only rheed-point-events-v3 Drafts are editable; legacy "
+                "point-event documents are read-only evidence"
+            )
         result = callback(document)
         canonical = json.loads(json.dumps(result, allow_nan=False))
         if not isinstance(canonical, dict):

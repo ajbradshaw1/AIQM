@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .annotation_validation import validate_annotation_document
+from .point_events import SCHEMA_VERSION as POINT_EVENT_SCHEMA, V2_SCHEMA_VERSION
 from .report_builder import build_report, load_report_payload
 from .session_archive import load_session_archive, read_raw_frame
 
@@ -35,7 +36,9 @@ def _validate(args: argparse.Namespace) -> int:
     payload = load_report_payload(args.report)
     document = json.loads(args.annotations.read_text(encoding="utf-8"))
     validated = validate_annotation_document(document, payload)
-    is_point = validated.get("schema_version") == "rheed-point-events-v2"
+    is_point = validated.get("schema_version") in {
+        POINT_EVENT_SCHEMA, V2_SCHEMA_VERSION,
+    }
     print(json.dumps({
         "valid": True,
         "dataset_id": validated["dataset"]["dataset_id"],

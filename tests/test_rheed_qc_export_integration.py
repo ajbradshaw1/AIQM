@@ -11,22 +11,22 @@ from typing import Mapping
 import numpy as np
 
 GUI_ROOT = Path(__file__).resolve().parent.parent
+if str(GUI_ROOT) not in sys.path:
+    sys.path.insert(0, str(GUI_ROOT))
+
+from gui.classifier_repository import (  # noqa: E402
+    classifier2_directory,
+    resolve_ai_repo_root,
+)
+from gui.growth_logger import GrowthLogger  # noqa: E402
 
 
-def _classifier2_root_from_repo(repo_root: Path) -> Path | None:
-    """Return a supported Classifier2 layout below a perception repo root."""
-    candidates = (
-        repo_root / "Classifier2",
-        repo_root / "src" / "classifiers" / "classifier2",
-    )
-    return next(
-        (
-            candidate.resolve()
-            for candidate in candidates
-            if (candidate / "global_qc_data.py").is_file()
-        ),
-        None,
-    )
+def _workspace_root(gui_root: Path) -> Path | None:
+    """Return the marked workspace containing *gui_root*, if one exists."""
+    for candidate in (gui_root, *gui_root.parents):
+        if (candidate / "workspace" / "repos.lock.yaml").is_file():
+            return candidate
+    return None
 
 
 def _resolve_classifier2_root(
@@ -42,46 +42,31 @@ def _resolve_classifier2_root(
     Only a genuinely standalone GUI checkout may skip this cross-repo test.
     """
     environment = os.environ if environ is None else environ
-    if "AI_REPO_ROOT" in environment:
-        configured = environment["AI_REPO_ROOT"].strip()
-        if not configured:
-            raise FileNotFoundError("AI_REPO_ROOT is set but empty")
-        repo_root = Path(configured).expanduser()
-        classifier2_root = _classifier2_root_from_repo(repo_root)
-        if classifier2_root is None:
-            raise FileNotFoundError(
-                "AI_REPO_ROOT does not contain Classifier2/global_qc_data.py: "
-                f"{repo_root}"
-            )
-        return classifier2_root
-
-    for candidate_root in (gui_root, *gui_root.parents):
-        workspace_lock = candidate_root / "workspace" / "repos.lock.yaml"
-        if not workspace_lock.is_file():
-            continue
-        perception_root = candidate_root / "repos" / "rheed-perception"
-        classifier2_root = _classifier2_root_from_repo(perception_root)
-        if classifier2_root is None:
-            raise FileNotFoundError(
-                "Migrated workspace is missing "
-                "repos/rheed-perception/Classifier2/global_qc_data.py: "
-                f"{candidate_root}"
-            )
-        return classifier2_root
-
-    legacy_repo_root = gui_root.parent / "RHEEDClassify"
-    classifier2_root = _classifier2_root_from_repo(legacy_repo_root)
-    if classifier2_root is not None:
-        return classifier2_root
-    raise unittest.SkipTest(
-        "Classifier2 is unavailable for this standalone GUI checkout; "
-        "set AI_REPO_ROOT to enable the cross-repository integration test"
-    )
-
-
-if str(GUI_ROOT) not in sys.path:
-    sys.path.insert(0, str(GUI_ROOT))
-from gui.growth_logger import GrowthLogger  # noqa: E402
+    workspace_root = _workspace_root(gui_root)
+    try:
+        repository = resolve_ai_repo_root(
+            environ=environment,
+            instrument_root=gui_root,
+            legacy_roots=(gui_root.parent / "RHEEDClassify",),
+        )
+        classifier2_root = classifier2_directory(repository)
+    except FileNotFoundError:
+        # Explicit configuration and marked workspaces are operational
+        # contracts, so a broken checkout must fail instead of hiding behind
+        # a skip. Only a genuinely standalone checkout may omit Classifier2.
+        if "AI_REPO_ROOT" in environment or workspace_root is not None:
+            raise
+        raise unittest.SkipTest(
+            "Classifier2 is unavailable for this standalone GUI checkout; "
+            "set AI_REPO_ROOT to enable the cross-repository integration test"
+        ) from None
+    exporter = classifier2_root / "global_qc_data.py"
+    if not exporter.is_file():
+        raise FileNotFoundError(
+            f"Resolved Classifier2 checkout has no global_qc_data.py: "
+            f"{classifier2_root}"
+        )
+    return classifier2_root
 
 
 def _frame(value: int) -> np.ndarray:
@@ -115,6 +100,10 @@ class Classifier2RootLocatorTests(unittest.TestCase):
     def _create_classifier2(repo_root: Path) -> Path:
         classifier2_root = repo_root / "Classifier2"
         classifier2_root.mkdir(parents=True)
+        (classifier2_root / "evaluate.py").write_text(
+            "# resolver sentinel\n",
+            encoding="utf-8",
+        )
         (classifier2_root / "global_qc_data.py").write_text(
             "# locator sentinel\n",
             encoding="utf-8",

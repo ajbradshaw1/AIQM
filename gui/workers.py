@@ -904,6 +904,27 @@ class RheedCameraWorker(QThread):
         self.running = True
         self._camera = None
 
+    @property
+    def sensor_settings_at_connect(self) -> dict:
+        """Defensive copy of the direct camera's open-time settings.
+
+        Screengrab and dummy drivers expose no hardware feature snapshot and
+        therefore return an empty mapping.  The Vimba driver deliberately
+        retains its snapshot after disconnect so session shutdown can still
+        persist it.
+        """
+        try:
+            settings = getattr(
+                self._camera, "sensor_settings_at_connect", None,
+            )
+            return deepcopy(settings or {})
+        except Exception as exc:  # noqa: BLE001 — provenance is non-fatal
+            log.warning(
+                "RHEED camera-open settings unavailable during shutdown: %s",
+                exc,
+            )
+            return {}
+
     def run(self):
         """Main worker loop — connect camera and emit frames."""
         backend = {
@@ -972,13 +993,16 @@ class RheedCameraWorker(QThread):
                 state.intensity = _frame_luminance(frame)
                 state.connected = True
                 state.error = ""
-                state.capture_geometry_id = str(
-                    getattr(
-                        self._camera,
-                        "capture_geometry_id",
-                        f"{self.mode}:full-frame",
-                    )
+                geometry_id = getattr(
+                    self._camera, "capture_geometry_id", None,
                 )
+                if geometry_id is None and self.mode not in {"vimba", "direct"}:
+                    geometry_id = f"{self.mode}:full-frame"
+                # Direct Vimba geometry is safety/provenance-critical. If the
+                # driver could not prove every spatial readback, propagate an
+                # empty ID; dimensions alone must never become a fabricated
+                # full-frame identity.
+                state.capture_geometry_id = str(geometry_id or "")
                 capture = getattr(self._camera, "last_capture", None)
                 if capture is not None:
                     state.capture_backend = capture.backend
@@ -1562,21 +1586,72 @@ class EvapControlWorker(QThread):
                 state.cell_Sr_pv_C = vals.get("cell_Sr_pv_C")
                 state.cell_Eu_pv_C = vals.get("cell_Eu_pv_C")
                 state.cell_Er_pv_C = vals.get("cell_Er_pv_C")
+                state.cell_Fe_pv_C = vals.get("cell_Fe_pv_C")
+                state.cell_Te_pv_C = vals.get("cell_Te_pv_C")
+                state.cell_Se_pv_C = vals.get("cell_Se_pv_C")
                 state.plasma_dc_bias_V = vals.get("plasma_dc_bias_V")
                 state.plasma_forward_W = vals.get("plasma_forward_W")
                 state.plasma_reflected_W = vals.get("plasma_reflected_W")
                 state.connected = True
+                # ElogReader exposes the source record inspected by this
+                # attempt separately from the latest accepted sample.  Older
+                # compatible drivers do not implement these properties and
+                # retain their historical value-based success behavior.
+                tracks_source_records = hasattr(
+                    self._driver, "source_record_advanced",
+                )
+                attempt_source_at_utc = getattr(
+                    self._driver, "last_source_at_utc", None,
+                )
+                state.attempt_source_at_utc = attempt_source_at_utc
+                state.source_age_ms = getattr(
+                    self._driver, "last_source_age_ms", None,
+                )
+                state.source_record_advanced = bool(getattr(
+                    self._driver, "source_record_advanced", False,
+                ))
+                state.source_stale = bool(getattr(
+                    self._driver, "source_stale", False,
+                ))
+                state.source_status = str(getattr(
+                    self._driver,
+                    "source_status",
+                    "untracked" if not tracks_source_records else "unavailable",
+                ) or "unavailable")
                 succeeded = False
-                if any(value is not None for value in vals.values()):
+                has_values = any(value is not None for value in vals.values())
+                source_is_new = (
+                    not tracks_source_records
+                    or (
+                        state.source_record_advanced
+                        and not state.source_stale
+                    )
+                )
+                if has_values and source_is_new:
                     state.error = ""
                     completed_ns = _mark_sample_received(
                         state,
                         read_started_ns,
-                        source_at_utc=getattr(
-                            self._driver, "last_source_at_utc", None,
-                        ),
+                        source_at_utc=attempt_source_at_utc,
                     )
                     succeeded = True
+                elif has_values and state.source_stale:
+                    age_text = (
+                        f"{state.source_age_ms / 1000.0:.1f}s"
+                        if state.source_age_ms is not None else "unknown age"
+                    )
+                    completed_ns = _mark_read_failed(
+                        state,
+                        f"EvapControl source record is stale ({age_text})",
+                        read_started_ns,
+                    )
+                elif has_values and tracks_source_records:
+                    completed_ns = _mark_read_failed(
+                        state,
+                        "EvapControl source record did not advance "
+                        f"({state.source_status})",
+                        read_started_ns,
+                    )
                 else:
                     completed_ns = _mark_read_failed(
                         state, "read returned no EvapControl values", read_started_ns,
@@ -1618,7 +1693,12 @@ class EvapControlWorker(QThread):
                 if self._chamber_config is not None
                 else self.log_dir
             )
-            return ElogReader(log_dir=log_dir or None)
+            var_map = (
+                getattr(self._chamber_config, "evap_elog_var_map", None)
+                if self._chamber_config is not None
+                else None
+            )
+            return ElogReader(log_dir=log_dir or None, var_map=var_map)
         else:
             from drivers.evap_control import DummyEvapControl
             return DummyEvapControl()

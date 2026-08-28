@@ -43,9 +43,17 @@ class MBESystemConfig:
     mistral_mode_default: str = "screengrab"
     evap_mode_default: str = "elog"
 
-    # EvapControl log directory passed to ElogReader.
-    # Empty string = ElogReader uses its built-in multi-path auto-detect.
+    # EvapControl direct-read configuration. ``evap_elog_var_map`` maps
+    # EvapControl variable names to EvapControlState fields. ``None`` keeps
+    # ElogReader's O-MBE default map. Empty ``evap_log_dir`` keeps the
+    # reader's built-in multi-path auto-detect.
     evap_log_dir: str = ""
+    evap_elog_var_map: Optional[dict[str, str]] = None
+
+    # Chamber-specific direct-log displays. These stay separate from
+    # ``cell_display`` because that list also labels ADS Cell1..Cell7; keeping
+    # them separate avoids implying an unverified ADS-to-material mapping.
+    elog_source_display: list = field(default_factory=list)
 
     # Effusion cell display entries for the Direct-read tab.
     # Each dict:
@@ -213,6 +221,19 @@ CHALCOGENIDE_MBE = MBESystemConfig(
     # ElogReader safely leaves fields absent from this chamber blank.
     evap_mode_default="elog",
     evap_log_dir=r"C:\evap_control_1.2.0.48\log",
+    # Verified on Omicron 2026-08-05 against the live Ch-MBE .elo schema.
+    evap_elog_var_map={
+        "MBE.Pressure": "chamber_pressure_mbar",
+        "Manipulator.PV": "substrate_temp_pv_C",
+        "HTEZ_Fe.PV": "cell_Fe_pv_C",
+        "NTEZ1_Te.PV": "cell_Te_pv_C",
+        "NTEZ2_Se.PV": "cell_Se_pv_C",
+    },
+    elog_source_display=[
+        {"label": "Fe (HTEZ)", "state_field": "cell_Fe_pv_C"},
+        {"label": "Te (NTEZ1)", "state_field": "cell_Te_pv_C"},
+        {"label": "Se (NTEZ2)", "state_field": "cell_Se_pv_C"},
+    ],
     # Cell1 = manipulator (substrate heater — confirmed Jul 22 2026).
     # Cell2–7 physical mapping (Fe/Se/Te cracker) pending Jiangang
     # confirmation. state_field=None: these come from ADS, not elog.

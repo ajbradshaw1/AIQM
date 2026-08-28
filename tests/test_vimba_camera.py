@@ -182,6 +182,22 @@ class FakeCamera:
         )
         self.ExposureAuto = FakeSettable(initial_value="Off")
         self.AcquisitionFrameRateLimit = FakeSettable(initial_value=3.3323)
+        # Spatial GenICam readbacks used to bind every frame to a proven
+        # sensor ROI. Tests override individual nodes to exercise cropped and
+        # unreadable geometries; these defaults describe the full fake sensor.
+        self.PixelFormat = FakeSettable(initial_value="Mono12")
+        self.Width = FakeSettable(initial_value=656)
+        self.Height = FakeSettable(initial_value=492)
+        self.WidthMax = FakeSettable(initial_value=656)
+        self.HeightMax = FakeSettable(initial_value=492)
+        self.OffsetX = FakeSettable(initial_value=0)
+        self.OffsetY = FakeSettable(initial_value=0)
+        self.BinningHorizontal = FakeSettable(initial_value=1)
+        self.BinningVertical = FakeSettable(initial_value=1)
+        self.DecimationHorizontal = FakeSettable(initial_value=1)
+        self.DecimationVertical = FakeSettable(initial_value=1)
+        self.ReverseX = FakeSettable(initial_value=False)
+        self.ReverseY = FakeSettable(initial_value=False)
         self.TriggerSoftware = FakeTriggerSoftware(self)
 
         self.handler = None
@@ -1055,6 +1071,265 @@ def test_read_mode_performs_zero_configuration_writes() -> None:
         cam.disconnect()
     finally:
         uninstall_fake_vmbpy()
+
+
+def test_camera_open_settings_snapshot_is_read_only_and_survives_disconnect() -> None:
+    """A successful fake Vimba open records image-affecting provenance.
+
+    Optional feature failures stay non-fatal, and callers only receive a
+    defensive copy.  No instrument or real SDK is involved.
+    """
+    class _UnreadableFeature:
+        @staticmethod
+        def get():
+            raise RuntimeError("optional feature unreadable")
+
+    try:
+        fake_cam = install_fake_vmbpy()
+        fake_cam.GainRaw = FakeSettable(initial_value=17)
+        fake_cam.BlackLevel = FakeSettable(initial_value=35.0)
+        fake_cam.Gamma = _UnreadableFeature()
+        fake_cam.PixelFormat = FakeSettable(initial_value="Mono12")
+        fake_cam.Width = FakeSettable(initial_value=656)
+        fake_cam.Height = FakeSettable(initial_value=492)
+        fake_cam.GevTimestampTickFrequency = FakeSettable(
+            initial_value=1_000_000_000,
+        )
+        fake_cam.DeviceSerialNumber = FakeSettable(
+            initial_value="50-0503464907",
+        )
+        fake_cam.DeviceFirmwareVersion = FakeSettable(
+            initial_value="00.01.44",
+        )
+
+        from drivers.rheed_camera import VmbCamera
+        camera = VmbCamera(
+            trigger_hz=100.0,
+            access_mode="full",
+            apply_palette=False,
+        )
+        camera.connect()
+        try:
+            snapshot = camera.sensor_settings_at_connect
+            assert snapshot["access_mode"] == "full"
+            assert snapshot["read_at_utc"].endswith("Z")
+            assert snapshot["exposure_us"] == 300_000.0
+            assert snapshot["exposure_us_feature"] == "ExposureTimeAbs"
+            assert snapshot["gain"] == 17
+            assert snapshot["gain_feature"] == "GainRaw"
+            assert snapshot["black_level"] == 35.0
+            assert snapshot["pixel_format"] == "Mono12"
+            assert snapshot["width"] == 656
+            assert snapshot["height"] == 492
+            assert snapshot["width_max"] == 656
+            assert snapshot["height_max"] == 492
+            assert snapshot["offset_x"] == 0
+            assert snapshot["offset_y"] == 0
+            assert snapshot["binning_horizontal"] == 1
+            assert snapshot["binning_vertical"] == 1
+            assert snapshot["decimation_horizontal"] == 1
+            assert snapshot["decimation_vertical"] == 1
+            assert snapshot["geometry_readback_complete"] is True
+            assert snapshot["full_frame_confirmed"] is True
+            assert snapshot["capture_geometry"]["capture_region"] == "full_frame"
+            assert snapshot["capture_geometry_id"].startswith(
+                "vimba-geometry-v1:sha256:"
+            )
+            assert camera.capture_geometry_id == snapshot["capture_geometry_id"]
+            assert snapshot["timestamp_tick_frequency_hz"] == 1_000_000_000
+            assert snapshot["device_serial"] == "50-0503464907"
+            assert snapshot["device_firmware"] == "00.01.44"
+            assert "gamma" not in snapshot
+
+            snapshot["gain"] = -1
+            snapshot["capture_geometry"]["fields"]["offset_x"] = 99
+            assert camera.sensor_settings_at_connect["gain"] == 17
+            assert (
+                camera.sensor_settings_at_connect["capture_geometry"]["fields"][
+                    "offset_x"
+                ]
+                == 0
+            )
+        finally:
+            camera.disconnect()
+
+        assert camera.sensor_settings_at_connect["device_serial"] == (
+            "50-0503464907"
+        )
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_raw_exposure_is_not_labeled_as_microseconds() -> None:
+    """ExposureTimeRaw remains unitless provenance, never exposure_us."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        del fake_cam.ExposureTimeAbs
+        fake_cam.ExposureTimeRaw = FakeSettable(initial_value=12_345)
+        from drivers.rheed_camera import VmbCamera
+
+        camera = VmbCamera(
+            trigger_hz=100.0,
+            access_mode="full",
+            apply_palette=False,
+            exposure_us=None,
+        )
+        camera.connect()
+        try:
+            snapshot = camera.sensor_settings_at_connect
+            assert "exposure_us" not in snapshot
+            assert snapshot["feature_read_status"]["exposure_us"]["status"] == (
+                "not_exposed"
+            )
+            assert snapshot["exposure_raw"] == 12_345
+            assert snapshot["exposure_raw_feature"] == "ExposureTimeRaw"
+        finally:
+            camera.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_capture_geometry_id_changes_when_only_offset_changes() -> None:
+    """Equal output dimensions do not hide a shifted sensor ROI."""
+
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+
+        camera = VmbCamera(
+            trigger_hz=100.0, access_mode="full", apply_palette=False,
+        )
+        camera.connect()
+        first = camera.sensor_settings_at_connect
+        camera.disconnect()
+
+        fake_cam.OffsetX.value = 8
+        camera.connect()
+        try:
+            shifted = camera.sensor_settings_at_connect
+            assert first["width"] == shifted["width"] == 656
+            assert first["height"] == shifted["height"] == 492
+            assert first["capture_geometry_id"] != shifted["capture_geometry_id"]
+            assert shifted["capture_geometry"]["capture_region"] == "roi"
+            assert shifted["full_frame_confirmed"] is False
+        finally:
+            camera.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_failed_reconnect_cannot_republish_previous_geometry() -> None:
+    """A failed new cycle clears the prior successful driver's snapshot."""
+
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+
+        camera = VmbCamera(
+            trigger_hz=100.0, access_mode="full", apply_palette=False,
+        )
+        camera.connect()
+        assert camera.capture_geometry_id
+        camera.disconnect()
+
+        fake_cam.refuse_full_on_set_access_mode = True
+        try:
+            camera.connect()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("expected the fake reconnect to fail")
+        assert camera.sensor_settings_at_connect == {}
+        assert camera.capture_geometry_id == ""
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_unreadable_geometry_is_explicit_and_never_full_frame() -> None:
+    """A present-but-unreadable offset fails closed without blocking ARM."""
+
+    class _UnreadableFeature:
+        @staticmethod
+        def get():
+            raise RuntimeError("offset readback unavailable")
+
+    try:
+        fake_cam = install_fake_vmbpy()
+        fake_cam.OffsetX = _UnreadableFeature()
+        from drivers.rheed_camera import VmbCamera
+
+        camera = VmbCamera(
+            trigger_hz=100.0, access_mode="full", apply_palette=False,
+        )
+        camera.connect()
+        try:
+            snapshot = camera.sensor_settings_at_connect
+            assert snapshot["feature_read_status"]["offset_x"]["status"] == (
+                "unreadable"
+            )
+            assert snapshot["geometry_readback_complete"] is False
+            assert snapshot["capture_geometry_id"] == ""
+            assert snapshot["capture_geometry"]["capture_region"] == "unknown"
+            assert snapshot["full_frame_confirmed"] is False
+            assert camera.capture_geometry_id == ""
+        finally:
+            camera.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_missing_geometry_node_is_incomplete_not_an_assumed_default() -> None:
+    """A missing OffsetX node is not proof that the sensor offset is zero."""
+
+    try:
+        fake_cam = install_fake_vmbpy()
+        del fake_cam.OffsetX
+        from drivers.rheed_camera import VmbCamera
+
+        camera = VmbCamera(
+            trigger_hz=100.0, access_mode="full", apply_palette=False,
+        )
+        camera.connect()
+        try:
+            snapshot = camera.sensor_settings_at_connect
+            assert snapshot["feature_read_status"]["offset_x"]["status"] == (
+                "not_exposed"
+            )
+            assert snapshot["geometry_readback_complete"] is False
+            assert snapshot["capture_geometry_id"] == ""
+            assert snapshot["full_frame_confirmed"] is False
+        finally:
+            camera.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_worker_forwards_a_defensive_camera_settings_copy() -> None:
+    from gui.workers import RheedCameraWorker
+
+    driver_settings = {"gain": 7, "read_at_utc": "2026-08-28T12:00:00Z"}
+    worker = RheedCameraWorker(mode="dummy")
+    worker._camera = types.SimpleNamespace(
+        sensor_settings_at_connect=driver_settings,
+    )
+
+    forwarded = worker.sensor_settings_at_connect
+    forwarded["gain"] = 99
+    assert driver_settings["gain"] == 7
+    assert worker.sensor_settings_at_connect["gain"] == 7
+
+
+def test_worker_camera_settings_provenance_failure_is_nonfatal() -> None:
+    from gui.workers import RheedCameraWorker
+
+    class BrokenProvenanceCamera:
+        @property
+        def sensor_settings_at_connect(self):
+            raise RuntimeError("optional provenance failed")
+
+    worker = RheedCameraWorker(mode="dummy")
+    worker._camera = BrokenProvenanceCamera()
+    assert worker.sensor_settings_at_connect == {}
 
 
 
@@ -2358,6 +2633,13 @@ TESTS = [
     test_read_mode_frame_not_yet_error_includes_read_context,
     test_full_mode_get_access_mode_raise_propagates,
     test_read_mode_performs_zero_configuration_writes,
+    test_camera_open_settings_snapshot_is_read_only_and_survives_disconnect,
+    test_capture_geometry_id_changes_when_only_offset_changes,
+    test_failed_reconnect_cannot_republish_previous_geometry,
+    test_unreadable_geometry_is_explicit_and_never_full_frame,
+    test_missing_geometry_node_is_incomplete_not_an_assumed_default,
+    test_worker_forwards_a_defensive_camera_settings_copy,
+    test_worker_camera_settings_provenance_failure_is_nonfatal,
 ]
 
 

@@ -1953,6 +1953,34 @@ class ManualEventSchemaTests(unittest.TestCase):
         self.assertEqual(GrowthLogger.MANUAL_EVENT_FIELDS[2], "event_idx")
 
 
+class ChMbeElogSensorSchemaTests(unittest.TestCase):
+    """Verified Ch-MBE material-source values are preserved in sensor CSV."""
+
+    def test_chmbe_elog_sources_have_dedicated_columns(self):
+        expected = ("cell_Fe_pv_C", "cell_Te_pv_C", "cell_Se_pv_C")
+        for column in expected:
+            self.assertIn(column, GrowthLogger.SENSOR_FIELDS)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = GrowthLogger(base_dir=tmp)
+            logger.start_session("TEST_CHMBE_ELOG")
+            logger.log_sensors(
+                pyro_temp=None,
+                elapsed_s=1.0,
+                cell_Fe_pv_C=1140.1,
+                cell_Te_pv_C=320.2,
+                cell_Se_pv_C=280.3,
+            )
+            logger.end_session()
+
+            with open(logger.session_dir / "sensor_log.csv", newline="") as f:
+                row = next(csv.DictReader(f))
+
+        self.assertEqual(row["cell_Fe_pv_C"], "1140.1")
+        self.assertEqual(row["cell_Te_pv_C"], "320.2")
+        self.assertEqual(row["cell_Se_pv_C"], "280.3")
+
+
 class AdsSensorSchemaTests(unittest.TestCase):
     """Tests for the Jul 27 2026 ADS union schema in SENSOR_FIELDS.
 

@@ -9,6 +9,10 @@ const playwright = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const report = path.resolve(process.argv[2] || '');
 if (!fs.existsSync(report)) throw new Error(`Report not found: ${report}`);
 const root = path.dirname(report);
+const reportHtml = fs.readFileSync(report, 'utf8');
+const reportConfigMatch = reportHtml.match(/\s+const config = (\{[^\r\n]+\});\r?\n/);
+if (!reportConfigMatch) throw new Error('Could not locate embedded report config');
+const reportConfig = JSON.parse(reportConfigMatch[1]);
 const reviewImages = path.join(root, 'images');
 const retainedFrameIndices = fs.readdirSync(reviewImages)
   .map(name => /^frame_(\d+)\.webp$/i.exec(name))
@@ -22,6 +26,7 @@ let desktopVerification = 'pending';
 let desktopRevisionRequests = 0;
 const desktopEvents = [];
 const desktopRevisions = [];
+let activeBrowser = null;
 
 function sendJson(response, status, value) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -138,7 +143,7 @@ const server = http.createServer((request, response) => {
       const eventId = `00000000-0000-4000-8000-${String(desktopRevisionRequests).padStart(12, '0')}`;
       const revisionId = `10000000-0000-4000-8000-${String(desktopRevisionRequests).padStart(12, '0')}`;
       const event = {
-        schema: 'rheed-point-events-v2',
+        schema: 'rheed-point-events-v3',
         event_id: eventId,
         source: {
           kind: 'posthoc',
@@ -168,7 +173,7 @@ const server = http.createServer((request, response) => {
         revision_id: revisionId,
       };
       const revision = {
-        schema_version: 'rheed-point-events-v2',
+        schema_version: 'rheed-point-events-v3',
         revision_id: revisionId,
         base_revision_id: command.base_revision_id || '',
         actor: command.actor,
@@ -209,6 +214,7 @@ const server = http.createServer((request, response) => {
     headless: true,
     executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined,
   });
+  activeBrowser = browser;
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
@@ -239,13 +245,19 @@ const server = http.createServer((request, response) => {
       Node.DOCUMENT_POSITION_FOLLOWING),
   }));
   if (!facts.grower || facts.oldSave || facts.oldReviewer || facts.oldConfidence ||
-      facts.initialQualityButtons !== 2 || facts.qualityButtons !== 2 ||
+      facts.initialQualityButtons !== 0 || facts.qualityButtons !== 0 ||
       !facts.intervalAnchor || facts.visiblePhysicalEvents !== 0 || !facts.commandAfterTrack ||
       !facts.commandBeforeWorkspace || facts.addNativeDisabled || facts.evidenceTag !== 'DETAILS' ||
       facts.contextTag !== 'DETAILS' || !facts.labelsBeforeNote || errors.length) {
     throw new Error(JSON.stringify({ facts, errors }, null, 2));
   }
   const retainedNavigation = await verifyRetainedFrameNavigation(page);
+  await page.waitForTimeout(500);
+  const baselineSummary = await page.locator('#arp-point-summary').textContent();
+  const baselineEvents = Number.parseInt(String(baselineSummary || ''), 10);
+  if (!Number.isInteger(baselineEvents) || baselineEvents < 0) {
+    throw new Error(`Could not parse point-event summary: ${baselineSummary}`);
+  }
   await page.locator('#arp-point-add').click();
   const missingGrower = await page.evaluate(() => ({
     activeId: document.activeElement?.id || '',
@@ -258,14 +270,16 @@ const server = http.createServer((request, response) => {
       missingGrower.ariaInvalid !== 'true' ||
       missingGrower.tone !== 'error' ||
       !/Enter the Grower name above before adding an event/i.test(missingGrower.message) ||
-      !/^0 events\b/.test(missingGrower.summary)) {
-    throw new Error(JSON.stringify({ facts, missingGrower, errors }, null, 2));
+      missingGrower.summary !== baselineSummary) {
+    throw new Error(JSON.stringify({ facts, baselineSummary, missingGrower, errors }, null, 2));
   }
   await page.locator('#arp-point-grower').fill('smoke-grower');
   await page.waitForTimeout(450);
   await page.locator('#arp-point-add').click();
-  await page.waitForFunction(() =>
-    /^1 event\b/.test(document.querySelector('#arp-point-summary')?.textContent || ''));
+  const expectedEventCount = baselineEvents + 1;
+  await page.waitForFunction(expected =>
+    Number.parseInt(document.querySelector('#arp-point-summary')?.textContent || '', 10) === expected,
+  expectedEventCount);
   await page.waitForFunction(() =>
     document.activeElement?.id === 'arp-point-reconstruction-choice');
   const addEvent = await page.evaluate(() => ({
@@ -280,7 +294,7 @@ const server = http.createServer((request, response) => {
     evidenceClosed: !document.querySelector('.arp-point-evidence')?.open,
     contextClosed: !document.querySelector('.arp-point-context')?.open,
   }));
-  if (!addEvent.formVisible || !/^1 event\b/.test(addEvent.summary) ||
+  if (!addEvent.formVisible || Number.parseInt(addEvent.summary, 10) !== expectedEventCount ||
       !/Event added and autosaved/.test(addEvent.message) || addEvent.tone !== 'success' ||
       addEvent.activeId !== 'arp-point-reconstruction-choice' || !addEvent.pulse ||
       addEvent.selectedQueueRows < 1 || !addEvent.evidenceClosed ||
@@ -336,8 +350,14 @@ const server = http.createServer((request, response) => {
       '.arp-point-queue-list .btn[aria-pressed="true"]')?.dataset.pointEventListId || '',
   }));
   const desktopAnchor = desktopEvents[0]?.review?.anchor || {};
-  const expectedDesktopAsset =
-    `images/frame_${String(retainedNavigation.last + 1).padStart(4, '0')}.webp`;
+  const expectedDesktopAsset = String(
+    reportConfig.frame_contexts?.[retainedNavigation.last]?.archive_member ||
+    `images/frame_${String(retainedNavigation.last + 1).padStart(4, '0')}.webp`
+  );
+  const expectedDesktopSession = String(
+    reportConfig.frame_contexts?.[retainedNavigation.last]?.session_id ||
+    reportConfig.dataset.acquisition_run || reportConfig.dataset.dataset_id || '',
+  );
   if (pendingDesktop.nativeDisabled || pendingDesktop.ariaDisabled !== 'false' ||
       addingDesktop.button !== 'Adding…' || addingDesktop.busy !== 'true' ||
       addingDesktop.nativeDisabled || !/this save may wait/.test(addingDesktop.message) ||
@@ -347,25 +367,31 @@ const server = http.createServer((request, response) => {
       desktopAddEvent.activeId !== 'arp-point-reconstruction-choice' ||
       !desktopAddEvent.pulse || desktopAddEvent.selectedQueueRows < 1 ||
       !/^00000000-0000-4000-8000-/.test(desktopAddEvent.canonicalId) ||
+      desktopAnchor.session_identity !== expectedDesktopSession ||
       desktopAnchor.frame_index !== retainedNavigation.last + 1 ||
       desktopAnchor.archive_member !== expectedDesktopAsset ||
       desktopRevisionRequests !== 1 || desktopErrors.length) {
     throw new Error(JSON.stringify({
       pendingDesktop, addingDesktop, desktopAddEvent,
       desktopSelectedFrame, desktopAnchor, expectedDesktopAsset,
-      desktopRevisionRequests, desktopErrors,
+      expectedDesktopSession, desktopRevisionRequests, desktopErrors,
     }, null, 2));
   }
   await desktopContext.close();
   process.stdout.write(JSON.stringify({
-    ok: true, facts, retainedNavigation, missingGrower, addEvent,
+    ok: true, facts, retainedNavigation, baselineSummary, missingGrower, addEvent,
     pendingDesktop, addingDesktop, desktopSelectedFrame, desktopAnchor, desktopAddEvent,
     errors, desktopErrors,
   }) + '\n');
   await browser.close();
+  activeBrowser = null;
   server.close();
-})().catch(error => {
+})().catch(async error => {
   process.stderr.write(String(error.stack || error) + '\n');
+  if (activeBrowser) {
+    await activeBrowser.close().catch(() => {});
+    activeBrowser = null;
+  }
   server.close();
   process.exitCode = 1;
 });

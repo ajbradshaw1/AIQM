@@ -133,7 +133,7 @@ copies; original saved-frame bytes remain in the read-only ZIP.
 
 ## Review point events
 
-The current schema is `rheed-point-events-v2`. It begins from an explicit
+The current schema is `rheed-point-events-v3`. It begins from an explicit
 initial state: `1x1` present and pattern clarity unknown. That state is not a
 physical appearance event. Its review record only provides audit and Anchor
 ownership for the first interval. The editable change-event sources are:
@@ -144,6 +144,10 @@ ownership for the first interval. The editable change-event sources are:
   visual change. It does not determine the physical cause or reconstruction.
   Each automatic point is a candidate that must be Confirmed or Rejected.
 - `posthoc`: a reviewer adds an event at an actual saved frame after the run.
+
+Legacy `rheed-point-events-v2` documents remain validated, byte-preserving
+read-only evidence. Their deprecated `surface_quality` values are never mapped
+to v3 pattern clarity; create a separate v3 sidecar to continue annotation.
 
 RHEED direction, beam-current, and beam-energy adjustments are read-only
 reference points. An image-unusable record means only that acquisition or
@@ -239,6 +243,13 @@ history. Import and validation replay every change and bind the dataset,
 ordered frame hashes, model context, event IDs, immutable source evidence,
 saved-frame review points, semantic labels, candidate decisions, derived
 states, interval Anchors, revision chain, and Complete gate.
+
+Routine review points and Anchors use stable `session_identity`,
+`capture_sequence`, and a saved-frame locator (`archive_member`,
+`frame_index`, and/or `frame_path`) as their primary identity. A SHA-256
+already present in source evidence may be carried and checked, but report
+generation, posthoc labeling, event movement, and Anchor selection never
+compute a content hash solely for annotation.
 
 The report shows model outputs, so all reviews are **model-assisted data, not
 blind gold labels**. Model output must not fill human event labels. The current

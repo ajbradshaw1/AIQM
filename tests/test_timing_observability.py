@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from PyQt6.QtWidgets import QApplication
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -19,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 from drivers.evap_control import ElogReader  # noqa: E402
 from gui.growth_app import _sample_timing_snapshot  # noqa: E402
 from gui.growth_logger import GrowthLogger  # noqa: E402
+from gui.growth_monitor import GrowthMonitor  # noqa: E402
 from gui.state import (  # noqa: E402
     EvapControlState,
     MistralState,
@@ -29,6 +33,8 @@ from scripts.ombe_timing_probe import (  # noqa: E402
     render_markdown,
     summarize_instrument,
 )
+
+_qt_app = QApplication.instance() or QApplication([])
 
 
 class StateTimingTests(unittest.TestCase):
@@ -186,6 +192,121 @@ class SensorLogSchemaTests(unittest.TestCase):
         self.assertEqual(
             rows[1]["evap_source_at_utc"],
             "2026-07-27T11:59:59+00:00",
+        )
+
+    def test_acquisition_provenance_is_appended_and_monotonic(self):
+        appended = [
+            "sensor_row_idx",
+            "elapsed_monotonic_s",
+            "pyrometer_emissivity",
+            "pressure_source",
+            "rheed_connected",
+            "pyrometer_connected",
+            "mistral_connected",
+            "evap_connected",
+            "evap_attempt_source_at_utc",
+            "evap_source_age_ms",
+            "evap_source_record_advanced",
+            "evap_source_stale",
+            "evap_source_status",
+        ]
+        self.assertEqual(GrowthLogger.SENSOR_FIELDS[-len(appended):], appended)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = GrowthLogger(base_dir=tmp)
+            logger.start_session("PROVENANCE")
+            session_dir = logger.session_dir
+            logger._session_start_monotonic_ns = 1_000_000_000
+            with patch(
+                "gui.growth_logger.time.perf_counter_ns",
+                side_effect=(2_250_000_000, 2_500_000_000, 2_750_000_000),
+            ):
+                for index, source in enumerate(("Evap", "ADS", None), 1):
+                    row_idx = logger.log_sensors(
+                        512.34,
+                        float(index),
+                        chamber_pressure_mbar=5.2e-9,
+                        pyrometer_emissivity=0.91,
+                        pressure_source=source,
+                        rheed_timing={"connected": index != 3},
+                        pyrometer_timing={"connected": True},
+                        mistral_timing={"connected": index == 2},
+                        evap_timing={"connected": index == 1},
+                    )
+                    self.assertEqual(row_idx, index)
+            self.assertEqual(logger.latest_sensor_row_idx, 3)
+            logger.end_session()
+
+            with (session_dir / "sensor_log.csv").open(newline="") as stream:
+                rows = list(csv.DictReader(stream))
+
+        self.assertEqual([row["sensor_row_idx"] for row in rows], ["1", "2", "3"])
+        self.assertEqual(
+            [row["elapsed_monotonic_s"] for row in rows],
+            ["1.250000", "1.500000", "1.750000"],
+        )
+        self.assertEqual(rows[0]["pyrometer_emissivity"], "0.9100")
+        self.assertEqual(
+            [row["pressure_source"] for row in rows],
+            ["evap", "ads", "none"],
+        )
+        self.assertEqual(rows[0]["rheed_connected"], "True")
+        self.assertEqual(rows[2]["rheed_connected"], "False")
+        self.assertEqual(rows[0]["pyrometer_connected"], "True")
+        self.assertEqual(rows[1]["mistral_connected"], "True")
+        self.assertEqual(rows[0]["evap_connected"], "True")
+
+    def test_metadata_declares_schema_and_clock_basis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = GrowthLogger(base_dir=tmp)
+            logger.start_session("METADATA")
+            session_dir = logger.session_dir
+            logger._session_start_monotonic_ns = 1_000_000_000
+            with patch(
+                "gui.growth_logger.time.perf_counter_ns",
+                return_value=3_500_000_000,
+            ):
+                logger.save_session_metadata({"sensor_log_interval_s": 1.0})
+            logger.end_session()
+            metadata = json.loads(
+                (session_dir / "session_metadata.json").read_text(
+                    encoding="utf-8",
+                )
+            )
+
+        self.assertEqual(
+            metadata["acquisition_schema_version"],
+            GrowthLogger.ACQUISITION_SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            metadata["clock_basis"]["elapsed_monotonic_s"],
+            "time.perf_counter_ns",
+        )
+        self.assertEqual(
+            metadata["sensor_log_schema"]["row_index"],
+            "sensor_row_idx",
+        )
+        self.assertEqual(metadata["session_duration_monotonic_s"], 2.5)
+
+
+class SessionMetadataTests(unittest.TestCase):
+    def test_metadata_declares_cadence_and_missing_gun_telemetry(self):
+        monitor = GrowthMonitor()
+        try:
+            metadata = monitor.get_session_metadata()
+        finally:
+            monitor.close()
+        self.assertEqual(metadata["sensor_log_interval_s"], 1.0)
+        self.assertEqual(metadata["heartbeat_interval_s"], 5.0)
+        self.assertEqual(
+            metadata["camera_timestamp_kind"],
+            "software_receive_not_exposure",
+        )
+        self.assertFalse(metadata["rheed_gun_telemetry_available"])
+        self.assertEqual(metadata["rheed_gun_telemetry_fields"], [])
+        self.assertEqual(
+            metadata["mistral_vi_semantics"],
+            "substrate_manipulator_heater_psu_not_rheed_gun",
         )
 
 

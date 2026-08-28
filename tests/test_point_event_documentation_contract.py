@@ -11,7 +11,7 @@ def test_tool_readme_describes_current_point_event_contract() -> None:
     prose = re.sub(r"\s+", " ", text)
 
     required_phrases = (
-        "rheed-point-events-v2",
+        "rheed-point-events-v3",
         "`manual`",
         "`auto_capture`",
         "`posthoc`",

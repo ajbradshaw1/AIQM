@@ -66,6 +66,14 @@ def _layout_candidates(instrument_root: Path) -> tuple[Path, ...]:
     return tuple(candidates)
 
 
+def _marked_workspace_root(instrument_root: Path) -> Path | None:
+    """Return the nearest workspace marker enclosing *instrument_root*."""
+    for candidate in (instrument_root, *instrument_root.parents):
+        if (candidate / "workspace" / "repos.lock.yaml").is_file():
+            return candidate
+    return None
+
+
 def _unique_paths(paths: Sequence[Path]) -> tuple[Path, ...]:
     unique: list[Path] = []
     seen: set[str] = set()
@@ -108,14 +116,30 @@ def resolve_ai_repo_root(
         )
 
     root = Path(instrument_root or INSTRUMENT_REPO_ROOT).expanduser().resolve()
-    candidates = _unique_paths(
-        (*_layout_candidates(root), *(Path(path) for path in legacy_roots))
-    )
+    workspace_root = _marked_workspace_root(root)
+    if workspace_root is not None:
+        # A marked workspace is an operational boundary. Do not silently use
+        # another checkout when its canonical repositories are incomplete.
+        candidates = _unique_paths((
+            workspace_root / "repos" / "rheed-perception",
+            workspace_root / "repos" / "RHEEDClassify",
+        ))
+    else:
+        candidates = _unique_paths(
+            (*_layout_candidates(root), *(Path(path) for path in legacy_roots))
+        )
     for candidate in candidates:
         if _has_classifier2_layout(candidate):
             return candidate.resolve()
 
     checked = "\n  - ".join(str(path) for path in candidates)
+    if workspace_root is not None:
+        raise FileNotFoundError(
+            f"Marked workspace {workspace_root} has no complete Classifier2 "
+            "repository. Checked:\n"
+            f"  - {checked}\n"
+            "Repair repos/rheed-perception or set AI_REPO_ROOT explicitly."
+        )
     raise FileNotFoundError(
         "Could not locate a Classifier2 repository. Checked:\n"
         f"  - {checked}\n"

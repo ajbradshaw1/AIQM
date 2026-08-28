@@ -22,6 +22,9 @@ from tools.rheed_postprocessing_labeling.point_events import (
     PointEventSidecarStore,
     PointEventValidationError,
     RevisionStore,
+    SCHEMA_VERSION,
+    V2_INITIAL_STATE,
+    V2_SCHEMA_VERSION,
     completion_errors,
     derive_state_segments,
     import_point_events,
@@ -31,6 +34,8 @@ from tools.rheed_postprocessing_labeling.point_events import (
     replay_revisions,
     revise_event,
     validate_point_event_document,
+    validate_v2_point_event_document_read_only,
+    validate_event,
 )
 from tools.rheed_postprocessing_labeling.session_archive import (
     hash_frame_payloads,
@@ -189,14 +194,14 @@ def test_initial_assumption_id_is_deterministic(imported) -> None:
     assert result.events[0]["review"]["labels"] == again.events[0]["review"]["labels"] == []
 
 
-def test_legacy_rows_are_read_only_and_never_become_v2_labels(imported) -> None:
+def test_legacy_rows_are_read_only_and_never_become_v3_labels(imported) -> None:
     _, result, _ = imported
     auto = next(item for item in result.events if item["source"]["kind"] == "auto_capture")
     assert auto["review"]["labels"] == []
     assert auto["review"]["comment"] == ""
     assert "equalizer" not in auto["review"]
     reasons = [item["reason"] for item in result.unlinked_legacy_labels]
-    assert any("no unambiguous v2" in reason for reason in reasons)
+    assert any("no unambiguous v3" in reason for reason in reasons)
     assert any("Equalizer label is read-only" in reason for reason in reasons)
     assert all(item["read_only"] is True for item in result.unlinked_legacy_labels)
 
@@ -242,7 +247,7 @@ def test_posthoc_multi_label_edit_complete_and_replay(imported) -> None:
     posthoc["event_id"] = event["event_id"]
     posthoc["source"] = copy.deepcopy(event["source"])
     create = {
-        "schema_version": "rheed-point-events-v2",
+        "schema_version": SCHEMA_VERSION,
         "revision_id": str(uuid.uuid4()), "event_id": posthoc["event_id"],
         "actor": "Grower", "at_utc": "2026-08-06T12:00:01Z",
         "action": "create_posthoc", "base_revision_id": "",
@@ -350,6 +355,26 @@ def test_revision_store_round_trip_and_hash_tamper(tmp_path: Path, imported) -> 
     assert edited["status"] == "Draft"
 
 
+def test_v2_sidecar_summary_is_never_overwritten_by_v3_store(
+    tmp_path: Path, imported,
+) -> None:
+    _, result, _ = imported
+    directory = tmp_path / "annotations"
+    directory.mkdir()
+    summary = directory / RevisionStore.SUMMARY_NAME
+    original = json.dumps({
+        "schema_version": V2_SCHEMA_VERSION,
+        "events": [{"legacy": "quality evidence"}],
+    }).encode()
+    summary.write_bytes(original)
+
+    with pytest.raises(PointEventValidationError, match="read-only"):
+        RevisionStore(directory).load(result.events)
+
+    assert summary.read_bytes() == original
+    assert not (directory / RevisionStore.JOURNAL_NAME).exists()
+
+
 def test_document_round_trip_rejects_tampered_source_and_representative(imported) -> None:
     session, result, _ = imported
     dataset, payload = _dataset_payload(session, result)
@@ -362,6 +387,7 @@ def test_document_round_trip_rejects_tampered_source_and_representative(imported
         annotation_set_id=str(uuid.uuid4()), reviewer="Grower",
     )
     assert document["initial_state"] == INITIAL_STATE
+    assert document["schema_version"] == "rheed-point-events-v3"
     assert document["segments"][0]["state"] == INITIAL_STATE
     assert validate_point_event_document(document, payload)["events"]
     assert validate_annotation_document(document, payload)["events"]
@@ -393,7 +419,122 @@ def test_document_round_trip_rejects_tampered_source_and_representative(imported
     assert moved["review"]["representative_anchor"] is not None
 
 
-def test_state_segments_replay_full_presence_clarity_and_quality(imported) -> None:
+def test_v3_document_rejects_surface_quality_and_round_trips(imported) -> None:
+    session, result, _ = imported
+    dataset, payload = _dataset_payload(session, result)
+    current = point_event_document(
+        dataset=dataset,
+        events=result.events,
+        reference_events=result.reference_events,
+        unlinked_legacy_labels=result.unlinked_legacy_labels,
+        source_revisions=result.source_revisions,
+        source_journal=result.source_journal,
+        annotation_set_id=str(uuid.uuid4()),
+        reviewer="Grower",
+    )
+
+    assert current["schema_version"] == SCHEMA_VERSION == "rheed-point-events-v3"
+    assert validate_point_event_document(current, payload) == current
+    surface = copy.deepcopy(current["events"][1])
+    surface["review"]["labels"] = [{
+        "label_id": str(uuid.uuid4()),
+        "kind": "surface_quality",
+        "change": "became",
+        "value": "good",
+    }]
+    with pytest.raises(PointEventValidationError, match="kind is invalid"):
+        validate_event(surface)
+
+
+def test_v2_document_is_strict_read_only_evidence_with_quality_preserved(
+    imported,
+) -> None:
+    session, result, _ = imported
+    dataset, payload = _dataset_payload(session, result)
+    current = point_event_document(
+        dataset=dataset,
+        events=result.events,
+        reference_events=result.reference_events,
+        unlinked_legacy_labels=result.unlinked_legacy_labels,
+        source_revisions=result.source_revisions,
+        source_journal=result.source_journal,
+        annotation_set_id=str(uuid.uuid4()),
+        reviewer="Legacy Grower",
+    )
+    legacy = copy.deepcopy(current)
+    legacy["schema_version"] = V2_SCHEMA_VERSION
+    legacy["initial_state"] = copy.deepcopy(V2_INITIAL_STATE)
+    for event in legacy["events"]:
+        event["schema"] = V2_SCHEMA_VERSION
+        if event["source"]["kind"] == "initial_assumption":
+            event["review"]["labels"] = [{
+                "label_id": str(uuid.uuid4()),
+                "kind": "surface_quality",
+                "change": "became",
+                "value": "good",
+            }]
+    for segment in legacy["segments"]:
+        if segment["state"]["clarity"] == "unknown":
+            segment["state"]["clarity"] = "bad"
+        segment["state"]["quality"] = "good"
+
+    checked = validate_v2_point_event_document_read_only(legacy, payload)
+    assert checked == legacy
+    assert checked["schema_version"] == "rheed-point-events-v2"
+    assert checked["initial_state"]["quality"] == "unknown"
+    initial = next(
+        item for item in checked["events"]
+        if item["source"]["kind"] == "initial_assumption"
+    )
+    assert initial["review"]["labels"][0]["kind"] == "surface_quality"
+
+    tampered = copy.deepcopy(legacy)
+    initial = next(
+        item for item in tampered["events"]
+        if item["source"]["kind"] == "initial_assumption"
+    )
+    initial["review"]["labels"][0]["value"] = "excellent"
+    with pytest.raises(PointEventValidationError, match="surface-quality"):
+        validate_v2_point_event_document_read_only(tampered, payload)
+
+    corruptions: dict[str, dict] = {}
+    empty = copy.deepcopy(legacy)
+    empty["segments"] = []
+    corruptions["empty"] = empty
+
+    gap = copy.deepcopy(legacy)
+    gap["segments"][0]["start_frame_index"] = 2
+    gap["segments"][0]["frame_count"] -= 1
+    corruptions["gap"] = gap
+
+    overlap = copy.deepcopy(legacy)
+    duplicate = copy.deepcopy(overlap["segments"][0])
+    duplicate["start_frame_index"] = 2
+    duplicate["frame_count"] -= 1
+    overlap["segments"].append(duplicate)
+    corruptions["overlap"] = overlap
+
+    wrong_state = copy.deepcopy(legacy)
+    wrong_state["segments"][0]["state"]["reconstructions"] = ["htr"]
+    corruptions["wrong state"] = wrong_state
+
+    wrong_boundary = copy.deepcopy(legacy)
+    wrong_boundary["segments"][0]["boundary_event_ids"] = [
+        next(
+            item["event_id"] for item in legacy["events"]
+            if item["source"]["kind"] == "initial_assumption"
+        )
+    ]
+    corruptions["wrong boundary"] = wrong_boundary
+
+    for _name, corrupted in corruptions.items():
+        with pytest.raises(
+            PointEventValidationError, match="segments do not match frozen replay",
+        ):
+            validate_v2_point_event_document_read_only(corrupted, payload)
+
+
+def test_state_segments_replay_presence_and_pattern_clarity(imported) -> None:
     _, result, _ = imported
     initial, manual, auto = map(copy.deepcopy, result.events)
     manual["review"]["labels"] = [
@@ -426,41 +567,34 @@ def test_state_segments_replay_full_presence_clarity_and_quality(imported) -> No
     assert [(item["start_frame_index"], item["end_frame_index_exclusive"])
             for item in segments] == [(1, 2), (2, 5)]
     assert segments[0]["state"] == {
-        "reconstructions": ["one_by_one"], "clarity": "bad",
-        "quality": "unknown",
+        "reconstructions": ["one_by_one"], "clarity": "unknown",
     }
     assert segments[1]["state"] == {
         "reconstructions": ["rt13"], "clarity": "good",
-        "quality": "unknown",
     }
     assert segments[1]["anchor"]["frame_index"] == 2
 
 
-def test_initial_quality_is_selected_on_initial_audit_item(imported) -> None:
+def test_initial_audit_item_completes_without_a_semantic_delta(imported) -> None:
     _, result, _ = imported
-    initial, manual, auto = map(copy.deepcopy, result.events)
+    initial = copy.deepcopy(result.events[0])
 
-    assert "initial surface quality must be selected as good or bad" in completion_errors(initial)
-    initial, _ = revise_event(
-        initial, action="add_label", actor="Grower", changes={"label": {
-            "kind": "surface_quality", "change": "became", "value": "good",
-        }},
-    )
-    segments = derive_state_segments(
-        [initial, manual, auto], frame_count=4, session_identity="run-a",
-    )
-
-    assert segments[0]["state"] == {
-        "reconstructions": ["one_by_one"],
-        "clarity": "bad",
-        "quality": "good",
-    }
-    with pytest.raises(PointEventValidationError, match="surface-quality"):
+    assert completion_errors(initial) == []
+    with pytest.raises(
+        PointEventValidationError,
+        match="cannot contain semantic change labels",
+    ):
         revise_event(
             initial, action="add_label", actor="Grower", changes={"label": {
                 "kind": "pattern_clarity", "change": "became", "value": "good",
             }},
         )
+    initial, _ = revise_event(
+        initial, action="move_representative_anchor", actor="Grower",
+        changes={"representative_anchor": initial["review"]["anchor"]},
+    )
+    initial, _ = revise_event(initial, action="complete", actor="Grower")
+    assert initial["status"] == "Complete"
 
 
 def test_state_segments_reject_cross_event_duplicate_appearance(imported) -> None:
@@ -611,6 +745,83 @@ def test_sidecar_uses_exact_v2_command_contract(
     assert reopened.export_document()["annotation_set"]["reviewer"] == "Grower"
 
 
+def test_static_browser_v3_edit_export_imports_into_desktop_sidecar(
+    tmp_path: Path, imported, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the file-report Draft -> JSON -> desktop recovery boundary."""
+
+    session, result, _ = imported
+    dataset, payload = _dataset_payload(session, result)
+    report_root = tmp_path / "report"
+    report_root.mkdir()
+    report = report_root / "interactive_report.html"
+    report.write_text("synthetic", encoding="utf-8")
+    from tools.rheed_postprocessing_labeling import report_builder
+    monkeypatch.setattr(report_builder, "load_report_payload", lambda _path: payload)
+
+    before = copy.deepcopy(result.events[1])
+    after = copy.deepcopy(before)
+    after["review"]["comment"] = "static browser edit"
+    after["status"] = "Draft"
+    revision_id = str(uuid.uuid4())
+    after["revision_id"] = revision_id
+
+    def canonical_hash(value: object) -> str:
+        return hashlib.sha256(json.dumps(
+            value, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")).hexdigest()
+
+    revision = {
+        "schema_version": SCHEMA_VERSION,
+        "revision_id": revision_id,
+        "base_revision_id": str(before.get("revision_id", "")),
+        "actor": "Offline Browser Reviewer",
+        "at_utc": "2026-08-06T12:01:00.000Z",
+        "action": "edit",
+        "event_id": before["event_id"],
+        "before_sha256": canonical_hash(before),
+        "before": before,
+        "after": after,
+    }
+    assert "reviewer" not in revision["before"]["review"]
+    assert "confidence" not in revision["after"]["review"]
+    document = point_event_document(
+        dataset=dataset,
+        events=result.events,
+        revisions=[revision],
+        reference_events=result.reference_events,
+        unlinked_legacy_labels=result.unlinked_legacy_labels,
+        source_revisions=result.source_revisions,
+        source_journal=result.source_journal,
+        annotation_set_id=str(uuid.uuid4()),
+        reviewer="Offline Browser Reviewer",
+    )
+    document.update({
+        "exported_at_utc": "2026-08-06T12:01:01.000Z",
+        "review_mode": {
+            "model_outputs_visible": True,
+            "eligible_for_blind_gold": False,
+            "label_semantics": (
+                "reconstruction_presence_and_pattern_clarity_changes"
+            ),
+        },
+    })
+
+    imported_snapshot = PointEventSidecarStore(
+        report, session.path,
+    ).import_document(document)
+
+    recovered = next(
+        item for item in imported_snapshot["events"]
+        if item["event_id"] == before["event_id"]
+    )
+    assert recovered["review"]["comment"] == "static browser edit"
+    assert imported_snapshot["annotation_set"]["reviewer"] == (
+        "Offline Browser Reviewer"
+    )
+
+
 def _legacy_state(event_id: str, revision_id: str) -> dict:
     return {
         "schema": "rheed-point-events-v1", "event_id": event_id,
@@ -664,6 +875,81 @@ def _append_v1_journal(path: Path, *, semantic_tamper: bool = False) -> str:
     return event_id
 
 
+def _append_v2_journal(path: Path, *, semantic_tamper: bool = False) -> tuple[str, dict]:
+    event_id, revision_id, label_id = (
+        str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()),
+    )
+    with zipfile.ZipFile(path) as archive:
+        frame_payload = archive.read("session/frames/rheed_0.png")
+    frame_hash = hashlib.sha256(frame_payload).hexdigest()
+    anchor = {
+        "frame_path": r"D:\session\frames\rheed_0.png",
+        "image_sha256": frame_hash,
+        "image_sha256_algorithm": "raw-file-bytes-v1",
+        "capture_sequence": 100,
+        "captured_at_utc": "2026-08-06T12:00:00.000Z",
+        "elapsed_s": 0.0,
+        "view_segment_id": 1,
+        "capture_geometry_id": "g1",
+    }
+    surface_value = "excellent" if semantic_tamper else "good"
+    state = {
+        "schema": V2_SCHEMA_VERSION,
+        "event_id": event_id,
+        "source": {
+            "kind": "initial_assumption",
+            "session_identity": "session-1",
+            "source_row_sha256": "b" * 64,
+            "original_anchor": copy.deepcopy(anchor),
+            "original_note": "legacy initial quality audit",
+        },
+        "review": {
+            "anchor": copy.deepcopy(anchor),
+            "representative_anchor": None,
+            "labels": [{
+                "label_id": label_id,
+                "kind": "surface_quality",
+                "change": "became",
+                "value": surface_value,
+            }],
+            "candidate_decision": "confirmed",
+            "comment": "legacy quality evidence",
+            "disposition": "active",
+            "disposition_reason": "",
+        },
+        "status": "Draft",
+        "created_at_utc": "2026-08-06T12:00:00.000Z",
+        "updated_at_utc": "2026-08-06T12:00:00.000Z",
+        "revision_id": revision_id,
+        "revision_number": 1,
+    }
+    record = {
+        "schema": V2_SCHEMA_VERSION,
+        "revision_id": revision_id,
+        "event_id": event_id,
+        "actor": "legacy-grower",
+        "recorded_at_utc": "2026-08-06T12:00:00.000Z",
+        "action": "create",
+        "base_revision_id": None,
+        "before": None,
+        "after": state,
+        "previous_record_sha256": "",
+    }
+    record["record_sha256"] = hashlib.sha256(json.dumps(
+        record, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode()).hexdigest()
+    with zipfile.ZipFile(path, "a") as archive:
+        archive.writestr(
+            "session/rheed_event_revisions.jsonl",
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+        )
+        archive.writestr("session/rheed_point_events.json", json.dumps({
+            "schema": V2_SCHEMA_VERSION,
+            "events": [state],
+        }))
+    return event_id, record
+
+
 def test_archived_v1_journal_is_validated_and_retained_read_only(tmp_path: Path) -> None:
     path, _ = _zip(tmp_path)
     legacy_id = _append_v1_journal(path)
@@ -682,6 +968,46 @@ def test_archived_v1_journal_is_validated_and_retained_read_only(tmp_path: Path)
 def test_archived_v1_rehashed_semantic_tamper_fails_closed(tmp_path: Path) -> None:
     path, _ = _zip(tmp_path)
     _append_v1_journal(path, semantic_tamper=True)
+    with pytest.raises(PointEventValidationError, match="semantics are invalid"):
+        import_point_events(hash_frame_payloads(load_session_archive(path)))
+
+
+def test_archived_v2_journal_is_preserved_as_read_only_evidence(
+    tmp_path: Path,
+) -> None:
+    path, _ = _zip(tmp_path)
+    legacy_id, record = _append_v2_journal(path)
+
+    imported = import_point_events(hash_frame_payloads(load_session_archive(path)))
+
+    assert imported.source_journal["schema"] == V2_SCHEMA_VERSION
+    assert imported.source_journal["read_only"] is True
+    assert imported.source_revisions == (record,)
+    evidence = next(
+        item for item in imported.unlinked_legacy_labels
+        if item.get("event_id") == legacy_id
+    )
+    assert evidence["read_only"] is True
+    assert evidence["source_schema"] == V2_SCHEMA_VERSION
+    assert evidence["legacy_state"] == record["after"]
+    assert evidence["legacy_state"]["review"]["labels"][0] == {
+        "label_id": record["after"]["review"]["labels"][0]["label_id"],
+        "kind": "surface_quality",
+        "change": "became",
+        "value": "good",
+    }
+    assert legacy_id not in {item["event_id"] for item in imported.events}
+    assert all(item["schema"] == SCHEMA_VERSION for item in imported.events)
+    assert all(
+        label["kind"] != "surface_quality"
+        for item in imported.events
+        for label in item["review"]["labels"]
+    )
+
+
+def test_archived_v2_rehashed_invalid_quality_fails_closed(tmp_path: Path) -> None:
+    path, _ = _zip(tmp_path)
+    _append_v2_journal(path, semantic_tamper=True)
     with pytest.raises(PointEventValidationError, match="semantics are invalid"):
         import_point_events(hash_frame_payloads(load_session_archive(path)))
 

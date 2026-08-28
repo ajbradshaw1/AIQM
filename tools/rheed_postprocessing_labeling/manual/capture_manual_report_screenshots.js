@@ -191,29 +191,45 @@ async function selectQueueEvent(page, index) {
   const eventId = await button.getAttribute('data-point-event-list-id');
   assert(eventId, 'Queue event has no stable event ID', { index });
   await button.click();
-  await page.waitForFunction(id => {
-    const heading = document.getElementById('arp-point-editor-heading');
-    return heading && heading.textContent.includes(id);
-  }, eventId);
+  await page.waitForFunction(id => Array.from(
+    document.querySelectorAll('[data-point-event-list-id]'),
+  ).some(element => element.dataset.pointEventListId === id &&
+    element.getAttribute('aria-pressed') === 'true'), eventId);
   return eventId;
 }
 
 async function addSemanticLabel(page, label, expectedCount) {
-  await page.locator('#arp-point-label-kind').selectOption(label.kind);
-  await page.locator('#arp-point-label-change').selectOption(label.change);
-  await page.locator('#arp-point-label-value').selectOption(label.value);
-  await page.locator('#arp-point-label-add').click();
+  if (label.kind === 'reconstruction') {
+    await page.locator('#arp-point-reconstruction-choice').selectOption(label.value);
+    await page.locator(label.change === 'appeared'
+      ? '#arp-point-reconstruction-appeared'
+      : '#arp-point-reconstruction-disappeared').click();
+  } else if (label.kind === 'pattern_clarity' && label.change === 'became') {
+    await page.locator(
+      `[data-point-quick-kind="pattern_clarity"]`
+        + `[data-point-quick-value="${label.value}"]`,
+    ).click();
+  } else {
+    throw new Error(`Unsupported screenshot label ${JSON.stringify(label)}`);
+  }
   await page.waitForFunction(count => (
     document.querySelectorAll('#arp-point-label-list [data-point-label-id]').length === count
   ), expectedCount);
 }
 
-async function saveReviewText(page, { comment, reviewer, confidence }) {
+async function setGrower(page, grower) {
+  await page.locator('#arp-point-grower').fill(grower);
+  await page.waitForFunction(expected => (
+    document.getElementById('arp-point-grower')?.value === expected &&
+    !document.getElementById('arp-point-interval-anchor')?.disabled
+  ), grower);
+}
+
+async function saveReviewText(page, { comment }) {
   await page.locator('#arp-point-comment').fill(comment);
-  await page.locator('#arp-point-reviewer').fill(reviewer);
-  await page.locator('#arp-point-confidence').fill(String(confidence));
-  await page.locator('#arp-point-save').click();
-  await page.waitForTimeout(50);
+  await page.waitForTimeout(450);
+  assert(await page.locator('#arp-point-comment').inputValue() === comment,
+    'Autosaved note did not remain visible', { comment });
 }
 
 async function dragPointRoleToFrame(page, eventId, role, frame) {
@@ -349,15 +365,14 @@ async function main() {
       'Initial state must not expose semantic change-label controls');
     assert(await page.locator('#arp-point-label-list [data-point-label-id]').count() === 0,
       'Initial state must not fabricate a 1×1-appeared label');
+    await setGrower(page, 'Manual Demo');
     await setRangeValue(page, '#arp-frame-scrubber-point', 7);
-    await page.locator('#arp-point-anchor').click();
+    await page.locator('#arp-point-interval-anchor').click();
     await page.waitForSelector(
       `[data-point-event-id="${initialId}"][data-point-role="representative-anchor"]`,
     );
     await saveReviewText(page, {
       comment: 'Fixed starting state; not a physical appearance event',
-      reviewer: 'Manual Demo',
-      confidence: 0.9,
     });
 
     const candidateId = await selectQueueEvent(page, 1);
@@ -383,15 +398,13 @@ async function main() {
     // representative star moves within the following stable interval.
     await dragPointRoleToFrame(page, candidateId, 'review', 21);
     await setRangeValue(page, '#arp-frame-scrubber-point', 26);
-    await page.locator('#arp-point-anchor').click();
+    await page.locator('#arp-point-interval-anchor').click();
     await page.waitForSelector(
       `[data-point-event-id="${candidateId}"][data-point-role="representative-anchor"]`,
     );
     await dragPointRoleToFrame(page, candidateId, 'representative-anchor', 29);
     await saveReviewText(page, {
       comment: 'Translation-insensitive candidate confirmed after frame review',
-      reviewer: 'Manual Demo',
-      confidence: 0.88,
     });
 
     // Add one late posthoc event so both Good and Bad clarity semantics are
@@ -408,19 +421,18 @@ async function main() {
       kind: 'pattern_clarity', change: 'became', value: 'bad',
     }, 2);
     await setRangeValue(page, '#arp-frame-scrubber-point', 54);
-    await page.locator('#arp-point-anchor').click();
+    await page.locator('#arp-point-interval-anchor').click();
     await saveReviewText(page, {
       comment: 'Post-run review added from a saved frame',
-      reviewer: 'Manual Demo',
-      confidence: 0.81,
     });
 
     await page.locator(
       `#arp-point-unfinished [data-point-event-list-id="${candidateId}"]`,
     ).click();
-    await page.waitForFunction(id => (
-      document.getElementById('arp-point-editor-heading')?.textContent.includes(id)
-    ), candidateId);
+    await page.waitForFunction(id => Array.from(
+      document.querySelectorAll('[data-point-event-list-id]'),
+    ).some(element => element.dataset.pointEventListId === id &&
+      element.getAttribute('aria-pressed') === 'true'), candidateId);
     await setRangeValue(page, '#arp-frame-scrubber-point', 29);
 
     assert(
@@ -428,8 +440,9 @@ async function main() {
       'Expected the fixed initial-state item and three unfinished change-event items',
     );
     for (const selector of [
-      '#arp-point-add', '#arp-point-save', '#arp-point-move',
-      '#arp-point-anchor', '#arp-point-label-add',
+      '#arp-point-add', '#arp-point-grower', '#arp-point-move',
+      '#arp-point-interval-anchor', '#arp-point-reconstruction-appeared',
+      '[data-point-quick-kind="pattern_clarity"][data-point-quick-value="good"]',
       '#arp-point-complete', '#arp-point-reopen',
     ]) {
       assert(await page.locator(selector).isVisible(), `Point-event control is not visible: ${selector}`);
@@ -487,6 +500,9 @@ async function main() {
       assert(!await page.locator(selector).isVisible(), `Legacy segment control is visible: ${selector}`);
     }
 
+    await page.locator('details.arp-point-context').evaluate(details => {
+      details.open = true;
+    });
     const sensorContext = await page.locator('#arp-point-context').evaluate(host => {
       const terms = [...host.querySelectorAll('dt')];
       return Object.fromEntries(terms.map(term => [term.textContent.trim(), term.nextElementSibling?.textContent.trim()]));
@@ -510,7 +526,8 @@ async function main() {
     assert(clip.width > 800 && clip.height > 400, 'Editor screenshot bounds are implausible', clip);
     const captureCoverage = await page.evaluate(capture => {
       const selectors = [
-        '#arp-point-context', '#arp-point-save', '#arp-point-move', '#arp-point-anchor',
+        '#arp-point-context', '#arp-point-grower', '#arp-point-comment',
+        '#arp-point-move', '#arp-point-interval-anchor',
         '#arp-point-candidate-decision', '#arp-point-label-list',
         '#arp-point-complete', '#arp-point-reopen', '#arp-point-add', '#arp-point-unfinished',
       ];
