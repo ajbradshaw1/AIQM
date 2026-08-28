@@ -116,6 +116,9 @@ point-by-point agreement.
 
 This is source-routing evidence only; it does not prove a COM port works.
 Hard-coded keyword values do not count as GUI configuration forwarding.
+For this checkout the expected finding is
+`gui_values_forwarded_to_modbus_driver`; an unforwarded or incomplete route is
+a configuration-wiring regression and must be resolved before live testing.
 
 ## EvapControl `.elo` vs OCR
 

@@ -459,7 +459,7 @@ class ConfigurationAuditTests(unittest.TestCase):
             ),
         }
 
-    def test_audit_detects_current_unforwarded_route(self):
+    def test_audit_detects_unforwarded_route(self):
         result = audit_modbus_configuration(
             REPO_ROOT, sources=self._sources("ModbusPyrometer()")
         )
@@ -494,11 +494,13 @@ class ConfigurationAuditTests(unittest.TestCase):
         )
         self.assertFalse(result["worker_to_modbus"]["route_complete"])
 
-    def test_current_checkout_reports_observed_modbus_mismatch(self):
+    def test_current_checkout_forwards_gui_modbus_configuration(self):
         result = audit_modbus_configuration(REPO_ROOT)
         self.assertEqual(
-            result["finding"], "gui_values_not_forwarded_to_modbus_driver"
+            result["finding"], "gui_values_forwarded_to_modbus_driver"
         )
+        self.assertTrue(result["gui_to_worker"]["route_complete"])
+        self.assertTrue(result["worker_to_modbus"]["route_complete"])
 
 
 class ArtifactTests(unittest.TestCase):
