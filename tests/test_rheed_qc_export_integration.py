@@ -1,25 +1,86 @@
 """Cross-repository smoke test for GUI QC logs -> Classifier2 frame export."""
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Mapping
 
 import numpy as np
 
 GUI_ROOT = Path(__file__).resolve().parent.parent
-WORKSPACE_ROOT = GUI_ROOT.parent
-CLASSIFIER2_ROOT = WORKSPACE_ROOT / "RHEEDClassify" / "Classifier2"
-if not (CLASSIFIER2_ROOT / "global_qc_data.py").is_file():
-    raise unittest.SkipTest(
-        "RHEEDClassify/Classifier2 is not available beside the GUI repository"
-    )
-for root in (GUI_ROOT, CLASSIFIER2_ROOT):
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
 
-from global_qc_data import build_session_qc_rows  # noqa: E402
+
+def _classifier2_root_from_repo(repo_root: Path) -> Path | None:
+    """Return a supported Classifier2 layout below a perception repo root."""
+    candidates = (
+        repo_root / "Classifier2",
+        repo_root / "src" / "classifiers" / "classifier2",
+    )
+    return next(
+        (
+            candidate.resolve()
+            for candidate in candidates
+            if (candidate / "global_qc_data.py").is_file()
+        ),
+        None,
+    )
+
+
+def _resolve_classifier2_root(
+    gui_root: Path = GUI_ROOT,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """Locate Classifier2 without hiding broken configured workspaces.
+
+    ``AI_REPO_ROOT`` names the perception repository itself and is therefore
+    explicit configuration that fails closed.
+    The migrated multi-repository workspace is detected by its lock file and
+    likewise fails if its canonical perception repository is incomplete.
+    Only a genuinely standalone GUI checkout may skip this cross-repo test.
+    """
+    environment = os.environ if environ is None else environ
+    if "AI_REPO_ROOT" in environment:
+        configured = environment["AI_REPO_ROOT"].strip()
+        if not configured:
+            raise FileNotFoundError("AI_REPO_ROOT is set but empty")
+        repo_root = Path(configured).expanduser()
+        classifier2_root = _classifier2_root_from_repo(repo_root)
+        if classifier2_root is None:
+            raise FileNotFoundError(
+                "AI_REPO_ROOT does not contain Classifier2/global_qc_data.py: "
+                f"{repo_root}"
+            )
+        return classifier2_root
+
+    for candidate_root in (gui_root, *gui_root.parents):
+        workspace_lock = candidate_root / "workspace" / "repos.lock.yaml"
+        if not workspace_lock.is_file():
+            continue
+        perception_root = candidate_root / "repos" / "rheed-perception"
+        classifier2_root = _classifier2_root_from_repo(perception_root)
+        if classifier2_root is None:
+            raise FileNotFoundError(
+                "Migrated workspace is missing "
+                "repos/rheed-perception/Classifier2/global_qc_data.py: "
+                f"{candidate_root}"
+            )
+        return classifier2_root
+
+    legacy_repo_root = gui_root.parent / "RHEEDClassify"
+    classifier2_root = _classifier2_root_from_repo(legacy_repo_root)
+    if classifier2_root is not None:
+        return classifier2_root
+    raise unittest.SkipTest(
+        "Classifier2 is unavailable for this standalone GUI checkout; "
+        "set AI_REPO_ROOT to enable the cross-repository integration test"
+    )
+
+
+if str(GUI_ROOT) not in sys.path:
+    sys.path.insert(0, str(GUI_ROOT))
 from gui.growth_logger import GrowthLogger  # noqa: E402
 
 
@@ -49,7 +110,93 @@ def _state(
     }
 
 
+class Classifier2RootLocatorTests(unittest.TestCase):
+    @staticmethod
+    def _create_classifier2(repo_root: Path) -> Path:
+        classifier2_root = repo_root / "Classifier2"
+        classifier2_root.mkdir(parents=True)
+        (classifier2_root / "global_qc_data.py").write_text(
+            "# locator sentinel\n",
+            encoding="utf-8",
+        )
+        return classifier2_root.resolve()
+
+    def test_explicit_ai_repo_root_is_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp) / "perception"
+            expected = self._create_classifier2(repo_root)
+            actual = _resolve_classifier2_root(
+                Path(tmp) / "standalone-gui",
+                {"AI_REPO_ROOT": str(repo_root)},
+            )
+            self.assertEqual(actual, expected)
+
+    def test_missing_explicit_ai_repo_root_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError):
+                _resolve_classifier2_root(
+                    Path(tmp) / "standalone-gui",
+                    {"AI_REPO_ROOT": str(Path(tmp) / "missing")},
+                )
+
+    def test_explicit_workspace_root_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp)
+            self._create_classifier2(
+                workspace_root / "repos" / "rheed-perception"
+            )
+            with self.assertRaises(FileNotFoundError):
+                _resolve_classifier2_root(
+                    workspace_root / "repos" / "aiqm-instrument",
+                    {"AI_REPO_ROOT": str(workspace_root)},
+                )
+
+    def test_migrated_workspace_layout_is_detected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp)
+            lock = workspace_root / "workspace" / "repos.lock.yaml"
+            lock.parent.mkdir(parents=True)
+            lock.write_text("schema_version: 1\n", encoding="utf-8")
+            expected = self._create_classifier2(
+                workspace_root / "repos" / "rheed-perception"
+            )
+            gui_root = (
+                workspace_root
+                / "worktrees"
+                / "aiqm-instrument"
+                / "deployed-labeling"
+            )
+            actual = _resolve_classifier2_root(gui_root, {})
+            self.assertEqual(actual, expected)
+
+    def test_incomplete_migrated_workspace_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp)
+            lock = workspace_root / "workspace" / "repos.lock.yaml"
+            lock.parent.mkdir(parents=True)
+            lock.write_text("schema_version: 1\n", encoding="utf-8")
+            gui_root = workspace_root / "repos" / "aiqm-instrument"
+            with self.assertRaises(FileNotFoundError):
+                _resolve_classifier2_root(gui_root, {})
+
+    def test_unconfigured_standalone_checkout_skips(self):
+        # Use a virtual drive path so redirecting TEMP under D:\AI4MBE does
+        # not make this synthetic standalone checkout inherit the real
+        # workspace marker from one of its ancestors.
+        with self.assertRaises(unittest.SkipTest):
+            _resolve_classifier2_root(Path(r"Z:\standalone-gui"), {})
+
+
 class GuiToClassifierQcExportTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        classifier2_root = _resolve_classifier2_root()
+        if str(classifier2_root) not in sys.path:
+            sys.path.insert(0, str(classifier2_root))
+        from global_qc_data import build_session_qc_rows
+
+        cls.build_session_qc_rows = staticmethod(build_session_qc_rows)
+
     def test_real_logger_schema_exports_without_semantic_coercion(self):
         with tempfile.TemporaryDirectory() as tmp:
             logger = GrowthLogger(base_dir=tmp)
@@ -109,7 +256,7 @@ class GuiToClassifierQcExportTests(unittest.TestCase):
             )
             logger.end_session()
 
-            rows, summary = build_session_qc_rows(
+            rows, summary = self.build_session_qc_rows(
                 session_dir,
                 history_frames=2,
             )
