@@ -438,24 +438,28 @@ class BlindLabelingSuppressionTests(unittest.TestCase):
     def tearDown(self):
         self.monitor.deleteLater()
 
-    def test_blind_mode_hides_classifier_and_disables_live_equalizer(self):
+    def test_blind_mode_hides_classifier_and_keeps_equalizer_unmounted(self):
         self.monitor._on_blind_labeling_mode_changed(True)
         self.assertTrue(all(
             widget.isHidden()
             for widget in self.monitor._live_classifier_widgets
         ))
-        self.assertFalse(self.monitor._tabs.isTabEnabled(
-            self.monitor._live_equalizer_tab_index,
-        ))
+        self.assertEqual(
+            self.monitor._tabs.indexOf(self.monitor.live_equalizer_tab), -1,
+        )
+        self.assertGreaterEqual(
+            self.monitor._tabs.indexOf(self.monitor.events_tab), 0,
+        )
 
         self.monitor._on_blind_labeling_mode_changed(False)
         self.assertTrue(all(
             not widget.isHidden()
             for widget in self.monitor._live_classifier_widgets
         ))
-        self.assertTrue(self.monitor._tabs.isTabEnabled(
-            self.monitor._live_equalizer_tab_index,
-        ))
+        self.assertEqual(
+            self.monitor._tabs.indexOf(self.monitor.live_equalizer_tab), -1,
+        )
+        self.assertTrue(self.monitor.live_equalizer_tab.isHidden())
 
     def test_visible_classifier_output_is_audited_once(self):
         with unittest.mock.patch.object(

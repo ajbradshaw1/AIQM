@@ -20,7 +20,12 @@ import numpy as np
 from PIL import Image
 
 from .prediction_io import ModelSpec, PredictionTable, load_predictions
-from .point_events import SCHEMA_VERSION as POINT_EVENT_SCHEMA, import_point_events
+from .point_events import (
+    INITIAL_STATE,
+    SCHEMA_VERSION as POINT_EVENT_SCHEMA,
+    derive_state_segments,
+    import_point_events,
+)
 from .session_archive import (
     FrameRecord, hash_frame_payloads, load_session_archive,
     ordered_frame_fingerprint, sha256_file,
@@ -260,21 +265,93 @@ def _render(template: str, replacements: dict[str, str]) -> str:
     return output
 
 
+def select_review_frame_indices(
+    frame_count: int,
+    requested_count: int | None,
+    *,
+    retain_frame_ordinals: Sequence[int] = (),
+) -> tuple[int, ...]:
+    """Choose deterministic, nearly uniform saved frames for review images.
+
+    The report keeps the complete acquisition timeline and exact source-frame
+    ordinals.  This selection only limits the lossy WebP review assets.  The
+    first and last frames are always retained, and explicitly requested
+    one-based ordinals replace their nearest non-required uniform sample so the
+    requested asset count stays fixed.
+    """
+
+    if frame_count < 1:
+        raise ValueError("frame_count must be positive")
+    if requested_count is None or requested_count >= frame_count:
+        return tuple(range(frame_count))
+    if isinstance(requested_count, bool) or requested_count < 2:
+        raise ValueError("review_frame_count must be at least 2")
+
+    required: set[int] = {0, frame_count - 1}
+    for ordinal in retain_frame_ordinals:
+        if isinstance(ordinal, bool):
+            raise ValueError("retained review-frame ordinals must be integers")
+        try:
+            index = int(ordinal) - 1
+        except (TypeError, ValueError) as exc:
+            raise ValueError("retained review-frame ordinals must be integers") from exc
+        if index < 0 or index >= frame_count:
+            raise ValueError(
+                f"retained review-frame ordinal is outside 1..{frame_count}: {ordinal}"
+            )
+        required.add(index)
+    if len(required) > requested_count:
+        raise ValueError(
+            "review_frame_count is smaller than the number of required review frames"
+        )
+
+    denominator = requested_count - 1
+    selected = {
+        (position * (frame_count - 1) + denominator // 2) // denominator
+        for position in range(requested_count)
+    }
+    if len(selected) != requested_count:  # Defensive; count <= frame_count guarantees this.
+        raise RuntimeError("uniform review-frame selection produced duplicate indices")
+
+    protected = set(required)
+    for required_index in sorted(required):
+        if required_index in selected:
+            continue
+        removable = [index for index in selected if index not in protected]
+        if not removable:
+            raise RuntimeError("unable to retain the requested review frame")
+        victim = min(removable, key=lambda index: (abs(index - required_index), index))
+        selected.remove(victim)
+        selected.add(required_index)
+    return tuple(sorted(selected))
+
+
 def _extract_review_images(
     archive_path: Path, frames: Sequence[FrameRecord], output: Path,
-    quality: int = 78,
-) -> tuple[int | None, int | None, bool, list[tuple[int, int]]]:
+    quality: int = 78, *, frame_indices: Sequence[int] | None = None,
+) -> tuple[int | None, int | None, bool, list[tuple[int, int] | None]]:
     output.mkdir(parents=True)
     sizes: set[tuple[int, int]] = set()
-    ordered_sizes: list[tuple[int, int]] = []
+    ordered_sizes: list[tuple[int, int] | None] = [None] * len(frames)
+    selected = tuple(range(len(frames))) if frame_indices is None else tuple(frame_indices)
+    if tuple(sorted(set(selected))) != selected or any(
+        index < 0 or index >= len(frames) for index in selected
+    ):
+        raise ValueError("review frame indices must be unique, ordered, and in range")
     with zipfile.ZipFile(archive_path) as archive:
-        for index, frame in enumerate(frames, 1):
+        for index in selected:
+            frame = frames[index]
             from io import BytesIO
             with Image.open(BytesIO(archive.read(frame.member))) as source:
                 rgb = source.convert("RGB")
                 sizes.add(rgb.size)
-                ordered_sizes.append(rgb.size)
-                rgb.save(output / f"frame_{index:04d}.webp", "WEBP", quality=quality, method=3)
+                ordered_sizes[index] = rgb.size
+                rgb.save(
+                    output / f"frame_{index + 1:04d}.webp",
+                    "WEBP",
+                    quality=quality,
+                    method=3,
+                )
     width, height = next(iter(sizes)) if len(sizes) == 1 else (None, None)
     return width, height, len(sizes) != 1, ordered_sizes
 
@@ -289,6 +366,9 @@ def build_report(
     dwell_s: float | None = None,
     report_title: str | None = None,
     review_quality: int = 78,
+    review_frame_count: int | None = 100,
+    retain_frame_ordinals: Sequence[int] = (),
+    include_auto_events: bool = True,
     overwrite: bool = False,
 ) -> Path:
     if len(predictions_paths) != len(model_spec_paths) or not predictions_paths:
@@ -305,7 +385,15 @@ def build_report(
     if len({spec.key for spec in specs}) != len(specs):
         raise ValueError("Model keys must be unique")
     session = hash_frame_payloads(load_session_archive(session_zip))
-    imported_events = import_point_events(session)
+    review_frame_indices = select_review_frame_indices(
+        len(session.frames),
+        review_frame_count,
+        retain_frame_ordinals=retain_frame_ordinals,
+    )
+    imported_events = import_point_events(
+        session,
+        include_auto_events=include_auto_events,
+    )
     tables = [load_predictions(path, spec, session.frames) for path, spec in zip(predictions_paths, specs)]
     times = np.asarray([frame.elapsed_s for frame in session.frames], dtype=np.float64)
     captures = [_parse_utc(frame.captured_at_utc) for frame in session.frames]
@@ -315,10 +403,17 @@ def build_report(
     stage = Path(tempfile.mkdtemp(prefix=".rheed-labeling-", dir=destination.parent))
     try:
         review_width, review_height, mixed_dimensions, frame_dimensions = _extract_review_images(
-            session.path, session.frames, stage / "images", review_quality
+            session.path,
+            session.frames,
+            stage / "images",
+            review_quality,
+            frame_indices=review_frame_indices,
         )
         frame_contexts = [dict(item) for item in imported_events.frame_contexts]
-        for context, (width, height) in zip(frame_contexts, frame_dimensions, strict=True):
+        for context, dimensions in zip(frame_contexts, frame_dimensions, strict=True):
+            if dimensions is None:
+                continue
+            width, height = dimensions
             context["camera_width"] = context.get("camera_width") or width
             context["camera_height"] = context.get("camera_height") or height
         (stage / "vendor").mkdir()
@@ -370,16 +465,30 @@ def build_report(
             "capture_geometry_id": _constant_or_mixed([frame.capture_geometry_id for frame in session.frames]),
             "review_asset": {"format": "webp", "lossy": True, "quality": review_quality,
                              "width": review_width, "height": review_height,
-                             "mixed_dimensions": mixed_dimensions},
+                             "mixed_dimensions": mixed_dimensions,
+                             "frame_count": len(review_frame_indices),
+                             "frame_ordinals": [index + 1 for index in review_frame_indices],
+                             "sampling": (
+                                 "all_saved_frames"
+                                 if len(review_frame_indices) == len(session.frames)
+                                 else "uniform_saved_frame_index"
+                             )},
             "annotation_mode": "model_assisted_review",
             "model_outputs_visible": True,
             "eligible_for_gold": False,
+            "automatic_event_proposals_included": bool(include_auto_events),
             "model_context_fingerprint": model_context_fingerprint,
             "model_outputs": model_context,
         }
+        state_segments = derive_state_segments(
+            imported_events.events,
+            frame_count=len(session.frames),
+            session_identity=str(dataset["dataset_id"]),
+        )
         config = {
             "title": report_title or f"RHEED temporal review — {session.path.stem}",
             "count": len(session.frames), "start_capture_utc": session.frames[0].captured_at_utc,
+            "review_frame_indices": list(review_frame_indices),
             "models": report_models, "probability_columns": [len(spec.classes) for spec in specs],
             "sprite": {"data_uri": "", "columns": 1, "tile_width": 1, "tile_height": 1},
             "full_assets": True, "image_pattern": "images/frame_{index}.webp", "dataset": dataset,
@@ -389,6 +498,8 @@ def build_report(
             # Point-event data is imported from immutable source CSVs.  The
             # browser edits a revision journal, not these acquisition rows.
             "annotation_schema": POINT_EVENT_SCHEMA,
+            "initial_state": INITIAL_STATE,
+            "state_segments": state_segments,
             "point_events": list(imported_events.events),
             "reference_events": list(imported_events.reference_events),
             "unlinked_legacy_labels": list(imported_events.unlinked_legacy_labels),
@@ -434,6 +545,8 @@ def build_report(
             "outputs": {
                 "interactive_report": "interactive_report.html",
                 "images": "images/",
+                "review_frame_count": len(review_frame_indices),
+                "review_frame_ordinals": [index + 1 for index in review_frame_indices],
                 "vendor": "vendor/",
                 "third_party_notices": "vendor/THIRD_PARTY_NOTICES.md",
             },
@@ -441,6 +554,7 @@ def build_report(
                 "annotation_mode": "model_assisted_review",
                 "model_outputs_visible": True,
                 "eligible_for_gold": False,
+                "automatic_event_proposals_included": bool(include_auto_events),
                 "schema_version": POINT_EVENT_SCHEMA,
             },
             "point_events": {

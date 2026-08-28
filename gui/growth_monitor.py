@@ -185,12 +185,10 @@ MAX_SENSOR_DISPLAY_ROWS = 500
 class AutoCaptureBanner(QFrame):
     """Non-modal interrupt banner shown when auto-capture flags an event.
 
-    Default behavior is to *keep* the just-saved context buffer — the
-    countdown auto-confirms keep on timeout. The grower can hit Discard
-    to delete the buffer directory if the flag looks spurious. Discard
-    only deletes the visual frames; the CSV row in
-    ``auto_capture_events.csv`` stays as a record that the detector
-    fired (with `buffer_count` reflecting the original save).
+    The immutable context buffer is always kept. Explicit buttons Confirm or
+    Reject the same v2 candidate shown by the Events tab; timeout leaves that
+    candidate Pending for later review. Legacy keep/discard CSV states remain
+    storage-audit evidence and never delete captured frames.
 
     Apr 17 design — the "progress bar" interrupt mechanism that builds
     grower trust in the detector's prompt cadence before the
@@ -229,7 +227,7 @@ class AutoCaptureBanner(QFrame):
         self._countdown_label.setStyleSheet("font-size: 12px; color: #666;")
         layout.addWidget(self._countdown_label)
 
-        self._discard_btn = QPushButton("Discard")
+        self._discard_btn = QPushButton("Reject candidate")
         self._discard_btn.setStyleSheet(
             "QPushButton { background-color: #fff; color: #b91c1c; "
             "border: 1px solid #b91c1c; border-radius: 3px; }"
@@ -238,7 +236,7 @@ class AutoCaptureBanner(QFrame):
         self._discard_btn.clicked.connect(self._on_discard_clicked)
         layout.addWidget(self._discard_btn)
 
-        self._keep_btn = QPushButton("Keep Now")
+        self._keep_btn = QPushButton("Confirm candidate")
         self._keep_btn.setStyleSheet(
             "QPushButton { background-color: #fff; color: #15803d; "
             "border: 1px solid #15803d; border-radius: 3px; }"
@@ -282,7 +280,7 @@ class AutoCaptureBanner(QFrame):
 
     def _update_countdown_label(self) -> None:
         self._countdown_label.setText(
-            f"Auto-keeping in {self._countdown_remaining}s"
+            f"Stays Pending; closes in {self._countdown_remaining}s"
         )
 
     def _on_discard_clicked(self) -> None:
@@ -365,7 +363,6 @@ class GrowthMonitor(QWidget):
         self._blind_labeling_mode = False
         self._live_classifier_widgets: list[QWidget] = []
         self._classifier_output_exposure_recorded = False
-        self._equalizer_output_exposure_recorded = False
         # Operator-known acquisition state is independent of classifier
         # Bad/OOD predictions and remains available when live classification
         # is disabled.
@@ -446,7 +443,7 @@ class GrowthMonitor(QWidget):
         self._build_direct_read_tab()
         self._build_events_tab()
         self._build_scrubber_tab()
-        self._build_live_equalizer_tab()
+        self._build_hidden_live_equalizer_compatibility_widget()
         self._build_session_tab()
         root.addWidget(self._tabs, 1)
 
@@ -464,7 +461,7 @@ class GrowthMonitor(QWidget):
         layout.setSpacing(8)
 
         # Auto-capture event banner — hidden by default, surfaces when the
-        # detector flags an event and disappears on Keep / Discard / timeout.
+        # detector flags an event and disappears on Confirm / Reject / timeout.
         self.auto_capture_banner = AutoCaptureBanner()
         self.auto_capture_banner.decision_made.connect(
             self._on_auto_capture_decision_internal,
@@ -989,26 +986,22 @@ class GrowthMonitor(QWidget):
         label = "Events" if count == 0 else f"Events ({count})"
         self._tabs.setTabText(self._events_tab_index, label)
 
-    # ----- Live Equalizer Tab ----------------------------------------------
+    # ----- Hidden legacy Equalizer compatibility ---------------------------
 
-    def _build_live_equalizer_tab(self):
-        """Mount the LiveEqualizerTab — real-time RHEED labeling surface.
+    def _build_hidden_live_equalizer_compatibility_widget(self) -> None:
+        """Keep legacy Equalizer APIs available without exposing their UI.
 
-        Ships workstream #4 from the Jul 10 2026 group meeting per PI
-        direction (same-day pivot from popup to tab): first-class tab
-        alongside the retrospective surfaces. Placed AFTER Scrubber and
-        BEFORE Session so the tab order reads:
-
-          Monitor → Direct-read → Events → Scrubber → Live Equalizer → Session
-
-        Live surfaces (Monitor, Live Equalizer) bracket the retrospective
-        surfaces (Events, Scrubber) with admin (Session) at the end.
+        GrowthApp still calls this object's provenance and lifecycle methods
+        when it reads older sessions containing calibration or ``live_labels``
+        records. Keeping the object avoids changing that compatibility path,
+        but deliberately never adding it to ``self._tabs`` ensures neither
+        chamber presents Live Equalizer as an operator-facing labeling tool.
         """
-        self.live_equalizer_tab = LiveEqualizerTab()
-        self._live_equalizer_tab_index = self._tabs.addTab(
-            self.live_equalizer_tab, "Live Equalizer",
+        self.live_equalizer_tab = LiveEqualizerTab(parent=self)
+        self.live_equalizer_tab.setObjectName(
+            "legacyLiveEqualizerCompatibilityWidget"
         )
-        self._tabs.currentChanged.connect(self._on_main_tab_changed)
+        self.live_equalizer_tab.hide()
 
     def _on_blind_labeling_mode_changed(self, active: bool) -> None:
         """Suppress every in-app model/Equalizer answer during blind review."""
@@ -1017,25 +1010,10 @@ class GrowthMonitor(QWidget):
             widget.setVisible(not active)
             if active:
                 widget.setEnabled(False)
-        if hasattr(self, "_live_equalizer_tab_index"):
-            self._tabs.setTabEnabled(self._live_equalizer_tab_index, not active)
         if active and hasattr(self, "live_equalizer_tab"):
             self.live_equalizer_tab.update_classifier_state(None)
         elif not active:
             self._apply_state()
-
-    def _on_main_tab_changed(self, index: int) -> None:
-        """Persist that the operator opened the model-assisted Equalizer UI."""
-        if (
-            self._blind_labeling_mode
-            or self._equalizer_output_exposure_recorded
-            or index != getattr(self, "_live_equalizer_tab_index", -1)
-        ):
-            return
-        recorded = self.events_tab.record_equalizer_output_visible()
-        self._equalizer_output_exposure_recorded = bool(recorded)
-        if not recorded:
-            self._tabs.setCurrentIndex(self._events_tab_index)
 
     # ----- Scrubber Tab ----------------------------------------------------
 
@@ -1047,7 +1025,7 @@ class GrowthMonitor(QWidget):
         continuous capture (heartbeat system) to complete the three-
         concern architecture (capture / mark / label). Its one job is
         letting the grower flip through the growth 'movie' after the
-        fact; labeling stays on Events tab + Equalizer tab.
+        fact; event labeling stays on the Events tab.
 
         Placed after Events in the tab order so the retrospective
         surfaces sit together — grower's mental model is now → auto-
@@ -1152,11 +1130,11 @@ class GrowthMonitor(QWidget):
         )
         self.config_camera_mode.setItemData(
             0,
-            "Stable experimental STO 1x1 frame for Equalizer alignment.",
+            "Stable experimental STO 1x1 frame for alignment testing.",
         )
         self.config_camera_mode.setItemData(
             1,
-            "Stable experimental STO c(6x2) frame for Equalizer alignment.",
+            "Stable experimental STO c(6x2) frame for alignment testing.",
         )
         self.config_camera_mode.setItemData(
             2,
@@ -1427,9 +1405,9 @@ class GrowthMonitor(QWidget):
 
     def _apply_state(self):
         s = self._state
-        # Live Equalizer tab may not exist yet during the first _apply_state
-        # from __init__ (setState fires before _build_ui completes for that
-        # tab). Guard so early state application doesn't AttributeError.
+        # The hidden compatibility widget may not exist yet during the first
+        # _apply_state from __init__. Guard the legacy lifecycle calls so an
+        # early state application does not raise AttributeError.
         _le_tab = getattr(self, "live_equalizer_tab", None)
         if s == "idle":
             self.arm_btn.setText("ARM")
@@ -1489,8 +1467,8 @@ class GrowthMonitor(QWidget):
             # session dir. Idle/armed clicks would go nowhere since the
             # logger hasn't opened manual_events.csv yet.
             self.mark_event_btn.setEnabled(True)
-            # Live Equalizer Save has the same gating logic — writes need
-            # an active session so live_labels.csv is open.
+            # Preserve the legacy save gate for historical integrations even
+            # though no Equalizer control is exposed in the tab bar.
             if _le_tab is not None:
                 _le_tab.set_save_enabled(True)
             self.sample_id_input.setEnabled(False)
@@ -1721,10 +1699,8 @@ class GrowthMonitor(QWidget):
         if state.frame is not None:
             self._current_frame = state.frame
             self._display_frame(state.frame)
-            # Feed the Live Equalizer tab too — attribute-guarded because
-            # this method is called from __init__ paths where the tab may
-            # not yet be constructed (early camera state emit races GUI
-            # build).
+            # Feed the hidden compatibility widget too. Attribute-guarded
+            # because early camera state emission can race GUI construction.
             if hasattr(self, "live_equalizer_tab"):
                 self.live_equalizer_tab.update_camera_frame(
                     state.frame, self.get_current_capture_metadata(),
@@ -1957,10 +1933,8 @@ class GrowthMonitor(QWidget):
                 "Ms: time to classify this frame."
             )
 
-        # Route the same state to the Live Equalizer tab so its Classifier
-        # % breakdown mirrors what the Monitor tab shows. Attribute-guarded
-        # in case update_classifier_state fires before _build_ui completes
-        # (early classifier bridge init races GUI construction).
+        # Preserve legacy classifier-state routing to the hidden compatibility
+        # widget. Attribute-guarded for early worker emissions during build.
         if hasattr(self, "live_equalizer_tab"):
             self.live_equalizer_tab.update_classifier_state(state)
 
@@ -2025,7 +1999,6 @@ class GrowthMonitor(QWidget):
         """Clear cached scores at a START/STOP generation boundary."""
         self._latest_classifier = None
         self._classifier_output_exposure_recorded = False
-        self._equalizer_output_exposure_recorded = False
         if self._correction_active:
             self.correction_btn.setChecked(False)
             self._on_correction_toggled(False)
@@ -2991,9 +2964,7 @@ class GrowthMonitor(QWidget):
         self._continuous_capture_interval_s = None
         self._continuous_capture_count = 0
         self._update_continuous_capture_label()
-        # Live Equalizer tab wipes its transient state (last camera frame,
-        # classifier %). Basis + slider defaults preserved. Attribute-
-        # guarded because reset_displays can be called during teardown
-        # after the tab was deleted.
+        # The hidden legacy widget wipes transient state while preserving its
+        # basis defaults. Keep this for older session/calibration readers.
         if hasattr(self, "live_equalizer_tab"):
             self.live_equalizer_tab.reset_for_new_session()

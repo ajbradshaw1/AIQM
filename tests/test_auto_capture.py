@@ -38,7 +38,9 @@ import numpy as np  # noqa: E402
 
 from gui.auto_capture import (  # noqa: E402
     AutoCaptureEngine,
+    ChangeDetector,
     PixelDiffChangeDetector,
+    TranslationInvariantChangeDetector,
 )
 
 
@@ -52,6 +54,89 @@ def _frame(fill: float = 0.0, shape: tuple[int, int] = (32, 32),
     if noise > 0:
         arr += rng.normal(0, noise, size=shape).astype(np.float32)
     return arr
+
+
+def _rheed_pattern(
+    shape: tuple[int, int] = (64, 80),
+    *,
+    variant: int = 0,
+) -> np.ndarray:
+    """Synthetic spot/streak pattern with enough texture for registration."""
+    height, width = shape
+    y, x = np.mgrid[:height, :width]
+    image = (
+        18.0
+        + 125.0 * np.exp(-((x - 0.31 * width) ** 2) / 18.0)
+        * np.exp(-((y - 0.36 * height) ** 2) / 65.0)
+        + 105.0 * np.exp(-((x - 0.67 * width) ** 2) / 22.0)
+        * np.exp(-((y - 0.63 * height) ** 2) / 55.0)
+        + 24.0 * np.sin(x / 5.5) ** 2
+    ).astype(np.float32)
+    if variant:
+        x_center = int((0.42 + 0.05 * (variant % 3)) * width)
+        y_center = int((0.24 + 0.07 * (variant % 2)) * height)
+        image += (
+            (80.0 + 15.0 * variant)
+            * np.exp(-((x - x_center) ** 2 + (y - y_center) ** 2) / 30.0)
+        ).astype(np.float32)
+    return image
+
+
+def _translated(
+    frame: np.ndarray,
+    shift_y: int,
+    shift_x: int,
+) -> np.ndarray:
+    """Translate with blank padding (no wrapped pixels)."""
+    output = np.zeros_like(frame)
+    height, width = frame.shape
+    source_y_start = max(0, -shift_y)
+    source_y_end = min(height, height - shift_y)
+    source_x_start = max(0, -shift_x)
+    source_x_end = min(width, width - shift_x)
+    target_y_start = source_y_start + shift_y
+    target_y_end = source_y_end + shift_y
+    target_x_start = source_x_start + shift_x
+    target_x_end = source_x_end + shift_x
+    output[target_y_start:target_y_end, target_x_start:target_x_end] = frame[
+        source_y_start:source_y_end,
+        source_x_start:source_x_end,
+    ]
+    return output
+
+
+class _SequenceDetector(ChangeDetector):
+    """Deterministic scalar detector for engine state-machine tests."""
+
+    def __init__(self, samples: list[float | tuple[float, str]]):
+        self._samples = iter(samples)
+        self._last_score = 0.0
+        self._last_status = "ok"
+
+    def reset(self) -> None:
+        self._last_score = 0.0
+        self._last_status = "ok"
+
+    def compute_score(self, frame: np.ndarray) -> float:
+        del frame
+        sample = next(self._samples)
+        if isinstance(sample, tuple):
+            score, status = sample
+            self._last_score = float(score)
+            self._last_status = status
+        else:
+            self._last_score = float(sample)
+            self._last_status = "ok"
+        return self._last_score
+
+    @property
+    def last_diagnostics(self) -> dict:
+        return {
+            "detector": type(self).__name__,
+            "status": self._last_status,
+            "score": self._last_score,
+            "raw_score": self._last_score,
+        }
 
 
 class PixelDiffChangeDetectorTests(unittest.TestCase):
@@ -151,6 +236,89 @@ class PixelDiffChangeDetectorTests(unittest.TestCase):
         self.assertEqual(len(det._buffer), 4)
 
 
+class TranslationInvariantChangeDetectorTests(unittest.TestCase):
+    """Registration, structural scoring, and fail-closed behavior."""
+
+    def test_identical_translated_frame_has_low_score(self):
+        reference = _rheed_pattern()
+        current = _translated(reference, shift_y=3, shift_x=-4)
+        detector = TranslationInvariantChangeDetector(
+            smooth_window=1,
+            max_shift_px=8,
+        )
+        self.assertEqual(detector.compute_score(reference), 0.0)
+
+        score = detector.compute_score(current)
+
+        self.assertLess(score, 0.05)
+        diagnostics = detector.last_diagnostics
+        self.assertEqual(diagnostics["status"], "ok")
+        self.assertEqual(diagnostics["shift_y_px"], -3)
+        self.assertEqual(diagnostics["shift_x_px"], 4)
+        self.assertGreater(diagnostics["registration_confidence"], 0.4)
+        self.assertGreater(diagnostics["overlap_fraction"], 0.85)
+
+    def test_structural_change_stays_high_after_registration(self):
+        reference = _rheed_pattern()
+        changed = _translated(
+            _rheed_pattern(variant=2),
+            shift_y=2,
+            shift_x=-3,
+        )
+        detector = TranslationInvariantChangeDetector(
+            smooth_window=1,
+            max_shift_px=8,
+        )
+        detector.compute_score(reference)
+
+        score = detector.compute_score(changed)
+
+        self.assertGreater(score, 4.0)
+        self.assertEqual(detector.last_diagnostics["status"], "ok")
+
+    def test_uniform_brightness_and_contrast_change_is_controlled(self):
+        reference = _rheed_pattern()
+        brighter = 1.7 * reference + 31.0
+        detector = TranslationInvariantChangeDetector(smooth_window=1)
+        detector.compute_score(reference)
+
+        score = detector.compute_score(brighter)
+
+        self.assertLess(score, 0.05)
+        self.assertEqual(detector.last_diagnostics["status"], "ok")
+
+    def test_low_texture_fails_closed_with_diagnostic(self):
+        detector = TranslationInvariantChangeDetector(
+            smooth_window=1,
+            min_texture_span=2.0,
+        )
+        detector.compute_score(_frame(fill=100.0, shape=(64, 80)))
+
+        score = detector.compute_score(_frame(fill=105.0, shape=(64, 80)))
+
+        self.assertEqual(score, 0.0)
+        self.assertEqual(detector.last_diagnostics["status"], "low_texture")
+
+    def test_excessive_shift_fails_closed_with_diagnostic(self):
+        reference = _rheed_pattern()
+        current = _translated(reference, shift_y=12, shift_x=11)
+        detector = TranslationInvariantChangeDetector(
+            smooth_window=1,
+            max_shift_px=4,
+        )
+        detector.compute_score(reference)
+
+        score = detector.compute_score(current)
+
+        self.assertEqual(score, 0.0)
+        diagnostics = detector.last_diagnostics
+        self.assertEqual(diagnostics["status"], "excessive_shift")
+        self.assertTrue(
+            abs(diagnostics["shift_y_px"]) > 4
+            or abs(diagnostics["shift_x_px"]) > 4
+        )
+
+
 class AutoCaptureEngineTests(unittest.TestCase):
     """Eight tests locking the engine state machine."""
 
@@ -202,14 +370,11 @@ class AutoCaptureEngineTests(unittest.TestCase):
         engine.enabled = True
         self._connect_spy(engine)
         # Warmup burn
-        engine.evaluate(_frame(fill=100.0, seed=0))
-        # Now feed 3 clearly-changed frames back-to-back (each
-        # noisy so detector score > 0.001). Change from previous
-        # buffer mean drives compute_score above threshold.
+        engine.evaluate(_rheed_pattern())
+        # Now feed a sustained spatially changed state. The production
+        # detector intentionally ignores uniform brightness-only changes.
         for i in range(3):
-            engine.evaluate(
-                _frame(fill=100.0 + (i + 1) * 40, seed=i + 1),
-            )
+            engine.evaluate(_rheed_pattern(variant=2))
         # After 3 consecutive, exactly 1 event emitted
         self.assertEqual(len(self.emitted), 1)
 
@@ -223,19 +388,137 @@ class AutoCaptureEngineTests(unittest.TestCase):
         )
         engine.enabled = True
         self._connect_spy(engine)
-        engine.evaluate(_frame(fill=100.0, seed=0))  # warmup
+        engine.evaluate(_rheed_pattern())  # warmup
         # First 3 → fire event #1
         for i in range(3):
-            engine.evaluate(
-                _frame(fill=100.0 + (i + 1) * 40, seed=i + 1),
-            )
+            engine.evaluate(_rheed_pattern(variant=2))
         self.assertEqual(len(self.emitted), 1)
         # Next 3 within cooldown — must not fire
         for i in range(3, 6):
-            engine.evaluate(
-                _frame(fill=100.0 + (i + 1) * 40, seed=i + 1),
-            )
+            engine.evaluate(_rheed_pattern(variant=3))
         self.assertEqual(len(self.emitted), 1)
+
+    def test_sustained_plateau_requires_below_threshold_rearm(self):
+        engine = AutoCaptureEngine(
+            warmup_frames=0,
+            threshold=1.0,
+            cooldown_s=0.0,
+            rearm_below_frames=3,
+        )
+        engine.set_detector(
+            _SequenceDetector(
+                [2.0] * 6 + [0.0] * 3 + [2.0] * 3,
+            )
+        )
+        engine.enabled = True
+        self._connect_spy(engine)
+
+        for _ in range(3):
+            engine.evaluate(_frame())
+        self.assertEqual(len(self.emitted), 1)
+        self.assertFalse(engine.latest_diagnostics["trigger_armed"])
+
+        for _ in range(3):
+            engine.evaluate(_frame())
+        self.assertEqual(len(self.emitted), 1)
+        self.assertEqual(
+            engine.latest_diagnostics["suppressed"],
+            "waiting_for_rearm",
+        )
+
+        for _ in range(3):
+            engine.evaluate(_frame())
+        self.assertTrue(engine.latest_diagnostics["trigger_armed"])
+        self.assertTrue(engine.latest_diagnostics["rearmed"])
+
+        for _ in range(3):
+            engine.evaluate(_frame())
+        self.assertEqual(len(self.emitted), 2)
+        self.assertFalse(engine.latest_diagnostics["trigger_armed"])
+
+    def test_unavailable_zero_scores_do_not_rearm(self):
+        engine = AutoCaptureEngine(
+            warmup_frames=0,
+            threshold=1.0,
+            cooldown_s=0.0,
+            rearm_below_frames=3,
+        )
+        engine.set_detector(
+            _SequenceDetector(
+                [2.0] * 3
+                + [(0.0, "low_texture")] * 3
+                + [2.0] * 3
+                + [0.0] * 3
+                + [2.0] * 3
+            )
+        )
+        engine.enabled = True
+        self._connect_spy(engine)
+
+        for _ in range(3):
+            engine.evaluate(_frame())
+        self.assertEqual(len(self.emitted), 1)
+
+        for _ in range(3):
+            engine.evaluate(_frame())
+        self.assertFalse(engine.latest_diagnostics["trigger_armed"])
+        self.assertEqual(
+            engine.latest_diagnostics["suppressed"],
+            "unavailable_score",
+        )
+
+        for _ in range(3):
+            engine.evaluate(_frame())
+        self.assertEqual(len(self.emitted), 1)
+
+        for _ in range(3):
+            engine.evaluate(_frame())
+        self.assertTrue(engine.latest_diagnostics["trigger_armed"])
+
+        for _ in range(3):
+            engine.evaluate(_frame())
+        self.assertEqual(len(self.emitted), 2)
+
+    def test_production_default_exposes_diagnostics_without_signal_break(self):
+        engine = AutoCaptureEngine(
+            warmup_frames=1,
+            threshold=0.5,
+            cooldown_s=0.0,
+        )
+        self.assertIsInstance(
+            engine._detector,
+            TranslationInvariantChangeDetector,
+        )
+        engine.enabled = True
+        self._connect_spy(engine)
+        engine.evaluate(
+            _rheed_pattern(),
+            {"capture_sequence": 41, "capture_backend": "wgc"},
+        )
+        for _ in range(3):
+            engine.evaluate(
+                _rheed_pattern(variant=2),
+                {"capture_sequence": 42, "capture_backend": "wgc"},
+            )
+
+        self.assertEqual(len(self.emitted), 1)
+        # Existing signal is still exactly (frame, scalar score).
+        self.assertEqual(len(self.emitted[0]), 2)
+        self.assertIsInstance(self.emitted[0][1], float)
+        diagnostics = engine.latest_diagnostics
+        self.assertEqual(
+            diagnostics["detector"],
+            "TranslationInvariantChangeDetector",
+        )
+        self.assertIn("shift_y_px", diagnostics)
+        self.assertIn("registration_confidence", diagnostics)
+        latest_metadata = engine.get_recent_captures()[-1][1]
+        self.assertEqual(latest_metadata["capture_sequence"], 42)
+        self.assertEqual(latest_metadata["capture_backend"], "wgc")
+        self.assertEqual(
+            latest_metadata["change_detection"]["detector"],
+            "TranslationInvariantChangeDetector",
+        )
 
     def test_context_buffer_size_20(self):
         # Default context_buffer_size == 20. Feed 30 frames; only
@@ -323,12 +606,12 @@ class AutoCaptureEngineTests(unittest.TestCase):
         engine.enabled = True
         self._connect_spy(engine)
         # Warmup burn
-        engine.evaluate(_frame(fill=100.0, seed=0))
+        engine.evaluate(_rheed_pattern())
         # Feed many high-change frames — should suppress events
         # entirely while baseline is filling
         for i in range(8):
             engine.evaluate(
-                _frame(fill=100.0 + (i + 1) * 30, seed=i + 1),
+                _rheed_pattern(variant=i + 1),
             )
         self.assertEqual(self.emitted, [])
         # Baseline should have accumulated the scores from those frames

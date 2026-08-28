@@ -22,6 +22,9 @@ def _build(args: argparse.Namespace) -> int:
         args.output_dir,
         report_title=args.title,
         review_quality=args.review_quality,
+        review_frame_count=args.review_frame_count,
+        retain_frame_ordinals=args.retain_frame,
+        include_auto_events=not args.exclude_auto_events,
         overwrite=args.overwrite,
     )
     print(report)
@@ -32,7 +35,7 @@ def _validate(args: argparse.Namespace) -> int:
     payload = load_report_payload(args.report)
     document = json.loads(args.annotations.read_text(encoding="utf-8"))
     validated = validate_annotation_document(document, payload)
-    is_point = validated.get("schema_version") == "rheed-point-events-v1"
+    is_point = validated.get("schema_version") == "rheed-point-events-v2"
     print(json.dumps({
         "valid": True,
         "dataset_id": validated["dataset"]["dataset_id"],
@@ -54,11 +57,15 @@ def _extract_frame(args: argparse.Namespace) -> int:
     return 0
 
 
-def _desktop(_args: argparse.Namespace) -> int:
+def _desktop(args: argparse.Namespace) -> int:
     # Keep PyQt6 out of build/validate startup and headless environments.
     from .desktop_launcher import main as desktop_main
 
-    return desktop_main()
+    return desktop_main(
+        initial_session=args.session,
+        initial_report=args.report,
+        open_report=args.open,
+    )
 
 
 def _performance_probe(args: argparse.Namespace) -> int:
@@ -88,6 +95,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     build.add_argument("--output-dir", type=Path, required=True)
     build.add_argument("--title", default="RHEED reconstruction timeline")
     build.add_argument("--review-quality", type=int, default=78)
+    build.add_argument(
+        "--review-frame-count",
+        type=int,
+        default=100,
+        help="Keep this many uniformly spaced WebP review frames (default: 100)",
+    )
+    build.add_argument(
+        "--retain-frame",
+        type=int,
+        action="append",
+        default=[],
+        metavar="SAVED_FRAME_ORDINAL",
+        help=(
+            "Keep an exact one-based saved frame within the fixed review-frame "
+            "budget; repeat for additional frames"
+        ),
+    )
+    build.add_argument(
+        "--exclude-auto-events",
+        action="store_true",
+        help=(
+            "Omit automatic image-change proposals from the report without "
+            "modifying the immutable session archive"
+        ),
+    )
     build.add_argument("--overwrite", action="store_true", help="Replace an existing output directory")
     build.set_defaults(func=_build)
 
@@ -97,6 +129,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     validate.set_defaults(func=_validate)
 
     desktop = subparsers.add_parser("desktop", help="Open the PyQt6 report launcher")
+    desktop.add_argument(
+        "--session",
+        type=Path,
+        help="Preselect the matching immutable Growth Monitor session ZIP",
+    )
+    desktop.add_argument(
+        "--report",
+        type=Path,
+        help="Preselect a generated interactive_report.html",
+    )
+    desktop.add_argument(
+        "--open",
+        action="store_true",
+        help="Open --report through the durable local point-event service at startup",
+    )
     desktop.set_defaults(func=_desktop)
 
     extract = subparsers.add_parser(
@@ -133,6 +180,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "build" and len(args.predictions) != len(args.model_spec):
         parser.error("--predictions and --model-spec must contain the same number of paths")
+    if args.command == "desktop" and args.open and args.report is None:
+        parser.error("desktop --open requires --report")
     try:
         return int(args.func(args) or 0)
     except (OSError, ValueError, json.JSONDecodeError) as exc:

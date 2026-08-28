@@ -1,4 +1,4 @@
-"""Fail-closed validation for model-visible temporal segment annotations."""
+"""Fail-closed validation for point events and legacy temporal segments."""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def validate_annotation_document(
 ) -> dict[str, Any]:
     """Validate the current point-event schema or legacy read-only segments."""
 
-    if isinstance(document, dict) and document.get("schema_version") == "rheed-point-events-v1":
+    if isinstance(document, dict) and document.get("schema_version") == "rheed-point-events-v2":
         from .point_events import PointEventValidationError, validate_point_event_document
 
         try:

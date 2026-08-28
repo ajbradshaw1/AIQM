@@ -207,6 +207,8 @@ class _GrowthLog:
             writer_ready=True,
         )
         self.auto_capture_decision_result = True
+        self.point_candidate_decision_result = True
+        self.point_candidate_decisions: list[tuple[int, str]] = []
         self.last_auto_capture_kwargs = None
 
     def save_session_metadata(self, metadata: dict) -> None:
@@ -226,6 +228,12 @@ class _GrowthLog:
 
     def update_auto_capture_state(self, _event_idx: int, _state: str) -> bool:
         return self.auto_capture_decision_result
+
+    def set_auto_capture_candidate_decision(
+        self, event_idx: int, decision: str,
+    ) -> bool:
+        self.point_candidate_decisions.append((event_idx, decision))
+        return self.point_candidate_decision_result
 
 
 class _CloseEvent:
@@ -558,6 +566,25 @@ class StopWorkersTests(unittest.TestCase):
 
         self.assertIn("decision was not saved", app._status_bar.messages[-1])
         self.assertNotIn("marked discarded", app._status_bar.messages[-1])
+
+    def test_explicit_banner_decisions_update_same_point_candidate(self):
+        app = _AppHarness()
+
+        GrowthApp._on_auto_capture_decision(
+            app, 1, "frames/auto_event_001", "kept_explicit",
+        )
+        GrowthApp._on_auto_capture_decision(
+            app, 2, "frames/auto_event_002", "discarded",
+        )
+        GrowthApp._on_auto_capture_decision(
+            app, 3, "frames/auto_event_003", "kept_default",
+        )
+
+        self.assertEqual(
+            app.growth_log.point_candidate_decisions,
+            [(1, "confirmed"), (2, "rejected")],
+        )
+        self.assertIn("remains Unfinished", app._status_bar.messages[-1])
 
     def test_close_hides_auxiliary_top_levels_before_main_exit(self):
         qt_app = QApplication.instance() or QApplication([])

@@ -1,205 +1,138 @@
-"""Unit tests for the events_tab labeling form's change_from / change_to
-dropdowns (Jul 15 2026 addition).
+"""Interaction tests for editable v2 point-event labels and Anchors."""
 
-Locks the shape + round-trip behavior of the two new combos:
-  - present in the form after tab construction
-  - default to RECON_UNLABELED sentinel
-  - selection writes atomically to events_labels.csv
-  - selection persists across attach_session reload
-  - independent from primary_reconstruction (partial-update contract)
-
-Run:
-    python -m pytest -q tests/test_events_tab_labeling.py
-"""
 from __future__ import annotations
 
-import csv
 import os
-import sys
-import tempfile
-import unittest
 from pathlib import Path
+import sys
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-# QApplication precedes any QWidget. Same pattern as test_live_equalizer_tab.py.
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-_app = QApplication.instance() or QApplication(sys.argv)  # noqa: F841
-
-from gui.events_tab import (  # noqa: E402
-    RECON_LABEL_OPTIONS,
-    RECON_UNLABELED,
-    EventsTab,
-)
-from gui.growth_logger import GrowthLogger  # noqa: E402
+from PyQt6.QtWidgets import QMessageBox  # noqa: E402
+from gui.rheed_point_events import make_review_anchor, sha256_file  # noqa: E402
+from tests.test_events_tab import EventFixture, _app  # noqa: E402
 
 
-def _make_logger_with_session(tmp: str) -> GrowthLogger:
-    logger = GrowthLogger(base_dir=tmp)
-    logger.start_session("TEST_LABELING")
-    return logger
+class EditableEventLabelTests(EventFixture):
+    def setUp(self) -> None:
+        super().setUp()
+        self.attach_and_select()
 
+    def test_reconstruction_clarity_and_quality_autosave_independently(self) -> None:
+        with patch.object(QMessageBox, "warning") as warning:
+            rt13 = self.tab._reconstruction_change_combos["rt13"]
+            rt13.setCurrentIndex(rt13.findData("appeared"))
+            self.tab._clarity_combo.setCurrentIndex(
+                self.tab._clarity_combo.findData("good")
+            )
+            self.tab._quality_combo.setCurrentIndex(
+                self.tab._quality_combo.findData("bad")
+            )
+        self.assertFalse(warning.called, warning.call_args)
 
-class ChangeFromToDropdownTests(unittest.TestCase):
-    """Six locked behaviors for the change_from / change_to combos."""
+        state = self.store.get(self.event_id)
+        labels = state["review"]["labels"]
+        self.assertEqual(len(labels), 3)
+        reconstruction = next(item for item in labels if item["kind"] == "reconstruction")
+        clarity = next(item for item in labels if item["kind"] == "pattern_clarity")
+        quality = next(item for item in labels if item["kind"] == "surface_quality")
+        self.assertEqual((reconstruction["change"], reconstruction["value"]), ("appeared", "rt13"))
+        self.assertEqual((clarity["change"], clarity["value"]), ("became", "good"))
+        self.assertEqual((quality["change"], quality["value"]), ("became", "bad"))
 
-    def setUp(self):
-        self.tab = EventsTab()
-        self.tmp = tempfile.TemporaryDirectory()
-        self.logger = _make_logger_with_session(self.tmp.name)
-        self.tab.attach_session(self.logger)
-        # Simulate an event being "currently displayed" so the slots
-        # don't early-return on the None guard. Downstream tests set
-        # index + fire activated to trigger the write path.
-        self.tab._currently_displayed_event_idx = 1
+        rt13.setCurrentIndex(rt13.findData(""))
+        edited = self.store.get(self.event_id)["review"]["labels"]
+        self.assertFalse(any(item["kind"] == "reconstruction" for item in edited))
 
-    def tearDown(self):
-        self.tab.deleteLater()
-        try:
-            self.logger.end_session()
-        except Exception:
-            pass
-        self.tmp.cleanup()
-
-    def _read_labels_csv(self) -> list[dict]:
-        csv_path = self.logger.session_dir / "events_labels.csv"
-        if not csv_path.exists():
-            return []
-        with open(csv_path) as f:
-            return list(csv.DictReader(f))
-
-    def test_dropdowns_present_after_form_build(self):
-        # Both combos are exposed as public-ish attributes for slot wiring.
-        # Loss of these attribute names would break EventsTab.attach_session
-        # + the tests below, so lock the surface.
-        self.assertTrue(hasattr(self.tab, "_change_from_combo"))
-        self.assertTrue(hasattr(self.tab, "_change_to_combo"))
-        # Item count = 1 (unlabeled sentinel) + full RECON_LABEL_OPTIONS.
-        expected_count = 1 + len(RECON_LABEL_OPTIONS)
-        self.assertEqual(self.tab._change_from_combo.count(), expected_count)
-        self.assertEqual(self.tab._change_to_combo.count(), expected_count)
-
-    def test_dropdowns_default_to_unlabeled_sentinel(self):
-        # Fresh construction: both combos at index 0 = RECON_UNLABELED.
-        # Guard against a future accidental default-swap that would
-        # silently label every unfixed event as "1x1".
+        one_by_one = self.tab._reconstruction_change_combos["one_by_one"]
+        one_by_one.setCurrentIndex(one_by_one.findData("disappeared"))
+        edited = self.store.get(self.event_id)["review"]["labels"]
+        edited_recon = next(item for item in edited if item["kind"] == "reconstruction")
         self.assertEqual(
-            self.tab._change_from_combo.currentData(), RECON_UNLABELED,
+            (edited_recon["value"], edited_recon["change"]),
+            ("one_by_one", "disappeared"),
         )
+
+        self.tab._clarity_combo.setCurrentIndex(self.tab._clarity_combo.findData(""))
+        remaining = self.store.get(self.event_id)["review"]["labels"]
+        self.assertEqual(len(remaining), 2)
+        self.assertFalse(any(item["kind"] == "pattern_clarity" for item in remaining))
+
+    def test_labeler_identity_is_entered_once_for_session(self) -> None:
+        self.assertEqual(self.tab._labeler_input.text(), "grower-a")
+        self.assertFalse(hasattr(self.tab, "_reviewer_input"))
+        self.assertFalse(hasattr(self.tab, "_confidence_combo"))
+
+    def test_slider_frame_moves_only_review_point(self) -> None:
+        original = self.store.get(self.event_id)["source"]
+        self.tab._slider.setValue(1)
+        self.tab._move_review_to_current_frame()
+        state = self.store.get(self.event_id)
+        self.assertEqual(state["source"], original)
+        self.assertEqual(state["review"]["anchor"]["capture_sequence"], "101")
         self.assertEqual(
-            self.tab._change_to_combo.currentData(), RECON_UNLABELED,
+            state["review"]["anchor"]["image_sha256"], sha256_file(self.frames[1]),
         )
 
-    def test_change_from_selection_writes_to_csv(self):
-        # Pick "1x1" (index 1 = first real class after (unlabeled)) and
-        # fire the activation slot directly. QComboBox.activated is
-        # user-only in normal Qt; tests trigger it explicitly.
-        one_x_one_idx = self.tab._change_from_combo.findData("1x1")
-        self.tab._change_from_combo.setCurrentIndex(one_x_one_idx)
-        self.tab._on_change_from_activated(one_x_one_idx)
+    def test_representative_anchor_belongs_to_derived_interval(self) -> None:
+        htr = self.tab._reconstruction_change_combos["htr"]
+        htr.setCurrentIndex(htr.findData("appeared"))
+        self.tab._slider.setValue(1)
+        self.tab._set_representative_anchor()
+        state = self.store.get(self.event_id)
+        self.assertEqual(state["review"]["representative_anchor"]["capture_sequence"], "101")
+        self.assertIn("derived stable-state interval", self.tab._interval_explanation.text())
 
-        rows = self._read_labels_csv()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["event_idx"], "1")
-        self.assertEqual(rows[0]["change_from"], "1x1")
-        # change_to unchanged, still empty
-        self.assertEqual(rows[0].get("change_to", ""), "")
+    def test_posthoc_event_is_created_at_exact_shown_frame(self) -> None:
+        self.tab._slider.setValue(1)
+        before_ids = set(self.store.states)
+        self.tab._add_posthoc_event()
+        added_ids = set(self.store.states) - before_ids
+        self.assertEqual(len(added_ids), 1)
+        state = self.store.get(added_ids.pop())
+        self.assertEqual(state["source"]["kind"], "posthoc")
+        self.assertEqual(state["review"]["candidate_decision"], "confirmed")
+        self.assertEqual(state["review"]["anchor"]["capture_sequence"], "101")
 
-    def test_change_to_selection_writes_to_csv(self):
-        tw_idx = self.tab._change_to_combo.findData("Twinned (2x1)")
-        self.tab._change_to_combo.setCurrentIndex(tw_idx)
-        self.tab._on_change_to_activated(tw_idx)
 
-        rows = self._read_labels_csv()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["change_to"], "Twinned (2x1)")
-        # change_from unchanged, still empty
-        self.assertEqual(rows[0].get("change_from", ""), "")
-
-    def test_change_from_and_to_persist_across_reload(self):
-        # Set both, close the tab, reopen, verify populate_label_form
-        # restores the same selections. Full round-trip through disk.
-        from_idx = self.tab._change_from_combo.findData("1x1")
-        to_idx = self.tab._change_to_combo.findData("Twinned (2x1)")
-        self.tab._change_from_combo.setCurrentIndex(from_idx)
-        self.tab._on_change_from_activated(from_idx)
-        self.tab._change_to_combo.setCurrentIndex(to_idx)
-        self.tab._on_change_to_activated(to_idx)
-
-        # New tab against the same logger — re-reads the CSV into cache.
-        tab2 = EventsTab()
-        tab2.attach_session(self.logger)
-        tab2._currently_displayed_event_idx = 1
-        tab2._populate_label_form(1)
-
+class InitialAssumptionUiTests(EventFixture):
+    def test_initial_one_by_one_is_a_state_not_an_appearance_event(self) -> None:
+        first_anchor = make_review_anchor(
+            frame_path=self.frames[0], image_sha256=sha256_file(self.frames[0]),
+            capture_sequence=100, captured_at_utc="2026-08-20T12:00:10+00:00",
+            elapsed_s=0.0, view_segment_id=1, capture_geometry_id="geometry-a",
+        )
+        initial = self.store.ensure_initial_assumption(
+            actor="session", session_identity=self.session_dir.name,
+            first_frame_anchor=first_anchor,
+            original_at_utc="2026-08-20T12:00:00+00:00",
+        )
+        self.tab.attach_session(self.logger, labeler="grower-a")
+        for row in range(self.tab.events_table.rowCount()):
+            record = self.tab.events_table.item(row, 0).data(0x0100)
+            if isinstance(record, dict) and record.get("event_id") == initial["event_id"]:
+                self.tab.events_table.selectRow(row)
+                _app.processEvents()
+                break
+        self.assertEqual(initial["review"]["candidate_decision"], "confirmed")
+        self.assertEqual(initial["review"]["labels"], [])
+        self.assertIn("Initial state is not an appearance event", self.tab._completion_help.text())
+        self.assertFalse(self.tab._clarity_combo.isEnabled())
+        self.assertEqual(self.tab._clarity_combo.currentData(), "bad")
+        self.tab._quality_combo.setCurrentIndex(
+            self.tab._quality_combo.findData("good")
+        )
+        labels = self.store.get(initial["event_id"])["review"]["labels"]
         self.assertEqual(
-            tab2._change_from_combo.currentData(), "1x1",
+            [(item["kind"], item["value"]) for item in labels],
+            [("surface_quality", "good")],
         )
-        self.assertEqual(
-            tab2._change_to_combo.currentData(), "Twinned (2x1)",
-        )
-        tab2.deleteLater()
-
-    def test_change_dropdowns_do_not_affect_primary_reconstruction(self):
-        # Set a primary first, then change_from — the row should have
-        # BOTH values, not just the last-touched one. Guard against a
-        # subtle bug where update_event_label's None-preserving
-        # semantics get accidentally overridden.
-        # Seed the mutable legacy summary directly. The primary dropdown now
-        # represents an exact-frame human submission and correctly refuses a
-        # labeler-less, manifest-less test fixture.
-        self.logger.update_event_label(
-            1, primary_reconstruction="c(6x2)",
-        )
-
-        from_idx = self.tab._change_from_combo.findData("1x1")
-        self.tab._change_from_combo.setCurrentIndex(from_idx)
-        self.tab._on_change_from_activated(from_idx)
-
-        rows = self._read_labels_csv()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["primary_reconstruction"], "c(6x2)")
-        self.assertEqual(rows[0]["change_from"], "1x1")
-
-
-class ChangeFromToNoSessionGuardTests(unittest.TestCase):
-    """Slots must silently no-op when session isn't attached / no event
-    displayed — same guard pattern as _on_primary_recon_activated."""
-
-    def setUp(self):
-        self.tab = EventsTab()
-
-    def tearDown(self):
-        self.tab.deleteLater()
-
-    def test_no_session_no_op(self):
-        # No logger attached + no event displayed → both slots return
-        # without raising. Also no CSV should be created since no
-        # session_dir exists.
-        self.tab._currently_displayed_event_idx = None
-        self.tab._growth_logger = None
-        self.tab._on_change_from_activated(1)
-        self.tab._on_change_to_activated(1)
-        # No exception = pass.
-
-    def test_no_event_displayed_no_op(self):
-        # Logger attached but no currently-displayed event → slots
-        # short-circuit rather than writing to a mysterious "event 0".
-        tmp = tempfile.TemporaryDirectory()
-        logger = _make_logger_with_session(tmp.name)
-        self.tab.attach_session(logger)
-        self.tab._currently_displayed_event_idx = None
-        self.tab._on_change_from_activated(1)
-        csv_path = logger.session_dir / "events_labels.csv"
-        # No writes happened → file was never created.
-        self.assertFalse(csv_path.exists())
-        logger.end_session()
-        tmp.cleanup()
 
 
 if __name__ == "__main__":
+    import unittest
     unittest.main(verbosity=2)
