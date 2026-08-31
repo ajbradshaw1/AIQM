@@ -974,6 +974,12 @@ class RheedCameraWorker(QThread):
         starvation_reported = False
 
         while self.running:
+            # Refreshed every iteration, not once at connect: exposure is now
+            # changeable live, so the confirmed readback and any refusal have
+            # to ride along with the frames that follow them. Done before the
+            # read so every emit below — success, starvation, or read failure
+            # — carries the current values.
+            self._refresh_exposure_provenance(state)
             read_started_ns = time.perf_counter_ns()
             try:
                 frame = self._camera.read_frame()
@@ -1119,6 +1125,47 @@ class RheedCameraWorker(QThread):
                 self._camera.disconnect()
             except Exception:
                 pass
+
+    def _refresh_exposure_provenance(self, state: CameraState) -> None:
+        """Copy the driver's live exposure facts onto the emitted state.
+
+        Backends with no exposure to interrogate (screengrab, dummy) simply
+        leave the defaults in place. Reading these attributes never touches
+        the SDK — the driver publishes them from its own stream thread — so
+        this is safe to call on every poll.
+        """
+        camera = self._camera
+        if camera is None:
+            return
+        state.exposure_us = getattr(camera, "exposure_us", None)
+        state.exposure_generation = int(
+            getattr(camera, "exposure_generation", 0) or 0
+        )
+        state.exposure_error = str(
+            getattr(camera, "last_exposure_error", "") or ""
+        )
+
+    def request_exposure_us(self, value: float) -> None:
+        """Ask the camera to change exposure without an ARM/DISARM cycle.
+
+        Raises with an explicit reason when the active backend cannot do it,
+        so the GUI can tell the grower why instead of appearing to accept a
+        change that never reaches hardware. The driver parks the request and
+        applies it on its own stream thread; the confirmed value arrives back
+        through ``CameraState.exposure_us`` on a later frame.
+        """
+        camera = self._camera
+        if camera is None:
+            raise RuntimeError(
+                "Cannot change exposure: no camera is connected. ARM first."
+            )
+        request = getattr(camera, "request_exposure_us", None)
+        if not callable(request):
+            raise RuntimeError(
+                f"The {self.mode!r} capture backend has no camera exposure to "
+                "set. Switch Camera mode to direct Vimba to control exposure."
+            )
+        request(value)
 
     def _create_camera(self):
         """Factory method — import and instantiate camera driver."""

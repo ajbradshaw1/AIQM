@@ -15,6 +15,7 @@ import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QPen, QPixmap
 from PyQt6.QtWidgets import (
+    QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsScene,
@@ -33,14 +34,44 @@ import pyqtgraph as pg
 
 from gui.equalizer_alignment import MIN_DETECTION_SNR
 from gui.rheed_intensity import (
+    MAX_ROI_REGIONS,
     NormalizedRoi,
     RheedIntensitySample,
     RheedRoiDefinition,
     auto_three_spot_roi_definition,
     manual_roi_definition,
     measure_camera_state,
+    without_last_region,
 )
 from gui.state import CameraState
+
+
+# One colour per tracked box, shared by the frame overlay and the plot so a
+# curve can be matched to a rectangle by colour alone. Deliberately avoids
+# saturated green in the first slots: the kSA BGW palette the frames are drawn
+# in is mostly green, and a green box on a green streak is invisible.
+REGION_COLORS = (
+    "#38bdf8",  # sky
+    "#f472b6",  # pink
+    "#fbbf24",  # amber
+    "#a78bfa",  # violet
+    "#4ade80",  # green
+    "#fb7185",  # rose
+    "#2dd4bf",  # teal
+    "#f97316",  # orange
+)
+# The union of every box — the metric rheed_roi_intensity.csv has always held.
+UNION_COLOR = "#e2e8f0"
+CANDIDATE_COLOR = "#f59e0b"
+# Exposure-change marker. Deliberately NOT drawn from REGION_COLORS: it is
+# chrome, not a series, and an amber marker beside an amber curve reads as
+# data. Slate is outside the palette entirely.
+EXPOSURE_MARKER_COLOR = "#94a3b8"
+
+
+def region_color(index: int) -> str:
+    """Colour for box ``index``, wrapping if there are more boxes than hues."""
+    return REGION_COLORS[index % len(REGION_COLORS)]
 
 
 class RheedRoiImageView(QGraphicsView):
@@ -118,9 +149,21 @@ class RheedRoiImageView(QGraphicsView):
         self._frame_size = (width, height)
         self._scene.setSceneRect(0.0, 0.0, float(width), float(height))
         if active is not None:
-            self._draw_regions(active.regions, QColor("#22c55e"), Qt.PenStyle.SolidLine)
+            self._draw_regions(
+                active.regions,
+                Qt.PenStyle.SolidLine,
+                labels=active.region_labels,
+                colors=[
+                    QColor(region_color(i)) for i in range(len(active.regions))
+                ],
+            )
         if candidate is not None:
-            self._draw_regions(candidate.regions, QColor("#f59e0b"), Qt.PenStyle.DashLine)
+            self._draw_regions(
+                candidate.regions,
+                Qt.PenStyle.DashLine,
+                labels=candidate.region_labels,
+                colors=[QColor(CANDIDATE_COLOR)] * len(candidate.regions),
+            )
         self._fit_frame()
 
     def clear_frame(self) -> None:
@@ -133,13 +176,25 @@ class RheedRoiImageView(QGraphicsView):
     def _draw_regions(
         self,
         regions: tuple[NormalizedRoi, ...],
-        color: QColor,
         style: Qt.PenStyle,
+        *,
+        labels: tuple[str, ...] = (),
+        colors: Optional[list[QColor]] = None,
     ) -> None:
+        """Outline each box in its own colour and name it on the frame.
+
+        The colour is the join between this overlay and the trend plot: with
+        several boxes running, a legend entry is only useful if the grower can
+        see which rectangle it belongs to without counting.
+        """
         width, height = self._frame_size
-        pen = QPen(color, max(1.0, width / 320.0), style)
-        pen.setCosmetic(True)
-        for region in regions:
+        for index, region in enumerate(regions):
+            color = (
+                colors[index] if colors and index < len(colors)
+                else QColor(region_color(index))
+            )
+            pen = QPen(color, max(1.0, width / 320.0), style)
+            pen.setCosmetic(True)
             x0, y0, x1, y1 = region.pixel_bounds(width, height)
             item = self._scene.addRect(
                 QRectF(float(x0), float(y0), float(x1 - x0), float(y1 - y0)),
@@ -147,6 +202,20 @@ class RheedRoiImageView(QGraphicsView):
             )
             item.setZValue(10.0)
             self._overlay_items.append(item)
+            if index >= len(labels):
+                continue
+            text = self._scene.addSimpleText(str(labels[index]))
+            text.setBrush(color)
+            # Unscaled, so the name stays readable however far the view is
+            # zoomed out to fit a 656x492 frame into a small pane.
+            text.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations,
+                True,
+            )
+            # Above the box where there is room, inside it at the very top.
+            text.setPos(float(x0), float(max(0, y0 - 14)))
+            text.setZValue(11.0)
+            self._overlay_items.append(text)
 
     def _fit_frame(self) -> None:
         if self._pixmap_item is not None:
@@ -225,22 +294,55 @@ class RheedIntensityWindow(QMainWindow):
         self._active_roi: Optional[RheedRoiDefinition] = None
         self._candidate_roi: Optional[RheedRoiDefinition] = None
         self._manual_selection_state: Optional[CameraState] = None
+        # Whether the drag in flight adds a box or replaces the whole ROI.
+        self._append_selection = False
         self._baseline_sum: Optional[float] = None
+        # Per-box baselines, keyed by LABEL rather than index so a box that
+        # keeps its name across an append keeps its relative-change reference.
+        self._baseline_region_sums: dict[str, float] = {}
         self._last_sample_key: Optional[tuple[str, int, str, int]] = None
+        self._latest_sample: Optional[RheedIntensitySample] = None
         self._t0_ns: Optional[int] = None
         self._times: deque[float] = deque(maxlen=self._MAXLEN)
         self._intensities: deque[float] = deque(maxlen=self._MAXLEN)
+        # label -> its own history. Parallel to _times, which every series
+        # shares because they are all measured from the same capture.
+        self._region_series: dict[str, deque[float]] = {}
+        self._region_curves: dict[str, pg.PlotDataItem] = {}
+        # Exposure provenance. A change steps the luminance sum with nothing
+        # happening on the sample surface, so the trend has to break rather
+        # than draw a line across it — see docs/rheed_roi_intensity.md.
+        self._exposure_generation = 0
+        self._exposure_us: Optional[float] = None
+        self._exposure_markers: list = []
 
         self.image_view = RheedRoiImageView()
         self.image_view.region_selected.connect(self._on_manual_region)
 
         self.select_btn = QPushButton("Select rectangle")
+        self.select_btn.setToolTip(
+            "Draw one rectangle, REPLACING whatever is tracked now."
+        )
         self.select_btn.clicked.connect(self._start_manual_selection)
+        self.add_btn = QPushButton("Add rectangle")
+        self.add_btn.setToolTip(
+            f"Draw another rectangle alongside the current ones (up to "
+            f"{MAX_ROI_REGIONS}). Each box gets its own curve."
+        )
+        self.add_btn.clicked.connect(self._start_append_selection)
+        self.add_btn.setEnabled(False)
         self.auto_btn = QPushButton("Detect 1×1 triplet")
         self.auto_btn.clicked.connect(self._detect_three_spots)
         self.accept_btn = QPushButton("Use detected ROI")
         self.accept_btn.clicked.connect(self._accept_candidate)
         self.accept_btn.setEnabled(False)
+        self.remove_btn = QPushButton("Remove last box")
+        self.remove_btn.setToolTip(
+            "Drop the most recently added box. Only the last one, so the "
+            "remaining boxes keep the names their logged data is filed under."
+        )
+        self.remove_btn.clicked.connect(self._remove_last_region)
+        self.remove_btn.setEnabled(False)
         self.clear_roi_btn = QPushButton("Clear ROI")
         self.clear_roi_btn.clicked.connect(self.clear_roi)
         self.clear_roi_btn.setEnabled(False)
@@ -256,8 +358,10 @@ class RheedIntensityWindow(QMainWindow):
 
         controls = QHBoxLayout()
         controls.addWidget(self.select_btn)
+        controls.addWidget(self.add_btn)
         controls.addWidget(self.auto_btn)
         controls.addWidget(self.accept_btn)
+        controls.addWidget(self.remove_btn)
         controls.addWidget(self.clear_roi_btn)
         controls.addWidget(QLabel("Spot box (128×96 px):"))
         controls.addWidget(self.spot_size)
@@ -270,16 +374,28 @@ class RheedIntensityWindow(QMainWindow):
         self.status_label.setWordWrap(True)
         self.value_label = QLabel("Sum: —   Mean: —   Pixels: —   Δ: —")
 
-        plot = pg.PlotWidget()
-        plot.setBackground("#0f1117")
-        plot.setLabel("left", "BT.601 display-luminance sum", units="a.u.")
-        plot.setLabel("bottom", "Elapsed capture time", units="min")
-        plot.getPlotItem().showGrid(x=True, y=True, alpha=0.3)
-        self._curve = plot.plot(pen=pg.mkPen("#38bdf8", width=1.5))
+        self._plot = pg.PlotWidget()
+        self._plot.setBackground("#0f1117")
+        self._plot.setLabel("left", "BT.601 display-luminance sum", units="a.u.")
+        self._plot.setLabel("bottom", "Elapsed capture time", units="min")
+        self._plot.getPlotItem().showGrid(x=True, y=True, alpha=0.3)
+        legend = self._plot.addLegend(offset=(-10, 10))
+        # Opaque-ish backing: with several series running the legend
+        # inevitably lands on data, and an unreadable key is worse than a
+        # slightly hidden curve.
+        legend.setBrush(pg.mkBrush(15, 17, 23, 220))
+        legend.setPen(pg.mkPen("#334155"))
+        # The union stays the headline series and keeps its identity as the
+        # documented metric; per-box curves are added beside it when an ROI is
+        # activated. Drawn thinner and paler so several bright box traces read
+        # as the foreground.
+        self._curve = self._plot.plot(
+            pen=pg.mkPen(UNION_COLOR, width=1.0), name="all boxes (union)",
+        )
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.image_view)
-        splitter.addWidget(plot)
+        splitter.addWidget(self._plot)
         splitter.setSizes([480, 520])
 
         central = QWidget()
@@ -313,31 +429,83 @@ class RheedIntensityWindow(QMainWindow):
         return state, np.asarray(state.frame)
 
     def _start_manual_selection(self) -> None:
+        self._begin_selection(append=False)
+
+    def _start_append_selection(self) -> None:
+        self._begin_selection(append=True)
+
+    def _begin_selection(self, *, append: bool) -> None:
+        """Arm the drag, remembering whether the box replaces or joins."""
         current = self._usable_latest()
         if current is None:
             return
+        if append and self._active_roi is None:
+            self.status_label.setText(
+                "Nothing to add to yet — define an ROI first."
+            )
+            return
+        if append and len(self._active_roi.regions) >= MAX_ROI_REGIONS:
+            self.status_label.setText(
+                f"Already tracking {MAX_ROI_REGIONS} boxes. Remove one before "
+                "adding another."
+            )
+            return
         state, frame = current
+        # The selection is measured against THIS frame, so the geometry the
+        # grower drew on is the geometry the ROI is bound to. A later frame
+        # could arrive mid-drag with different dimensions.
         self._manual_selection_state = replace(
             state,
             frame=np.array(frame, copy=True),
         )
+        self._append_selection = append
         self._candidate_roi = None
         self.accept_btn.setEnabled(False)
         self._refresh_image()
         if self.image_view.start_selection():
-            self.status_label.setText("Drag on the RHEED image to define one fixed ROI.")
+            self.status_label.setText(
+                "Drag on the RHEED image to add another tracked box."
+                if append else
+                "Drag on the RHEED image to define one fixed ROI."
+            )
 
     def _on_manual_region(self, normalized_rect: object) -> None:
+        # The mouse-release path already cancelled, but this slot is also
+        # driven directly (tests, scripted setup). Leaving `is_selecting` set
+        # makes _refresh_image early-return for the rest of the session, so
+        # the ROI would be measured and plotted while never being drawn on the
+        # frame. Cancelling here is a no-op on the normal path.
+        self.image_view.cancel_selection()
         state = self._manual_selection_state
+        append = self._append_selection
         self._manual_selection_state = None
+        self._append_selection = False
         if state is None or state.frame is None:
             self.status_label.setText("ROI selection snapshot was unavailable; try again.")
             return
         frame = np.asarray(state.frame)
         try:
-            roi = manual_roi_definition(tuple(normalized_rect), state, frame)
+            roi = manual_roi_definition(
+                tuple(normalized_rect), state, frame,
+                append_to=self._active_roi if append else None,
+            )
         except (TypeError, ValueError) as exc:
             self.status_label.setText(f"ROI rejected: {exc}")
+            return
+        self._activate_roi(roi, "defined")
+
+    def _remove_last_region(self) -> None:
+        """Drop the most recently added box and keep measuring the rest."""
+        if self._active_roi is None:
+            return
+        current = self._usable_latest()
+        if current is None:
+            return
+        state, frame = current
+        try:
+            roi = without_last_region(self._active_roi, state, frame)
+        except (TypeError, ValueError) as exc:
+            self.status_label.setText(f"Cannot remove that box: {exc}")
             return
         self._activate_roi(roi, "defined")
 
@@ -389,22 +557,57 @@ class RheedIntensityWindow(QMainWindow):
         self._active_roi = roi
         self._candidate_roi = None
         self.clear_roi_btn.setEnabled(True)
+        self.add_btn.setEnabled(len(roi.regions) < MAX_ROI_REGIONS)
+        self.remove_btn.setEnabled(len(roi.regions) > 1)
+        # History is cleared, not carried: the boxes changed, so the old
+        # samples measured a different geometry. Rebuilding the curve set from
+        # the new definition is what puts one trace per box on the plot.
         self._reset_history()
-        if roi.mode == "manual_rect":
+        self.status_label.setText(self._describe_roi(roi))
+        self.roi_event.emit(event, roi, "")
+        self._refresh_image()
+        if self._latest_state is not None:
+            self._measure_state(self._latest_state)
+
+    @staticmethod
+    def _describe_roi(roi: RheedRoiDefinition) -> str:
+        """One line naming every tracked box, so the plot legend has a key."""
+        names = ", ".join(roi.region_labels)
+        if roi.mode == "auto_1x1_three_spot":
+            lead = "Confirmed three-spot ROI active"
+        elif len(roi.regions) == 1:
             region = roi.regions[0]
-            self.status_label.setText(
+            return (
                 "Manual ROI active: "
                 f"x={region.left:.3f}–{region.right:.3f}, "
                 f"y={region.top:.3f}–{region.bottom:.3f}."
             )
         else:
-            self.status_label.setText(
-                "Confirmed three-spot ROI active: three fixed boxes, union-summed once per capture."
+            lead = f"{len(roi.regions)} boxes tracked"
+        return (
+            f"{lead}: {names}. Each box is plotted on its own; the union is "
+            "summed once per capture with overlaps counted a single time."
+        )
+
+    def _rebuild_region_curves(self) -> None:
+        """Match the plot's curve set to the active definition's boxes."""
+        for curve in self._region_curves.values():
+            self._plot.removeItem(curve)
+        self._region_curves.clear()
+        self._region_series.clear()
+        roi = self._active_roi
+        if roi is None:
+            return
+        # A single box would draw its curve exactly under the union's — same
+        # numbers, two lines, a legend implying a distinction that is not
+        # there. Only split the series once there is something to compare.
+        if len(roi.regions) < 2:
+            return
+        for index, label in enumerate(roi.region_labels):
+            self._region_series[label] = deque(maxlen=self._MAXLEN)
+            self._region_curves[label] = self._plot.plot(
+                pen=pg.mkPen(region_color(index), width=1.5), name=label,
             )
-        self.roi_event.emit(event, roi, "")
-        self._refresh_image()
-        if self._latest_state is not None:
-            self._measure_state(self._latest_state)
 
     def clear_roi(self) -> None:
         previous = self._active_roi or self._candidate_roi
@@ -414,6 +617,8 @@ class RheedIntensityWindow(QMainWindow):
         self._manual_selection_state = None
         self.accept_btn.setEnabled(False)
         self.clear_roi_btn.setEnabled(False)
+        self.add_btn.setEnabled(False)
+        self.remove_btn.setEnabled(False)
         self._reset_history()
         self.status_label.setText(
             "No ROI. Draw one rectangle or detect a three-spot candidate."
@@ -430,6 +635,8 @@ class RheedIntensityWindow(QMainWindow):
         self._manual_selection_state = None
         self.accept_btn.setEnabled(False)
         self.clear_roi_btn.setEnabled(False)
+        self.add_btn.setEnabled(False)
+        self.remove_btn.setEnabled(False)
         self._reset_history()
         self.status_label.setText(f"ROI invalidated: {reason}. Select it again.")
         if previous is not None:
@@ -457,8 +664,73 @@ class RheedIntensityWindow(QMainWindow):
                 self.accept_btn.setEnabled(False)
                 self.status_label.setText(f"Detected ROI candidate discarded: {reason}.")
 
+        self._note_exposure_change(state)
         self._refresh_image()
         self._measure_state(state)
+
+    def _note_exposure_change(self, state: CameraState) -> None:
+        """Break the trend where the camera exposure changed.
+
+        An exposure step scales the display-luminance sum with nothing having
+        happened on the sample surface. Drawing a continuous line across it
+        would read as a real intensity transition, so the series get a NaN gap
+        (pyqtgraph lifts the pen), a vertical marker records where, and the
+        relative-change baselines re-seed against the new exposure.
+        """
+        generation = int(getattr(state, "exposure_generation", 0) or 0)
+        exposure_us = getattr(state, "exposure_us", None)
+        if generation == self._exposure_generation:
+            self._exposure_us = exposure_us
+            return
+        previous_us = self._exposure_us
+        self._exposure_generation = generation
+        self._exposure_us = exposure_us
+        if self._active_roi is None or not self._times:
+            return
+
+        self._times.append(float("nan"))
+        self._intensities.append(float("nan"))
+        for series in self._region_series.values():
+            series.append(float("nan"))
+        # Re-baseline: Δ% against a pre-change reference would report the
+        # exposure step forever after, on every box.
+        self._baseline_sum = None
+        self._baseline_region_sums.clear()
+
+        marker = pg.InfiniteLine(
+            pos=self._times[-2] if len(self._times) >= 2 else 0.0,
+            angle=90,
+            pen=pg.mkPen(
+                EXPOSURE_MARKER_COLOR, width=1.0, style=Qt.PenStyle.DashLine,
+            ),
+        )
+        self._plot.addItem(marker)
+        self._exposure_markers.append(marker)
+        self._redraw_curves()
+
+        def _ms(value) -> str:
+            return "?" if value is None else f"{value / 1000.0:.0f} ms"
+
+        self.status_label.setText(
+            f"Exposure changed ({_ms(previous_us)} → {_ms(exposure_us)}). The "
+            "trend is broken here — values either side are not comparable."
+        )
+        if self._active_roi is not None:
+            self.roi_event.emit(
+                "exposure_changed",
+                self._active_roi,
+                f"exposure {_ms(previous_us)} -> {_ms(exposure_us)}",
+            )
+
+    def _redraw_curves(self) -> None:
+        """Push the current histories into their plot items."""
+        times = list(self._times)
+        self._curve.setData(times, list(self._intensities))
+        for label, curve in self._region_curves.items():
+            series = self._region_series.get(label)
+            if series is None:
+                continue
+            curve.setData(times, list(series))
 
     def _measure_state(self, state: CameraState) -> None:
         roi = self._active_roi
@@ -474,14 +746,29 @@ class RheedIntensityWindow(QMainWindow):
             return
         try:
             sample = measure_camera_state(
-                state, roi, baseline_sum=self._baseline_sum,
+                state, roi,
+                baseline_sum=self._baseline_sum,
+                baseline_region_sums=self._baseline_region_sums,
             )
         except ValueError as exc:
             self.invalidate_roi(str(exc))
             return
         if self._baseline_sum is None:
             self._baseline_sum = sample.intensity_sum
-            sample = replace(sample, relative_change_pct=0.0)
+            sample = replace(
+                sample,
+                relative_change_pct=0.0,
+                regions=tuple(
+                    replace(region, relative_change_pct=0.0)
+                    for region in sample.regions
+                ),
+            )
+        # Seed any box that has no baseline yet — a newly appended one, or all
+        # of them after an exposure change reset the references.
+        for region in sample.regions:
+            self._baseline_region_sums.setdefault(
+                region.label, region.intensity_sum,
+            )
         self._last_sample_key = key
         self._latest_sample = sample
         if self._t0_ns is None:
@@ -491,15 +778,32 @@ class RheedIntensityWindow(QMainWindow):
         )
         self._times.append(elapsed_min)
         self._intensities.append(sample.intensity_sum)
-        self._curve.setData(list(self._times), list(self._intensities))
-        self.value_label.setText(
+        for region in sample.regions:
+            series = self._region_series.get(region.label)
+            if series is not None:
+                series.append(region.intensity_sum)
+        self._redraw_curves()
+        self.value_label.setText(self._format_values(sample))
+        self.measurement_ready.emit(sample)
+
+    @staticmethod
+    def _format_values(sample: RheedIntensitySample) -> str:
+        """Union figures, then one compact per-box readout when there are many."""
+        text = (
             f"Sum: {sample.intensity_sum:.3f} a.u.   "
             f"Mean: {sample.intensity_mean:.3f}   "
             f"Pixels: {sample.pixel_count}   "
             f"Δ: {sample.relative_change_pct:+.3f}%   "
             f"Seq: {sample.capture_sequence}"
         )
-        self.measurement_ready.emit(sample)
+        if len(sample.regions) < 2:
+            return text
+        per_box = "   ".join(
+            f"{region.label}: {region.intensity_sum:.0f} "
+            f"({region.relative_change_pct:+.2f}%)"
+            for region in sample.regions
+        )
+        return f"{text}\n{per_box}"
 
     def _refresh_image(self) -> None:
         state = self._latest_state
@@ -523,11 +827,18 @@ class RheedIntensityWindow(QMainWindow):
     def _reset_history(self) -> None:
         self._t0_ns = None
         self._baseline_sum = None
+        self._baseline_region_sums.clear()
         self._last_sample_key = None
         self._latest_sample = None
         self._times.clear()
         self._intensities.clear()
         self._curve.setData([], [])
+        for marker in self._exposure_markers:
+            self._plot.removeItem(marker)
+        self._exposure_markers.clear()
+        # Rebuilt from the active definition, so a changed box set gets a
+        # matching curve set and a cleared ROI leaves only the union item.
+        self._rebuild_region_curves()
         self.value_label.setText("Sum: —   Mean: —   Pixels: —   Δ: —")
 
     def reset(self) -> None:
@@ -537,4 +848,9 @@ class RheedIntensityWindow(QMainWindow):
             self._measure_state(self._latest_state)
 
 
-__all__ = ["RheedIntensityWindow", "RheedRoiImageView"]
+__all__ = [
+    "REGION_COLORS",
+    "RheedIntensityWindow",
+    "RheedRoiImageView",
+    "region_color",
+]

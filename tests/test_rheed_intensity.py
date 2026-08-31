@@ -27,13 +27,19 @@ _app = QApplication.instance() or QApplication(sys.argv)
 from gui.equalizer_alignment import LandmarkDetection  # noqa: E402
 from gui.growth_logger import GrowthLogger  # noqa: E402
 from gui.rheed_intensity import (  # noqa: E402
+    AUTO_TRIPLET_LABELS,
     INTENSITY_METRIC,
+    MAX_ROI_REGIONS,
     NormalizedRoi,
+    RheedRoiDefinition,
     auto_three_spot_roi_definition,
+    definition_from_mapping,
     frame_luminance_plane,
     manual_roi_definition,
     measure_camera_state,
+    measure_region_series,
     measure_regions,
+    without_last_region,
 )
 from gui.rheed_intensity_window import RheedIntensityWindow  # noqa: E402
 from gui.state import CameraState  # noqa: E402
@@ -46,6 +52,8 @@ def _state(
     geometry: str = "test-geometry",
     backend: str = "dummy",
     hwnd: int = 0,
+    exposure_us: float | None = None,
+    exposure_generation: int = 0,
 ) -> CameraState:
     now_ns = time.perf_counter_ns()
     return CameraState(
@@ -65,6 +73,8 @@ def _state(
         capture_geometry_id=geometry,
         captured_monotonic_ns=now_ns,
         received_monotonic_ns=now_ns,
+        exposure_us=exposure_us,
+        exposure_generation=exposure_generation,
     )
 
 
@@ -142,6 +152,206 @@ class RheedIntensityMathTests(unittest.TestCase):
         self.assertEqual(roi.compatibility_error(changed, frame), "capture geometry changed")
         with self.assertRaisesRegex(ValueError, "capture geometry changed"):
             measure_camera_state(changed, roi)
+
+
+class MultiRegionRoiTests(unittest.TestCase):
+    """Per-box tracking: N labelled rectangles, each with its own series."""
+
+    def _frame(self) -> np.ndarray:
+        # Two bright patches on a dark field, so each box has a distinct sum.
+        frame = np.zeros((40, 60, 3), dtype=np.uint8)
+        frame[5:15, 5:15] = 100
+        frame[5:15, 30:40] = 200
+        return frame
+
+    def test_manual_append_adds_a_box_and_keeps_existing_labels(self) -> None:
+        frame = self._frame()
+        state = _state(frame)
+        first = manual_roi_definition((0.05, 0.10, 0.30, 0.40), state, frame)
+        self.assertEqual(first.region_labels, ("box 1",))
+
+        second = manual_roi_definition(
+            (0.45, 0.10, 0.70, 0.40), state, frame, append_to=first,
+        )
+        self.assertEqual(len(second.regions), 2)
+        self.assertEqual(second.region_labels, ("box 1", "box 2"))
+        self.assertEqual(second.regions[0], first.regions[0])
+        self.assertNotEqual(
+            second.roi_definition_id, first.roi_definition_id,
+            "appending must mint a new ID so old samples stay attributable",
+        )
+
+    def test_appending_to_the_auto_triplet_preserves_spot_names(self) -> None:
+        frame = np.zeros((96, 128, 3), dtype=np.uint8)
+        state = _state(frame)
+        detected = LandmarkDetection.detected(
+            np.array([[25.0, 50.0], [64.0, 30.0], [103.0, 50.0]]),
+            method="test", confidence=0.5, peak_snr=8.0,
+        )
+        with patch("gui.rheed_intensity.detect_live_landmarks", return_value=detected):
+            auto = auto_three_spot_roi_definition(state, frame)
+        self.assertEqual(auto.region_labels, AUTO_TRIPLET_LABELS)
+
+        combined = manual_roi_definition(
+            (0.80, 0.80, 0.95, 0.95), state, frame, append_to=auto,
+        )
+        # "specular" must survive: per-region rows are filed under the label,
+        # so renaming it would splice two different boxes into one trace.
+        self.assertEqual(
+            combined.region_labels, AUTO_TRIPLET_LABELS + ("box 1",),
+        )
+
+    def test_append_refuses_past_the_region_ceiling(self) -> None:
+        frame = self._frame()
+        state = _state(frame)
+        roi = manual_roi_definition((0.01, 0.01, 0.05, 0.05), state, frame)
+        for index in range(1, MAX_ROI_REGIONS):
+            left = 0.01 + index * 0.1
+            roi = manual_roi_definition(
+                (left, 0.01, left + 0.05, 0.05), state, frame, append_to=roi,
+            )
+        self.assertEqual(len(roi.regions), MAX_ROI_REGIONS)
+        with self.assertRaises(ValueError) as ctx:
+            manual_roi_definition((0.9, 0.9, 0.95, 0.95), state, frame, append_to=roi)
+        self.assertIn("remove one", str(ctx.exception))
+
+    def test_append_refuses_when_the_geometry_moved_under_it(self) -> None:
+        frame = self._frame()
+        roi = manual_roi_definition((0.05, 0.1, 0.3, 0.4), _state(frame), frame)
+        taller = np.zeros((41, 60, 3), dtype=np.uint8)
+        with self.assertRaises(ValueError) as ctx:
+            manual_roi_definition(
+                (0.5, 0.1, 0.7, 0.4), _state(taller, sequence=2), taller,
+                append_to=roi,
+            )
+        self.assertIn("height", str(ctx.exception))
+
+    def test_per_box_series_is_independent_of_the_union(self) -> None:
+        frame = self._frame()
+        state = _state(frame)
+        roi = manual_roi_definition((0.05, 0.10, 0.30, 0.40), state, frame)
+        roi = manual_roi_definition(
+            (0.45, 0.10, 0.70, 0.40), state, frame, append_to=roi,
+        )
+        sample = measure_camera_state(state, roi)
+        self.assertEqual(len(sample.regions), 2)
+        dim, bright = sample.regions
+        # The 200-valued patch must read higher than the 100-valued one; a
+        # union-only metric could not tell them apart at all.
+        self.assertGreater(bright.intensity_mean, dim.intensity_mean)
+        # Non-overlapping boxes: the union is exactly their sum.
+        self.assertAlmostEqual(
+            sample.intensity_sum,
+            dim.intensity_sum + bright.intensity_sum,
+            places=6,
+        )
+        self.assertEqual(
+            sample.pixel_count, dim.pixel_count + bright.pixel_count,
+        )
+
+    def test_overlapping_boxes_count_shared_pixels_once_only_in_the_union(self) -> None:
+        frame = np.full((40, 60, 3), 50, dtype=np.uint8)
+        state = _state(frame)
+        roi = manual_roi_definition((0.1, 0.1, 0.5, 0.5), state, frame)
+        roi = manual_roi_definition(
+            (0.3, 0.3, 0.7, 0.7), state, frame, append_to=roi,
+        )
+        sample = measure_camera_state(state, roi)
+        first, second = sample.regions
+        # Each box owns its overlap — "what is happening inside THIS box" is a
+        # different question from "how much unique area is lit".
+        self.assertLess(
+            sample.pixel_count, first.pixel_count + second.pixel_count,
+        )
+        self.assertLess(
+            sample.intensity_sum, first.intensity_sum + second.intensity_sum,
+        )
+
+    def test_remove_last_box_keeps_the_other_labels_stable(self) -> None:
+        frame = self._frame()
+        state = _state(frame)
+        roi = manual_roi_definition((0.05, 0.10, 0.30, 0.40), state, frame)
+        roi = manual_roi_definition(
+            (0.45, 0.10, 0.70, 0.40), state, frame, append_to=roi,
+        )
+        roi = manual_roi_definition(
+            (0.75, 0.10, 0.90, 0.40), state, frame, append_to=roi,
+        )
+        trimmed = without_last_region(roi, state, frame)
+        self.assertEqual(trimmed.region_labels, ("box 1", "box 2"))
+        self.assertEqual(trimmed.regions, roi.regions[:2])
+
+        one_left = without_last_region(trimmed, state, frame)
+        with self.assertRaises(ValueError):
+            without_last_region(one_left, state, frame)
+
+    def test_removing_from_the_auto_triplet_drops_detector_provenance(self) -> None:
+        frame = np.zeros((96, 128, 3), dtype=np.uint8)
+        state = _state(frame)
+        detected = LandmarkDetection.detected(
+            np.array([[25.0, 50.0], [64.0, 30.0], [103.0, 50.0]]),
+            method="test", confidence=0.5, peak_snr=8.0,
+        )
+        with patch("gui.rheed_intensity.detect_live_landmarks", return_value=detected):
+            auto = auto_three_spot_roi_definition(state, frame)
+        trimmed = without_last_region(auto, state, frame)
+        # A curated subset is no longer the detector's proposal, so it must
+        # not keep claiming to be one.
+        self.assertEqual(trimmed.mode, "manual_rect")
+        self.assertEqual(trimmed.detector_method, "")
+        self.assertIsNone(trimmed.detector_confidence)
+        self.assertEqual(trimmed.region_labels, ("left", "specular"))
+
+    def test_duplicate_region_labels_are_refused(self) -> None:
+        region = NormalizedRoi(0.1, 0.1, 0.2, 0.2)
+        with self.assertRaises(ValueError) as ctx:
+            RheedRoiDefinition(
+                roi_definition_id="x", mode="manual_rect",
+                regions=(region, region), region_labels=("a", "a"),
+                capture_backend="dummy", source_hwnd=0,
+                capture_geometry_id="g", frame_width=10, frame_height=10,
+                definition_capture_sequence=1, definition_captured_at_utc="",
+            )
+        self.assertIn("unique", str(ctx.exception))
+
+    def test_schema_v1_payload_without_labels_still_deserializes(self) -> None:
+        """Sessions logged before per-box tracking must stay readable."""
+        payload = {
+            "roi_definition_id": "rheed-roi-legacy",
+            "mode": "auto_1x1_three_spot",
+            "regions_normalized": [
+                {"left": 0.1, "top": 0.1, "right": 0.2, "bottom": 0.2},
+                {"left": 0.4, "top": 0.1, "right": 0.5, "bottom": 0.2},
+                {"left": 0.7, "top": 0.1, "right": 0.8, "bottom": 0.2},
+            ],
+            "capture_backend": "wgc",
+            "source_hwnd": 12,
+            "capture_geometry_id": "g",
+            "frame_width": 656,
+            "frame_height": 492,
+            "definition_capture_sequence": 3,
+            "definition_captured_at_utc": "2026-08-06T12:00:00.000Z",
+        }
+        roi = definition_from_mapping(payload)
+        self.assertEqual(len(roi.regions), 3)
+        self.assertEqual(roi.region_labels, AUTO_TRIPLET_LABELS)
+
+    def test_measure_region_series_reports_relative_change_per_box(self) -> None:
+        frame = self._frame()
+        state = _state(frame)
+        roi = manual_roi_definition((0.05, 0.10, 0.30, 0.40), state, frame)
+        roi = manual_roi_definition(
+            (0.45, 0.10, 0.70, 0.40), state, frame, append_to=roi,
+        )
+        first = measure_region_series(frame, roi)
+        baselines = {region.label: region.intensity_sum for region in first}
+
+        brighter = frame.copy()
+        brighter[5:15, 30:40] = 220
+        second = measure_region_series(brighter, roi, baseline_sums=baselines)
+        # Only the box that changed reports a change.
+        self.assertAlmostEqual(second[0].relative_change_pct, 0.0, places=6)
+        self.assertGreater(second[1].relative_change_pct, 0.0)
 
 
 class RheedIntensityWindowTests(unittest.TestCase):
@@ -229,6 +439,148 @@ class RheedIntensityWindowTests(unittest.TestCase):
         self.window._accept_candidate()
         self.assertIsNotNone(self.window.active_roi)
         self.assertEqual(self.window.active_roi.mode, "auto_1x1_three_spot")
+
+
+class RheedIntensityWindowMultiRegionTests(unittest.TestCase):
+    """The trend window's side of per-box tracking and exposure breaks."""
+
+    def setUp(self) -> None:
+        self.window = RheedIntensityWindow()
+
+    def tearDown(self) -> None:
+        self.window.close()
+        self.window.deleteLater()
+        _app.processEvents()
+
+    def _frame(self) -> np.ndarray:
+        frame = np.zeros((40, 60, 3), dtype=np.uint8)
+        frame[5:15, 5:15] = 100
+        frame[5:15, 30:40] = 200
+        return frame
+
+    def _define_two_boxes(self) -> None:
+        state = _state(self._frame(), exposure_us=300_000.0)
+        self.window.on_camera_state(state)
+        self.window._start_manual_selection()
+        self.window._on_manual_region((0.05, 0.10, 0.30, 0.40))
+        self.window._start_append_selection()
+        self.window._on_manual_region((0.45, 0.10, 0.70, 0.40))
+
+    def test_adding_a_box_creates_a_second_curve(self) -> None:
+        self._define_two_boxes()
+        roi = self.window.active_roi
+        self.assertEqual(len(roi.regions), 2)
+        self.assertEqual(
+            set(self.window._region_curves), {"box 1", "box 2"},
+        )
+        self.assertTrue(self.window.remove_btn.isEnabled())
+
+    def test_a_single_box_draws_no_duplicate_curve(self) -> None:
+        """One box would plot the same numbers as the union — don't."""
+        state = _state(self._frame())
+        self.window.on_camera_state(state)
+        self.window._start_manual_selection()
+        self.window._on_manual_region((0.05, 0.10, 0.30, 0.40))
+        self.assertEqual(self.window._region_curves, {})
+        self.assertFalse(self.window.remove_btn.isEnabled())
+
+    def test_add_is_unavailable_until_an_roi_exists(self) -> None:
+        self.window.on_camera_state(_state(self._frame()))
+        self.assertFalse(self.window.add_btn.isEnabled())
+        self.window._start_append_selection()
+        self.assertIn("define an ROI first", self.window.status_label.text())
+
+    def test_per_box_samples_reach_the_measurement_signal(self) -> None:
+        samples: list = []
+        self.window.measurement_ready.connect(samples.append)
+        self._define_two_boxes()
+        self.window.on_camera_state(
+            _state(self._frame(), sequence=2, exposure_us=300_000.0),
+        )
+        self.assertTrue(samples)
+        latest = samples[-1]
+        self.assertEqual(
+            [region.label for region in latest.regions], ["box 1", "box 2"],
+        )
+        self.assertEqual(latest.exposure_us, 300_000.0)
+
+    def test_exposure_change_breaks_the_trend_and_rebaselines(self) -> None:
+        events: list = []
+        self.window.roi_event.connect(
+            lambda event, roi, reason: events.append((event, reason))
+        )
+        self._define_two_boxes()
+        self.window.on_camera_state(
+            _state(self._frame(), sequence=2, exposure_us=300_000.0),
+        )
+        points_before = len(self.window._times)
+
+        self.window.on_camera_state(_state(
+            self._frame(), sequence=3,
+            exposure_us=500_000.0, exposure_generation=1,
+        ))
+
+        # A NaN was inserted so pyqtgraph lifts the pen across the step, and
+        # each per-box series got the same gap.
+        times = list(self.window._times)
+        self.assertGreater(len(times), points_before)
+        self.assertTrue(any(np.isnan(value) for value in times))
+        for series in self.window._region_series.values():
+            self.assertTrue(any(np.isnan(value) for value in series))
+        self.assertEqual(len(self.window._exposure_markers), 1)
+
+        exposure_events = [e for e in events if e[0] == "exposure_changed"]
+        self.assertEqual(len(exposure_events), 1)
+        self.assertIn("300 ms", exposure_events[0][1])
+        self.assertIn("500 ms", exposure_events[0][1])
+
+        # Δ% is measured against the new exposure, not across the step.
+        self.assertAlmostEqual(
+            self.window.latest_sample.relative_change_pct, 0.0, places=6,
+        )
+        for region in self.window.latest_sample.regions:
+            self.assertAlmostEqual(region.relative_change_pct, 0.0, places=6)
+
+    def test_unchanged_exposure_generation_leaves_the_trend_continuous(self) -> None:
+        self._define_two_boxes()
+        for sequence in (2, 3, 4):
+            self.window.on_camera_state(_state(
+                self._frame(), sequence=sequence,
+                exposure_us=300_000.0, exposure_generation=0,
+            ))
+        self.assertFalse(
+            any(np.isnan(value) for value in self.window._times)
+        )
+        self.assertEqual(self.window._exposure_markers, [])
+
+    def test_every_box_is_drawn_and_named_on_the_frame(self) -> None:
+        """Regression: a stuck selection used to silently stop the overlay.
+
+        `_refresh_image` early-returns while the view is in selection mode.
+        The mouse-release path cancels first, but a programmatically driven
+        selection did not — leaving an ROI that was measured and plotted while
+        never being drawn, which is exactly the state a grower cannot debug.
+        """
+        self._define_two_boxes()
+        self.assertFalse(
+            self.window.image_view.is_selecting,
+            "selection must be cancelled once the region is handled",
+        )
+        overlay = self.window.image_view._overlay_items
+        # One rectangle plus one label per box.
+        self.assertEqual(len(overlay), 4)
+        drawn_labels = sorted(
+            item.text() for item in overlay if hasattr(item, "text")
+        )
+        self.assertEqual(drawn_labels, ["box 1", "box 2"])
+
+    def test_clearing_the_roi_removes_every_per_box_curve(self) -> None:
+        self._define_two_boxes()
+        self.assertTrue(self.window._region_curves)
+        self.window.clear_roi()
+        self.assertEqual(self.window._region_curves, {})
+        self.assertFalse(self.window.add_btn.isEnabled())
+        self.assertFalse(self.window.remove_btn.isEnabled())
 
 
 class RheedIntensityLoggerTests(unittest.TestCase):
@@ -338,6 +690,173 @@ class RheedIntensityLoggerTests(unittest.TestCase):
                     encoding="utf-8",
                 ).strip()
             )
+
+
+class RheedRoiRegionLoggerTests(unittest.TestCase):
+    """The per-region sibling file and the exposure timeline."""
+
+    def _two_box_sample(self, logger, *, sequence=7, exposure_us=300_000.0,
+                        exposure_generation=0):
+        frame = np.zeros((20, 30, 3), dtype=np.uint8)
+        frame[2:8, 2:8] = 90
+        frame[2:8, 18:26] = 210
+        state = _state(
+            frame, sequence=sequence,
+            exposure_us=exposure_us, exposure_generation=exposure_generation,
+        )
+        roi = manual_roi_definition((0.05, 0.05, 0.35, 0.45), state, frame)
+        roi = manual_roi_definition(
+            (0.55, 0.05, 0.90, 0.45), state, frame, append_to=roi,
+        )
+        return roi, measure_camera_state(state, roi)
+
+    def test_one_row_per_box_per_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            logger = GrowthLogger(directory)
+            logger.start_session("ROI_REGIONS")
+            roi, sample = self._two_box_sample(logger)
+            self.assertTrue(logger.record_rheed_roi_definition("defined", roi))
+            self.assertTrue(logger.record_rheed_roi_intensity(
+                sample, elapsed_s=2.0, view_segment_id=1,
+                visual_history_generation=0,
+            ))
+            session_dir = logger.session_dir
+            logger.end_session()
+
+            with (session_dir / "rheed_roi_region_intensity.csv").open(
+                newline="", encoding="utf-8",
+            ) as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(
+                [row["region_label"] for row in rows], ["box 1", "box 2"],
+            )
+            self.assertEqual([row["region_index"] for row in rows], ["0", "1"])
+            self.assertTrue(all(
+                row["roi_definition_id"] == roi.roi_definition_id
+                for row in rows
+            ))
+            # The brighter patch reads higher — the whole point of splitting.
+            self.assertGreater(
+                float(rows[1]["intensity_mean"]),
+                float(rows[0]["intensity_mean"]),
+            )
+            # Every row records the exposure that produced it.
+            self.assertTrue(all(
+                float(row["exposure_us"]) == 300_000.0 for row in rows
+            ))
+            self.assertEqual(
+                json.loads(rows[0]["region_normalized_json"]),
+                roi.regions[0].to_dict(),
+            )
+
+    def test_duplicate_capture_writes_no_region_rows(self) -> None:
+        """The union file's dedupe key governs both files, so they agree."""
+        with tempfile.TemporaryDirectory() as directory:
+            logger = GrowthLogger(directory)
+            logger.start_session("ROI_REGION_DEDUPE")
+            roi, sample = self._two_box_sample(logger)
+            self.assertTrue(logger.record_rheed_roi_intensity(
+                sample, elapsed_s=2.0,
+            ))
+            self.assertFalse(logger.record_rheed_roi_intensity(
+                sample, elapsed_s=2.0,
+            ))
+            session_dir = logger.session_dir
+            logger.end_session()
+
+            with (session_dir / "rheed_roi_region_intensity.csv").open(
+                newline="", encoding="utf-8",
+            ) as stream:
+                self.assertEqual(len(list(csv.DictReader(stream))), 2)
+
+    def test_union_file_records_exposure_and_stays_one_row(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            logger = GrowthLogger(directory)
+            logger.start_session("ROI_UNION_EXPOSURE")
+            _roi, sample = self._two_box_sample(
+                logger, exposure_us=500_000.0, exposure_generation=2,
+            )
+            self.assertTrue(logger.record_rheed_roi_intensity(
+                sample, elapsed_s=2.0,
+            ))
+            session_dir = logger.session_dir
+            logger.end_session()
+
+            with (session_dir / "rheed_roi_intensity.csv").open(
+                newline="", encoding="utf-8",
+            ) as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["region_count"], "2")
+            self.assertEqual(float(rows[0]["exposure_us"]), 500_000.0)
+            self.assertEqual(rows[0]["exposure_generation"], "2")
+            self.assertEqual(rows[0]["schema_version"], "2")
+
+    def test_exposure_changes_are_journalled_with_outcomes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            logger = GrowthLogger(directory)
+            logger.start_session("EXPOSURE_TIMELINE")
+            self.assertTrue(logger.record_camera_exposure_change(
+                generation=1,
+                confirmed_exposure_us=500_000.0,
+                previous_exposure_us=300_000.0,
+                elapsed_s=12.5,
+                capture_sequence=42,
+                captured_at_utc="2026-08-31T12:00:00.000Z",
+                capture_backend="vimba",
+                outcome="confirmed",
+            ))
+            self.assertTrue(logger.record_camera_exposure_change(
+                generation=1,
+                confirmed_exposure_us=500_000.0,
+                previous_exposure_us=500_000.0,
+                elapsed_s=20.0,
+                outcome="refused",
+                reason="outside the camera range",
+            ))
+            # An unknown outcome is rejected rather than written as data.
+            self.assertFalse(logger.record_camera_exposure_change(
+                generation=2,
+                confirmed_exposure_us=1.0,
+                previous_exposure_us=1.0,
+                elapsed_s=1.0,
+                outcome="maybe",
+            ))
+            session_dir = logger.session_dir
+            logger.end_session()
+
+            entries = [
+                json.loads(line)
+                for line in (session_dir / "camera_exposure_changes.jsonl")
+                .read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(len(entries), 2)
+            self.assertEqual(entries[0]["outcome"], "confirmed")
+            self.assertEqual(entries[0]["confirmed_exposure_us"], 500_000.0)
+            self.assertEqual(entries[0]["previous_exposure_us"], 300_000.0)
+            self.assertEqual(entries[0]["capture_sequence"], 42)
+            self.assertEqual(entries[1]["outcome"], "refused")
+            self.assertIn("outside the camera range", entries[1]["reason"])
+
+    def test_exposure_change_is_accepted_as_an_roi_lifecycle_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            logger = GrowthLogger(directory)
+            logger.start_session("ROI_EXPOSURE_EVENT")
+            roi, _sample = self._two_box_sample(logger)
+            self.assertTrue(logger.record_rheed_roi_definition(
+                "exposure_changed", roi, reason="exposure 300 ms -> 500 ms",
+            ))
+            session_dir = logger.session_dir
+            logger.end_session()
+
+            events = [
+                json.loads(line)
+                for line in (session_dir / "rheed_roi_definitions.jsonl")
+                .read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(events[-1]["event"], "exposure_changed")
+            self.assertIn("500 ms", events[-1]["reason"])
 
 
 if __name__ == "__main__":

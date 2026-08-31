@@ -193,7 +193,17 @@ class GrowthApp(QMainWindow):
         self.setMinimumSize(1000, 700)
 
         self.camera_worker: Optional[RheedCameraWorker] = None
-        self._reported_camera_exposure_us: Optional[float] = None
+        # (exposure_generation, exposure_us) of the last announcement.
+        # The generation is part of the key so re-applying the same value
+        # is still confirmed to the grower rather than silently swallowed.
+        self._reported_camera_exposure_us: Optional[tuple[int, float]] = None
+        self._reported_camera_exposure_error: str = ""
+        # Separate from the _reported_* pair above: the status bar and
+        # the session journal have different lifetimes (the journal only
+        # exists between START and STOP), so they cannot share a cursor.
+        self._journalled_camera_exposure_generation: int = 0
+        self._journalled_camera_exposure_us: Optional[float] = None
+        self._journalled_camera_exposure_error: str = ""
         self.pyrometer_worker: Optional[PyrometerWorker] = None
         self.mistral_worker: Optional[MistralWorker] = None
         self.evap_worker: Optional[EvapControlWorker] = None
@@ -283,6 +293,7 @@ class GrowthApp(QMainWindow):
         self.monitor.reconnect_rheed_requested.connect(
             self._on_reconnect_rheed,
         )
+        self.monitor.apply_exposure_requested.connect(self._on_apply_exposure)
         self.monitor.start_requested.connect(self._on_start)
         self.monitor.stop_requested.connect(self._on_stop)
         self.monitor.commit_requested.connect(self._on_commit)
@@ -499,6 +510,10 @@ class GrowthApp(QMainWindow):
         """Connect camera, pyrometer, MISTRAL, and Evap Control workers."""
         camera_mode = self.monitor.config_camera_mode.currentText()
         self._reported_camera_exposure_us = None
+        self._reported_camera_exposure_error = ""
+        self._journalled_camera_exposure_generation = 0
+        self._journalled_camera_exposure_us = None
+        self._journalled_camera_exposure_error = ""
         exposure_ms = self.monitor.config_camera_exposure_ms.value()
         exposure_us = (
             exposure_ms * 1000.0
@@ -2604,6 +2619,7 @@ class GrowthApp(QMainWindow):
 
         state = _stamp_gui_received(state)
         self._announce_camera_exposure(state)
+        self._journal_camera_exposure(state)
         if self.growth_log.active:
             GrowthApp._trace_temporal(self,
                 "state_received", "rheed",
@@ -2791,6 +2807,83 @@ class GrowthApp(QMainWindow):
             and getattr(state, "frame", None) is not None
         )
 
+    @pyqtSlot(float)
+    def _on_apply_exposure(self, exposure_us: float) -> None:
+        """Apply a live exposure change without an ARM/DISARM cycle.
+
+        The driver validates and writes on its own stream thread, so this
+        returns immediately; success arrives back as a bumped
+        ``exposure_generation`` on a later CameraState and is announced by
+        ``_announce_camera_exposure``. Only the refusals that are knowable
+        synchronously are reported here.
+        """
+        worker = self.camera_worker
+        if worker is None or not worker.isRunning():
+            self.statusBar().showMessage(
+                "Exposure not applied: no camera worker is running.", 6000,
+            )
+            return
+        try:
+            worker.request_exposure_us(float(exposure_us))
+        except (ValueError, RuntimeError) as exc:
+            log.warning("Live exposure request refused: %s", exc)
+            self.statusBar().showMessage(f"Exposure refused: {exc}", 10000)
+            return
+        self.statusBar().showMessage(
+            f"Exposure {exposure_us / 1000.0:.0f} ms requested — waiting for "
+            "the camera to confirm…", 5000,
+        )
+
+    def _journal_camera_exposure(self, state) -> None:
+        """Record live exposure changes to the session's exposure timeline.
+
+        Only while a session is open — before START there is no session
+        directory, and the ARM-time exposure is already in session metadata.
+        Both confirmations and refusals are recorded: "the grower asked and
+        the camera said no" is exactly as important to a later reader as a
+        successful change, because it explains a trend that did NOT step.
+        """
+        if not self.growth_log.active:
+            return
+        generation = int(getattr(state, "exposure_generation", 0) or 0)
+        exposure_us = getattr(state, "exposure_us", None)
+        error = str(getattr(state, "exposure_error", "") or "")
+
+        if generation != self._journalled_camera_exposure_generation:
+            previous = self._journalled_camera_exposure_us
+            self._journalled_camera_exposure_generation = generation
+            self._journalled_camera_exposure_us = exposure_us
+            self.growth_log.record_camera_exposure_change(
+                generation=generation,
+                confirmed_exposure_us=exposure_us,
+                previous_exposure_us=previous,
+                elapsed_s=self.monitor.get_elapsed_seconds(),
+                capture_sequence=int(getattr(state, "capture_sequence", 0) or 0),
+                captured_at_utc=str(getattr(state, "captured_at_utc", "") or ""),
+                capture_backend=str(getattr(state, "capture_backend", "") or ""),
+                outcome="confirmed",
+            )
+        elif self._journalled_camera_exposure_us is None:
+            # Seed the baseline from the ARM-time readback so the first live
+            # change records what it moved away from.
+            self._journalled_camera_exposure_us = exposure_us
+
+        if error and error != self._journalled_camera_exposure_error:
+            self._journalled_camera_exposure_error = error
+            self.growth_log.record_camera_exposure_change(
+                generation=generation,
+                confirmed_exposure_us=exposure_us,
+                previous_exposure_us=exposure_us,
+                elapsed_s=self.monitor.get_elapsed_seconds(),
+                capture_sequence=int(getattr(state, "capture_sequence", 0) or 0),
+                captured_at_utc=str(getattr(state, "captured_at_utc", "") or ""),
+                capture_backend=str(getattr(state, "capture_backend", "") or ""),
+                outcome="refused",
+                reason=error,
+            )
+        elif not error:
+            self._journalled_camera_exposure_error = ""
+
     def _announce_camera_exposure(self, state) -> None:
         """Tell the grower the exposure the camera actually confirmed.
 
@@ -2798,16 +2891,38 @@ class GrowthApp(QMainWindow):
         quantises onto its increment grid, and the grower needs to see what the
         frames were really taken at. Fires only on change, so a 1 Hz state
         stream does not repaint the status bar every second.
+
+        Keyed on (generation, value), not value alone. Re-applying the same
+        exposure is a real hardware write the grower asked for and must be
+        confirmed; on value alone it would look like nothing happened.
         """
         exposure_us = getattr(state, "exposure_us", None)
+        generation = int(getattr(state, "exposure_generation", 0) or 0)
+        # A refusal is reported once per distinct message. It does not
+        # invalidate the frame — acquisition continues at the previous
+        # confirmed exposure — so it is deliberately separate from the
+        # camera-error path.
+        exposure_error = str(getattr(state, "exposure_error", "") or "")
+        if exposure_error and exposure_error != self._reported_camera_exposure_error:
+            self._reported_camera_exposure_error = exposure_error
+            self.statusBar().showMessage(
+                f"Exposure change refused: {exposure_error}", 10000,
+            )
+        elif not exposure_error:
+            self._reported_camera_exposure_error = ""
+
+        key = (generation, exposure_us)
         if (
             state.connected
             and exposure_us is not None
-            and exposure_us != self._reported_camera_exposure_us
+            and key != self._reported_camera_exposure_us
         ):
-            self._reported_camera_exposure_us = exposure_us
+            previous = self._reported_camera_exposure_us
+            self._reported_camera_exposure_us = key
+            changed_live = previous is not None and previous[0] != generation
+            verb = "changed to" if changed_live else "confirmed at"
             self.statusBar().showMessage(
-                f"Direct camera exposure confirmed: "
+                f"Direct camera exposure {verb} "
                 f"{exposure_us / 1000.0:.0f} ms",
                 5000,
             )

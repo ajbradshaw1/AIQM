@@ -312,6 +312,10 @@ class GrowthMonitor(QWidget):
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     open_rheed_trend_requested = pyqtSignal()
+    # Microseconds. Emitted by the "Apply" button beside the exposure spinbox,
+    # never by the spinbox's own valueChanged — a stray scroll wheel must not
+    # write to hardware.
+    apply_exposure_requested = pyqtSignal(float)
     open_temp_plot_requested = pyqtSignal()
     commit_requested = pyqtSignal(dict)
     # Grower-marked event (Jul 10 2026 group-meeting design shift). Payload:
@@ -1199,12 +1203,30 @@ class GrowthMonitor(QWidget):
             "Manual exposure for direct Vimba mode. 'Keep current' performs "
             f"no camera write. The {safe_exposure_max_ms:.0f} ms ceiling "
             f"preserves headroom for the {self._cfg.camera_fps:g} Hz "
-            "acquisition loop. Applied when ARM is pressed and recorded in "
-            "session metadata; it does not modify the camera user set."
+            "acquisition loop. Applied at ARM, and changeable live with "
+            "Apply; every change is recorded. It does not modify the camera "
+            "user set, so it reverts on power-cycle."
         )
-        config_form.addRow("Direct exposure:", self.config_camera_exposure_ms)
+        # Unlike every other config widget, this one stays live while armed.
+        # It is not a setting the worker committed to at construction — it is
+        # a hardware value the camera reads back and confirms, so a mid-session
+        # change is verifiable rather than silently divergent.
+        self.btn_apply_exposure = QPushButton("Apply")
+        self.btn_apply_exposure.setFixedWidth(64)
+        self.btn_apply_exposure.clicked.connect(self._on_apply_exposure_clicked)
+        exposure_row = QHBoxLayout()
+        exposure_row.setContentsMargins(0, 0, 0, 0)
+        exposure_row.setSpacing(4)
+        exposure_row.addWidget(self.config_camera_exposure_ms, 1)
+        exposure_row.addWidget(self.btn_apply_exposure, 0)
+        exposure_holder = QWidget()
+        exposure_holder.setLayout(exposure_row)
+        config_form.addRow("Direct exposure:", exposure_holder)
         self.config_camera_mode.currentTextChanged.connect(
             self._update_camera_exposure_enabled,
+        )
+        self.config_camera_exposure_ms.valueChanged.connect(
+            lambda _value: self._update_camera_exposure_enabled(),
         )
         self._update_camera_exposure_enabled()
 
@@ -1296,7 +1318,11 @@ class GrowthMonitor(QWidget):
                 self.config_browse_btn,
                 self.config_prefix,
                 self.config_camera_mode,
-                self.config_camera_exposure_ms,
+                # config_camera_exposure_ms is deliberately ABSENT: it is the
+                # one hardware control that stays usable while armed, and
+                # _update_camera_exposure_enabled owns its enable state and
+                # tooltip. Adding it back here would re-lock it on ARM and
+                # undo the live-exposure feature.
                 self.config_pyrometer_mode,
                 self.config_exactus_port,
                 self.config_exactus_baud,
@@ -1409,11 +1435,48 @@ class GrowthMonitor(QWidget):
     )
 
     def _update_camera_exposure_enabled(self, mode: str = "") -> None:
-        """Expose the hardware write control only for unlocked direct mode."""
+        """Own the enable state of the exposure spinbox and its Apply button.
+
+        The spinbox is usable in every session state for direct modes: in idle
+        it seeds the ARM-time write, and while armed or running it stages a
+        live change. Apply is the thing that actually reaches hardware, so it
+        is gated further — a camera must be running, and "Keep current" (0) is
+        not a value that can be applied.
+        """
         selected_mode = str(mode or self.config_camera_mode.currentText())
-        self.config_camera_exposure_ms.setEnabled(
-            self._state == "idle" and selected_mode in ("vimba", "direct")
+        direct = selected_mode in ("vimba", "direct")
+        self.config_camera_exposure_ms.setEnabled(direct)
+        live = direct and self._state in ("armed", "running")
+        self.btn_apply_exposure.setEnabled(
+            live and self.config_camera_exposure_ms.value() > 0
         )
+        if not direct:
+            self.btn_apply_exposure.setToolTip(
+                "Exposure is a direct-Vimba control. Screengrab and dummy "
+                "modes have no camera exposure to set."
+            )
+        elif not live:
+            self.btn_apply_exposure.setToolTip(
+                "ARM first — a live exposure change needs a running camera."
+            )
+        elif self.config_camera_exposure_ms.value() <= 0:
+            self.btn_apply_exposure.setToolTip(
+                "'Keep current' is not a value to apply. Dial in a target "
+                "exposure first."
+            )
+        else:
+            self.btn_apply_exposure.setToolTip(
+                "Write this exposure to the camera now, without disarming. "
+                "The confirmed readback is announced and logged, and the "
+                "RHEED trend marks the discontinuity."
+            )
+
+    def _on_apply_exposure_clicked(self) -> None:
+        """Translate the spinbox's milliseconds into the driver's µs."""
+        exposure_ms = float(self.config_camera_exposure_ms.value())
+        if exposure_ms <= 0:
+            return
+        self.apply_exposure_requested.emit(exposure_ms * 1000.0)
 
     def _set_config_widgets_enabled(self, enabled: bool) -> None:
         """Lock/unlock the config panel widgets in bulk.
@@ -1435,8 +1498,10 @@ class GrowthMonitor(QWidget):
                 widget.setToolTip(orig_tooltip)
             else:
                 widget.setToolTip(self._CONFIG_LOCKED_TOOLTIP)
-        if enabled:
-            self._update_camera_exposure_enabled()
+        # Unconditional: the exposure control is outside the bulk lock, and
+        # ARM is exactly when its Apply button becomes usable. Running this
+        # only on unlock would leave Apply dead for the whole session.
+        self._update_camera_exposure_enabled()
 
     def _apply_state(self):
         s = self._state

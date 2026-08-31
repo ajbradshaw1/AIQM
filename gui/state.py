@@ -147,6 +147,16 @@ class CameraState:
     # exposure to interrogate (screengrab, dummy) and whenever no manual write
     # was requested.
     exposure_us: Optional[float] = None
+    # Number of CONFIRMED live exposure changes on the current connect cycle.
+    # Consumers key on this rather than on exposure_us because re-applying the
+    # same value is still a real hardware event, and because it is what marks
+    # the discontinuity in a ROI intensity trend (an exposure step changes the
+    # luminance sum without anything happening on the sample surface).
+    exposure_generation: int = 0
+    # Why the most recent live exposure request was refused, or "". A refusal
+    # never invalidates the frame — acquisition continues at the previous
+    # confirmed exposure — so this is reported separately from `error`.
+    exposure_error: str = ""
     capture_backend: str = ""
     captured_at_utc: str = ""
     capture_sequence: int = 0

@@ -509,6 +509,27 @@ class VmbCamera(RheedCamera):
         self._error_lock = threading.Lock()
         self._last_frame_error: Optional[str] = None
 
+        # LIVE EXPOSURE REQUESTS.
+        #
+        # The class contract is that the stream thread owns every vmbpy call
+        # for a connect cycle, so a grower's mid-session exposure change
+        # cannot be written from the GUI thread — it would race the trigger
+        # loop and the SDK frame callback. The request therefore crosses
+        # threads as data: the caller parks a value here, and
+        # _trigger_and_idle_loop applies it between triggers, where it already
+        # holds `cam` inside `with cam:`.
+        #
+        # Its own lock, not _error_lock or _frame_lock: an SDK exposure write
+        # can block for hundreds of milliseconds and must never stall
+        # read_frame() or the frame handler.
+        self._exposure_request_lock = threading.Lock()
+        self._pending_exposure_us: Optional[float] = None
+        # Increments on every CONFIRMED live change. Consumers use it to tell
+        # "re-applied the same value" from "no change", and the intensity
+        # monitor uses it to break its trend at the discontinuity.
+        self._exposure_generation = 0
+        self._last_exposure_error = ""
+
     def connect(self) -> None:
         # Fail fast with a clear message if the SDK is missing, before
         # spawning the thread (the thread re-imports — module is cached).
@@ -548,6 +569,12 @@ class VmbCamera(RheedCamera):
             self._stream_error = None
             self._last_frame_error = None
         self._exposure_us = None
+        # A live request parked against the PREVIOUS cycle must not be applied
+        # to a freshly opened camera — the grower asked for it under different
+        # hardware state, and the new cycle has its own ARM-time exposure.
+        with self._exposure_request_lock:
+            self._pending_exposure_us = None
+            self._last_exposure_error = ""
         with self._sensor_settings_lock:
             self._sensor_settings_at_connect = {}
         with self._frame_lock:
@@ -855,6 +882,43 @@ class VmbCamera(RheedCamera):
         if self._requested_exposure_us is None:
             # Keep-current: no write, and provenance stays honest above.
             return
+        self._apply_exposure_write(
+            cam,
+            mode,
+            feature_name,
+            feature,
+            current,
+            float(self._requested_exposure_us),
+            txn=txn,
+        )
+
+    def _apply_exposure_write(
+        self,
+        cam,
+        mode: str,
+        feature_name: str,
+        feature,
+        current,
+        requested_us: float,
+        *,
+        txn=None,
+    ) -> float:
+        """Validate and write one exposure value; return the confirmed readback.
+
+        Shared by two callers with different lifetimes:
+
+        * ``_configure_exposure`` at ARM, which passes the connect-cycle
+          ``txn`` so a failure anywhere in the setup sequence rolls the
+          exposure back with every other mutation.
+        * ``_service_exposure_request`` while streaming, which passes no
+          transaction. A grower's deliberate mid-session change is not part of
+          the ARM transaction and must not be reverted by a later DISARM —
+          the same policy already applied to a committed ARM exposure.
+
+        Every gate is fail-closed: an unreadable answer is a refusal, never an
+        assumption. ``current`` is the pre-write value and the restore target,
+        so it must already be a usable number by the time it reaches here.
+        """
         if mode != "full":
             raise RuntimeError(
                 "Manual exposure requires Full camera access. Close kSA or "
@@ -931,7 +995,7 @@ class VmbCamera(RheedCamera):
             )
         current = float(current)
 
-        requested = float(self._requested_exposure_us)
+        requested = float(requested_us)
         bounds = self._accessor_call(feature, "get_range")
         if bounds is UNREADABLE or bounds is ABSENT:
             raise RuntimeError(
@@ -1126,7 +1190,7 @@ class VmbCamera(RheedCamera):
             log.info(
                 "VmbCamera manual exposure applied: %s=%.0f us "
                 "(requested %.0f us, volatile)",
-                feature_name, readback, self._requested_exposure_us,
+                feature_name, readback, requested_us,
             )
         except Exception as exc:  # noqa: BLE001 — re-raised below
             # With a transaction, rollback is owned there so every mutation is
@@ -1173,6 +1237,8 @@ class VmbCamera(RheedCamera):
                     ) from exc
                 self._exposure_us = float(restored)
             raise
+        return float(self._exposure_us)
+
 
     def _stream_loop(self) -> None:
         """Background thread — owns every vmbpy call for one connect cycle.
@@ -1702,6 +1768,11 @@ class VmbCamera(RheedCamera):
         period = 1.0 / self._trigger_hz
         consecutive_trigger_fails = 0
         while not self._stop_event.is_set():
+            # Serviced BEFORE the trigger, so the very next integration is the
+            # first one taken at the new exposure. Doing it after would emit
+            # one frame at the old value that the GUI has already been told is
+            # the new one.
+            self._service_exposure_request(cam, mode)
             if mode == "full":
                 try:
                     cam.TriggerSoftware.run()
@@ -1897,6 +1968,122 @@ class VmbCamera(RheedCamera):
     def exposure_us(self) -> Optional[float]:
         """Confirmed camera exposure readback for the active connect cycle."""
         return self._exposure_us
+
+    @property
+    def exposure_generation(self) -> int:
+        """Count of confirmed live exposure changes on this connect cycle."""
+        with self._exposure_request_lock:
+            return self._exposure_generation
+
+    @property
+    def last_exposure_error(self) -> str:
+        """Why the most recent live exposure request was refused, or ""."""
+        with self._exposure_request_lock:
+            return self._last_exposure_error
+
+    def request_exposure_us(self, value: float) -> None:
+        """Ask the stream thread to apply a new exposure without re-arming.
+
+        Returns as soon as the request is parked; the write happens on the
+        stream thread and its outcome surfaces through ``exposure_us``,
+        ``exposure_generation`` and ``last_exposure_error``.
+
+        Everything checkable without touching the camera is checked HERE, so a
+        bad value is refused while the caller is still on the stack and can be
+        told why. The device-side gates (range, increment grid, ExposureAuto,
+        readback) belong to ``_apply_exposure_write`` and run on the stream
+        thread, because only it may talk to the SDK.
+        """
+        if not self._usable_number(value):
+            raise ValueError(
+                f"exposure_us must be a finite positive number, got {value!r}"
+            )
+        requested = float(value)
+        safe_max_us = (
+            1_000_000.0 / self._trigger_hz * self._MAX_EXPOSURE_PERIOD_FRACTION
+        )
+        if requested > safe_max_us:
+            raise ValueError(
+                f"exposure_us={requested:.0f} is too long for "
+                f"trigger_hz={self._trigger_hz:.3g}; use <= {safe_max_us:.0f} "
+                "us to preserve 10% acquisition headroom"
+            )
+        if not self._connected:
+            raise RuntimeError(
+                "Cannot change exposure: the camera is not connected. ARM "
+                "first, then adjust the exposure live."
+            )
+        # Read mode means another process (kSA, typically) holds the exclusive
+        # lock and owns acquisition. Writing exposure from a passive consumer
+        # would either fail at the SDK or silently change what the grower sees
+        # in kSA. Refuse with the cause named, rather than parking a request
+        # the stream thread can only reject later out of context.
+        if self._active_access_mode != "full":
+            raise RuntimeError(
+                "Cannot change exposure in Read access mode — kSA or the "
+                "Vimba X Viewer holds the camera. Close it, then disarm and "
+                "arm again to negotiate Full access."
+            )
+        with self._exposure_request_lock:
+            self._pending_exposure_us = requested
+            self._last_exposure_error = ""
+
+    def _service_exposure_request(self, cam, mode: str) -> None:
+        """Apply one pending live exposure change. Runs on the stream thread.
+
+        Failure is recorded, never raised: a refused exposure must not tear
+        down a healthy acquisition. ``_apply_exposure_write`` restores the
+        previous value before it raises, so the camera is left where the
+        grower last confirmed it.
+        """
+        with self._exposure_request_lock:
+            requested = self._pending_exposure_us
+            self._pending_exposure_us = None
+        if requested is None:
+            return
+
+        try:
+            feature_name = next(
+                (
+                    name for name in self._EXPOSURE_FEATURE_CANDIDATES
+                    if self._optional_feature(cam, name) is not None
+                ),
+                None,
+            )
+            if feature_name is None:
+                raise RuntimeError(
+                    "Live exposure requested, but neither ExposureTimeAbs nor "
+                    "ExposureTime exists on this camera"
+                )
+            feature = self._optional_feature(cam, feature_name)
+            current = self._accessor_call(feature, "get")
+            # The restore target must be a usable number BEFORE the write, for
+            # the same reason as at ARM: a value we could not hand back makes
+            # the write a one-way change to the grower's camera.
+            if not self._usable_number(current):
+                raise RuntimeError(
+                    f"Could not read a usable current {feature_name} "
+                    f"({current!r}); refusing a live write that could not "
+                    "then be undone"
+                )
+            confirmed = self._apply_exposure_write(
+                cam, mode, feature_name, feature, float(current), requested,
+            )
+        except Exception as exc:  # noqa: BLE001 — a refusal is not a fault
+            with self._exposure_request_lock:
+                self._last_exposure_error = str(exc)
+            log.error("Live exposure change refused: %s", exc)
+            return
+
+        with self._exposure_request_lock:
+            self._exposure_generation += 1
+            self._last_exposure_error = ""
+            generation = self._exposure_generation
+        log.info(
+            "VmbCamera live exposure applied: %.0f us confirmed "
+            "(requested %.0f us, generation %d, volatile)",
+            confirmed, requested, generation,
+        )
 
     @property
     def sensor_settings_at_connect(self) -> dict:

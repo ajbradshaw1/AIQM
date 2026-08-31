@@ -282,9 +282,16 @@ class _AppHarness:
         # short-circuits on states without an exposure_us, which is every
         # state this file constructs.
         self._reported_camera_exposure_us = None
+        self._reported_camera_exposure_error = ""
+        self._journalled_camera_exposure_generation = 0
+        self._journalled_camera_exposure_us = None
+        self._journalled_camera_exposure_error = ""
         from gui.growth_app import GrowthApp
         self._announce_camera_exposure = (
             GrowthApp._announce_camera_exposure.__get__(self)
+        )
+        self._journal_camera_exposure = (
+            GrowthApp._journal_camera_exposure.__get__(self)
         )
         self._return_to_idle_if_arm_failed = (
             GrowthApp._return_to_idle_if_arm_failed.__get__(self)

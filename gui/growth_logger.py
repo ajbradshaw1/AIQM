@@ -126,6 +126,28 @@ class GrowthLogger:
         "regions_normalized_json", "pixel_count", "intensity_sum",
         "intensity_mean", "relative_change_pct", "frame_age_ms",
         "measurement_duration_ms",
+        # Appended in schema 2. Exposure is changeable mid-session now, and an
+        # exposure step scales this metric without the surface having changed —
+        # so every row records which exposure produced it. New trailing
+        # columns, so existing header-keyed readers keep working.
+        "exposure_us", "exposure_generation",
+    ]
+
+    # One row per REGION per capture. A sibling file rather than more columns
+    # on the union series: the two have different row counts and different
+    # keys, and widening the union file would have made `intensity_sum` mean
+    # two different things depending on the row.
+    RHEED_ROI_REGION_FIELDS = [
+        "schema_version", "recorded_at_utc", "elapsed_s", "sample_idx",
+        "roi_definition_id", "roi_mode", "intensity_metric",
+        "captured_at_utc", "capture_sequence", "captured_monotonic_ns",
+        "capture_backend", "source_hwnd", "capture_geometry_id",
+        "frame_width", "frame_height", "view_segment_id",
+        "visual_history_generation",
+        "region_index", "region_label", "region_normalized_json",
+        "pixel_count", "intensity_sum", "intensity_mean",
+        "relative_change_pct",
+        "exposure_us", "exposure_generation",
     ]
 
     # Source of truth for independent human primary judgments.  Unlike
@@ -2030,7 +2052,10 @@ class GrowthLogger:
         self._temporal_trace_file = None
         self._rheed_roi_intensity_file = None
         self._rheed_roi_intensity_writer = None
+        self._rheed_roi_region_file = None
+        self._rheed_roi_region_writer = None
         self._rheed_roi_definition_file = None
+        self._camera_exposure_file = None
         self._rheed_point_event_store: Optional[PointEventStore] = None
         self._last_point_event_id = ""
         self._calibration_journal_trusted = True
@@ -2203,8 +2228,25 @@ class GrowthLogger:
         )
         self._rheed_roi_intensity_writer.writeheader()
         self._rheed_roi_intensity_file.flush()
+        self._rheed_roi_region_file = open(
+            self._session_dir / "rheed_roi_region_intensity.csv",
+            "w", newline="", encoding="utf-8",
+        )
+        self._rheed_roi_region_writer = csv.DictWriter(
+            self._rheed_roi_region_file,
+            fieldnames=self.RHEED_ROI_REGION_FIELDS,
+        )
+        self._rheed_roi_region_writer.writeheader()
+        self._rheed_roi_region_file.flush()
         self._rheed_roi_definition_file = open(
             self._session_dir / "rheed_roi_definitions.jsonl",
+            "a", encoding="utf-8", newline="\n",
+        )
+        # Append-only, because session_metadata.json can hold only ONE
+        # exposure and a live change would overwrite it. The metadata field
+        # stays "the exposure at ARM"; this file is the timeline.
+        self._camera_exposure_file = open(
+            self._session_dir / "camera_exposure_changes.jsonl",
             "a", encoding="utf-8", newline="\n",
         )
         self.log_temporal_event(
@@ -2240,7 +2282,13 @@ class GrowthLogger:
             log.error("Rejected non-typed RHEED ROI definition payload")
             return False
         event_name = str(event or "").strip()
-        if event_name not in {"defined", "activated", "superseded", "invalidated", "cleared"}:
+        # "exposure_changed" does not alter the geometry — the ROI is still
+        # valid — but it marks where the measured values stop being comparable
+        # with what came before, which belongs in the same timeline.
+        if event_name not in {
+            "defined", "activated", "superseded", "invalidated", "cleared",
+            "exposure_changed",
+        }:
             log.error("Rejected unknown RHEED ROI lifecycle event: %s", event_name)
             return False
         payload = {
@@ -2269,6 +2317,159 @@ class GrowthLogger:
                 "definition_capture_sequence": roi.definition_capture_sequence,
             },
         )
+        return True
+
+    def record_camera_exposure_change(
+        self,
+        *,
+        generation: int,
+        confirmed_exposure_us: Optional[float],
+        previous_exposure_us: Optional[float],
+        elapsed_s: float,
+        capture_sequence: int = 0,
+        captured_at_utc: str = "",
+        capture_backend: str = "",
+        outcome: str = "confirmed",
+        reason: str = "",
+    ) -> bool:
+        """Append one live camera exposure change to the session timeline.
+
+        Recorded for the same reason ROI definitions are: an exposure step
+        changes the RHEED display-luminance sum with nothing happening on the
+        sample surface, so anyone reading the intensity trend afterwards needs
+        to be able to segment on it. ``generation`` is the driver's counter,
+        which is what the trend plot also keys its discontinuity marker on.
+        """
+        if self._camera_exposure_file is None:
+            return False
+        outcome_name = str(outcome or "").strip()
+        if outcome_name not in {"confirmed", "refused"}:
+            log.error("Rejected unknown camera exposure outcome: %s", outcome)
+            return False
+        payload = {
+            "schema_version": 1,
+            "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+            "elapsed_s": round(float(elapsed_s), 3),
+            "exposure_generation": int(generation),
+            "outcome": outcome_name,
+            "reason": str(reason or ""),
+            "confirmed_exposure_us": (
+                None if confirmed_exposure_us is None
+                else float(confirmed_exposure_us)
+            ),
+            "previous_exposure_us": (
+                None if previous_exposure_us is None
+                else float(previous_exposure_us)
+            ),
+            "capture_sequence": int(capture_sequence or 0),
+            "captured_at_utc": str(captured_at_utc or ""),
+            "capture_backend": str(capture_backend or ""),
+        }
+        try:
+            self._camera_exposure_file.write(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+            )
+            self._camera_exposure_file.flush()
+        except OSError as exc:
+            log.error("Could not append camera exposure change: %s", exc)
+            return False
+        self.log_temporal_event(
+            "camera_exposure_changed",
+            "rheed",
+            details={
+                "exposure_generation": int(generation),
+                "outcome": outcome_name,
+                "confirmed_exposure_us": payload["confirmed_exposure_us"],
+                "previous_exposure_us": payload["previous_exposure_us"],
+                "capture_sequence": int(capture_sequence or 0),
+            },
+        )
+        return True
+
+    def _write_rheed_roi_regions(
+        self,
+        sample: RheedIntensitySample,
+        *,
+        sample_idx: int,
+        elapsed_s: float,
+        view_segment_id: Optional[int],
+        visual_history_generation: int,
+        exposure_us: str,
+        exposure_generation: int,
+    ) -> bool:
+        """Append one row per tracked box for a single capture.
+
+        The union file answers "how much light is in the selected area"; this
+        one answers "what is each box doing", which is what a grower watching
+        the specular spot separately from the first-order streaks actually
+        needs. Rows are keyed by (roi_definition_id, region_label,
+        capture_sequence) — the label, not the index, so a box keeps its
+        identity when another is appended beside it.
+        """
+        if self._rheed_roi_region_writer is None:
+            return False
+        regions = tuple(sample.regions)
+        if not regions:
+            return False
+        roi = sample.roi
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        rows = []
+        for region in regions:
+            if region.pixel_count <= 0 or not all(
+                math.isfinite(float(value)) for value in (
+                    region.intensity_sum,
+                    region.intensity_mean,
+                    region.relative_change_pct,
+                )
+            ):
+                log.error(
+                    "Rejected invalid RHEED ROI region sample for %r",
+                    region.label,
+                )
+                return False
+            normalized = roi.regions[region.index] if region.index < len(
+                roi.regions,
+            ) else None
+            rows.append({
+                "schema_version": 1,
+                "recorded_at_utc": recorded_at,
+                "elapsed_s": f"{float(elapsed_s):.6f}",
+                "sample_idx": sample_idx,
+                "roi_definition_id": roi.roi_definition_id,
+                "roi_mode": roi.mode,
+                "intensity_metric": INTENSITY_METRIC,
+                "captured_at_utc": sample.captured_at_utc,
+                "capture_sequence": sample.capture_sequence,
+                "captured_monotonic_ns": sample.captured_monotonic_ns,
+                "capture_backend": sample.capture_backend,
+                "source_hwnd": sample.source_hwnd,
+                "capture_geometry_id": sample.capture_geometry_id,
+                "frame_width": roi.frame_width,
+                "frame_height": roi.frame_height,
+                "view_segment_id": (
+                    "" if view_segment_id is None else int(view_segment_id)
+                ),
+                "visual_history_generation": int(visual_history_generation),
+                "region_index": region.index,
+                "region_label": region.label,
+                "region_normalized_json": json.dumps(
+                    {} if normalized is None else normalized.to_dict(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "pixel_count": region.pixel_count,
+                "intensity_sum": f"{region.intensity_sum:.9f}",
+                "intensity_mean": f"{region.intensity_mean:.9f}",
+                "relative_change_pct": f"{region.relative_change_pct:.9f}",
+                "exposure_us": exposure_us,
+                "exposure_generation": exposure_generation,
+            })
+        try:
+            self._rheed_roi_region_writer.writerows(rows)
+            self._rheed_roi_region_file.flush()
+        except OSError as exc:
+            log.error("Could not append RHEED ROI region samples: %s", exc)
+            return False
         return True
 
     def record_rheed_roi_intensity(
@@ -2312,8 +2513,13 @@ class GrowthLogger:
         if key in self._rheed_roi_sample_keys:
             return False
         sample_idx = self._rheed_roi_sample_counter + 1
+        exposure_us = (
+            "" if sample.exposure_us is None
+            else f"{float(sample.exposure_us):.3f}"
+        )
+        exposure_generation = int(sample.exposure_generation or 0)
         row = {
-            "schema_version": 1,
+            "schema_version": 2,
             "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": f"{float(elapsed_s):.6f}",
             "sample_idx": sample_idx,
@@ -2342,6 +2548,8 @@ class GrowthLogger:
             "relative_change_pct": f"{sample.relative_change_pct:.9f}",
             "frame_age_ms": f"{sample.frame_age_ms:.6f}",
             "measurement_duration_ms": f"{sample.measurement_duration_ms:.6f}",
+            "exposure_us": exposure_us,
+            "exposure_generation": exposure_generation,
         }
         try:
             self._rheed_roi_intensity_writer.writerow(row)
@@ -2349,6 +2557,19 @@ class GrowthLogger:
         except OSError as exc:
             log.error("Could not append RHEED ROI intensity sample: %s", exc)
             return False
+        # Written AFTER the union row and guarded by the same dedupe key, so
+        # the two files can never disagree about which captures were measured.
+        # A per-region write failure is logged, not fatal: losing the split
+        # series must not also lose the union series that already landed.
+        self._write_rheed_roi_regions(
+            sample,
+            sample_idx=sample_idx,
+            elapsed_s=elapsed_s,
+            view_segment_id=view_segment_id,
+            visual_history_generation=visual_history_generation,
+            exposure_us=exposure_us,
+            exposure_generation=exposure_generation,
+        )
         self._rheed_roi_sample_counter = sample_idx
         self._rheed_roi_sample_keys.add(key)
         self.log_temporal_event(
@@ -5091,7 +5312,9 @@ class GrowthLogger:
             self._equalizer_calibration_file,
             self._temporal_trace_file,
             self._rheed_roi_intensity_file,
+            self._rheed_roi_region_file,
             self._rheed_roi_definition_file,
+            self._camera_exposure_file,
         ):
             if f and not f.closed:
                 f.close()
@@ -5115,7 +5338,10 @@ class GrowthLogger:
         self._temporal_trace_file = None
         self._rheed_roi_intensity_file = None
         self._rheed_roi_intensity_writer = None
+        self._rheed_roi_region_file = None
+        self._rheed_roi_region_writer = None
         self._rheed_roi_definition_file = None
+        self._camera_exposure_file = None
         # NOTE: _session_dir and _entries intentionally preserved
         # so Export Growth Log works after STOP.
 

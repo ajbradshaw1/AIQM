@@ -27,8 +27,42 @@ from gui.equalizer_alignment import (
 
 
 INTENSITY_METRIC = "bt601_display_luminance_sum_v1"
-ROI_SCHEMA_VERSION = 1
+# 2 adds `regions_normalized` of arbitrary length plus `region_labels`.
+# Version 1 payloads still deserialize: they carry one region for
+# `manual_rect` and three for `auto_1x1_three_spot`, and labels are derived.
+ROI_SCHEMA_VERSION = 2
 ROI_MODES = ("manual_rect", "auto_1x1_three_spot")
+
+# Upper bound on tracked boxes. Not a storage limit — a legibility one. Past
+# roughly this many the plot legend stops being readable and the per-capture
+# measurement cost starts competing with the 1 Hz camera cadence.
+MAX_ROI_REGIONS = 8
+
+# Names for the three landmarks the Equalizer detector returns, in its own
+# left-to-right order. Used as region labels so a curve in the trend plot can
+# be matched to a spot on the frame without counting boxes.
+AUTO_TRIPLET_LABELS = ("left", "specular", "right")
+
+
+def default_region_labels(mode: str, count: int) -> tuple[str, ...]:
+    """Stable, human-readable names for a definition's regions.
+
+    The auto triplet gets its physical names, so a legend entry reads
+    "specular" rather than "box 2". Everything else is numbered from 1.
+    """
+    if mode == "auto_1x1_three_spot" and count == len(AUTO_TRIPLET_LABELS):
+        return AUTO_TRIPLET_LABELS
+    return tuple(f"box {index + 1}" for index in range(count))
+
+
+def _next_box_label(existing: tuple[str, ...]) -> str:
+    """First unused ``box N`` name, so appending never collides."""
+    taken = set(existing)
+    for index in range(1, MAX_ROI_REGIONS + 2):
+        candidate = f"box {index}"
+        if candidate not in taken:
+            return candidate
+    raise ValueError("No free region label remains")
 
 
 @dataclass(frozen=True)
@@ -89,6 +123,7 @@ class RheedRoiDefinition:
     frame_height: int
     definition_capture_sequence: int
     definition_captured_at_utc: str
+    region_labels: tuple[str, ...] = ()
     landmark_points_processed: tuple[tuple[float, float], ...] = ()
     detector_confidence: float | None = None
     detector_peak_snr: float | None = None
@@ -100,9 +135,30 @@ class RheedRoiDefinition:
         if self.mode not in ROI_MODES:
             raise ValueError(f"Unsupported ROI mode: {self.mode}")
         regions = tuple(self.regions)
-        expected = 1 if self.mode == "manual_rect" else 3
-        if len(regions) != expected:
-            raise ValueError(f"{self.mode} requires {expected} region(s)")
+        # Both modes now hold 1..MAX_ROI_REGIONS boxes. The old rule was
+        # "manual means exactly one, auto means exactly three", which made
+        # per-spot tracking impossible: the auto triplet could only ever be
+        # union-summed, and a grower could not watch the specular spot next to
+        # a background box. The DETECTOR still returns exactly three landmarks
+        # (see auto_three_spot_roi_definition) — that constraint lives there,
+        # where it is a fact about the physics, not here.
+        if not 1 <= len(regions) <= MAX_ROI_REGIONS:
+            raise ValueError(
+                f"An ROI needs 1 to {MAX_ROI_REGIONS} regions, got "
+                f"{len(regions)}"
+            )
+        labels = tuple(str(label) for label in self.region_labels)
+        if not labels:
+            labels = default_region_labels(self.mode, len(regions))
+        if len(labels) != len(regions):
+            raise ValueError(
+                f"Got {len(labels)} region labels for {len(regions)} regions"
+            )
+        if len(set(labels)) != len(labels):
+            # Labels key the per-region CSV rows and the plot legend, so a
+            # duplicate would silently merge two independent traces.
+            raise ValueError(f"Region labels must be unique, got {labels}")
+        object.__setattr__(self, "region_labels", labels)
         if int(self.frame_width) <= 0 or int(self.frame_height) <= 0:
             raise ValueError("ROI definition requires positive frame dimensions")
         points = tuple(
@@ -127,6 +183,7 @@ class RheedRoiDefinition:
         frame_height: int,
         definition_capture_sequence: int,
         definition_captured_at_utc: str,
+        region_labels: Iterable[str] = (),
         landmark_points_processed: Iterable[tuple[float, float]] = (),
         detector_confidence: float | None = None,
         detector_peak_snr: float | None = None,
@@ -136,6 +193,7 @@ class RheedRoiDefinition:
             roi_definition_id=f"rheed-roi-{uuid.uuid4().hex}",
             mode=mode,
             regions=tuple(regions),
+            region_labels=tuple(region_labels),
             capture_backend=str(capture_backend or ""),
             source_hwnd=int(source_hwnd or 0),
             capture_geometry_id=str(capture_geometry_id or ""),
@@ -180,6 +238,7 @@ class RheedRoiDefinition:
             "roi_definition_id": self.roi_definition_id,
             "mode": self.mode,
             "regions_normalized": [region.to_dict() for region in self.regions],
+            "region_labels": list(self.region_labels),
             "capture_backend": self.capture_backend,
             "source_hwnd": self.source_hwnd,
             "capture_geometry_id": self.capture_geometry_id,
@@ -193,6 +252,23 @@ class RheedRoiDefinition:
             "detector_method": self.detector_method,
             "intensity_metric": INTENSITY_METRIC,
         }
+
+
+@dataclass(frozen=True)
+class RegionIntensitySample:
+    """One rectangle's own measurement within a multi-box ROI.
+
+    Independent of the union: overlapping boxes each count their shared pixels,
+    because a per-box trace is asking "what is happening inside THIS box", not
+    "how much unique area is lit".
+    """
+
+    index: int
+    label: str
+    intensity_sum: float
+    intensity_mean: float
+    pixel_count: int
+    relative_change_pct: float
 
 
 @dataclass(frozen=True)
@@ -210,6 +286,17 @@ class RheedIntensitySample:
     pixel_count: int
     relative_change_pct: float
     measurement_duration_ms: float
+    # Per-box series. `intensity_sum` above stays the UNION, which is the
+    # documented bt601_display_luminance_sum_v1 metric and what
+    # rheed_roi_intensity.csv has always held — adding regions here does not
+    # change the meaning of any existing column.
+    regions: tuple[RegionIntensitySample, ...] = ()
+    # Camera exposure in force for THIS capture, and the driver's count of
+    # confirmed live changes. Carried on the sample rather than looked up
+    # later because exposure is now changeable mid-session: a reader
+    # segmenting the trend needs to know which side of a step each row is on.
+    exposure_us: float | None = None
+    exposure_generation: int = 0
 
     @property
     def capture_backend(self) -> str:
@@ -254,17 +341,91 @@ def manual_roi_definition(
     normalized_rect: tuple[float, float, float, float],
     state: object,
     frame: np.ndarray,
+    *,
+    append_to: RheedRoiDefinition | None = None,
 ) -> RheedRoiDefinition:
-    """Build a source-bound definition from a grower-drawn rectangle."""
+    """Build a source-bound definition from a grower-drawn rectangle.
+
+    With ``append_to`` the new rectangle joins that definition's existing
+    boxes — this is how a grower adds a background box beside the auto-detected
+    triplet, or tracks two streaks at once.
+
+    Appending produces a NEW definition ID rather than mutating the old one.
+    That is what keeps the audit trail honest: the window's existing
+    supersede/journal flow records the replacement, and any samples already
+    written against the previous ID still describe the geometry they were
+    measured with.
+    """
     arr = np.asarray(frame)
     height, width = arr.shape[:2]
     region = NormalizedRoi(*normalized_rect)
+    existing: tuple[NormalizedRoi, ...] = ()
+    existing_labels: tuple[str, ...] = ()
+    if append_to is not None:
+        reason = append_to.compatibility_error(state, arr)
+        if reason:
+            raise ValueError(
+                f"Cannot add a box to the active ROI: {reason}"
+            )
+        existing = tuple(append_to.regions)
+        if len(existing) >= MAX_ROI_REGIONS:
+            raise ValueError(
+                f"Already tracking {MAX_ROI_REGIONS} regions — remove one "
+                "before adding another"
+            )
+        # Carry the old labels forward verbatim. Re-deriving them would rename
+        # the auto triplet's "specular" to "box 2" the moment a grower adds a
+        # background box, orphaning every per-region row already written under
+        # the old name.
+        existing_labels = tuple(append_to.region_labels)
+    labels = existing_labels + (_next_box_label(existing_labels),)
     return RheedRoiDefinition.create(
         mode="manual_rect",
-        regions=(region,),
+        regions=existing + (region,),
+        region_labels=labels,
         capture_backend=str(getattr(state, "capture_backend", "") or ""),
         source_hwnd=int(getattr(state, "source_hwnd", 0) or 0),
         capture_geometry_id=str(getattr(state, "capture_geometry_id", "") or ""),
+        frame_width=width,
+        frame_height=height,
+        definition_capture_sequence=int(
+            getattr(state, "capture_sequence", 0)
+            or getattr(state, "sample_sequence", 0)
+            or getattr(state, "frame_number", 0)
+        ),
+        definition_captured_at_utc=str(getattr(state, "captured_at_utc", "") or ""),
+    )
+
+
+def without_last_region(
+    roi: RheedRoiDefinition,
+    state: object,
+    frame: np.ndarray,
+) -> RheedRoiDefinition:
+    """Drop the most recently added box, keeping every other label stable.
+
+    Only the LAST box can be removed, deliberately. Removing box 2 of four
+    would renumber boxes 3 and 4, and their per-region CSV rows are keyed by
+    label — a rename mid-session would silently splice two different
+    rectangles into one trace.
+    """
+    if len(roi.regions) <= 1:
+        raise ValueError(
+            "Only one region remains — use Clear ROI to stop measuring"
+        )
+    arr = np.asarray(frame)
+    height, width = arr.shape[:2]
+    return RheedRoiDefinition.create(
+        # A trimmed set is grower-curated, not the detector's proposal, so it
+        # is no longer "auto_1x1_three_spot" and carries no detector
+        # provenance. The LABELS survive, because "specular" is still a true
+        # statement about the box that kept it.
+        mode="manual_rect",
+        regions=roi.regions[:-1],
+        region_labels=roi.region_labels[:-1],
+        capture_backend=roi.capture_backend,
+        source_hwnd=roi.source_hwnd,
+        capture_geometry_id=roi.capture_geometry_id,
         frame_width=width,
         frame_height=height,
         definition_capture_sequence=int(
@@ -310,6 +471,9 @@ def auto_three_spot_roi_definition(
     return RheedRoiDefinition.create(
         mode="auto_1x1_three_spot",
         regions=regions,
+        # detect_live_landmarks orders its points left, specular, right; the
+        # labels ride along so a legend entry names a spot, not an index.
+        region_labels=AUTO_TRIPLET_LABELS,
         capture_backend=str(getattr(state, "capture_backend", "") or ""),
         source_hwnd=int(getattr(state, "source_hwnd", 0) or 0),
         capture_geometry_id=str(getattr(state, "capture_geometry_id", "") or ""),
@@ -354,13 +518,64 @@ def measure_regions(
     return total, mean, pixel_count
 
 
+def measure_region_series(
+    frame: np.ndarray,
+    roi: RheedRoiDefinition,
+    *,
+    baseline_sums: Mapping[str, float] | None = None,
+) -> tuple[RegionIntensitySample, ...]:
+    """Measure every rectangle independently, in definition order.
+
+    Deliberately NOT masked like ``measure_regions``: the union exists to
+    answer "how much light is in the selected area", while a per-box trace
+    answers "what is this box doing". Two boxes that overlap are two questions,
+    and each is entitled to the shared pixels.
+    """
+    luminance = frame_luminance_plane(frame)
+    height, width = luminance.shape
+    baselines = dict(baseline_sums or {})
+    samples: list[RegionIntensitySample] = []
+    for index, region in enumerate(roi.regions):
+        label = roi.region_labels[index]
+        x0, y0, x1, y1 = region.pixel_bounds(width, height)
+        values = luminance[y0:y1, x0:x1]
+        if values.size == 0:
+            raise ValueError(f"Region {label!r} contains no pixels")
+        total = float(np.sum(values, dtype=np.float64))
+        pixel_count = int(values.size)
+        mean = float(total / pixel_count)
+        if not all(math.isfinite(value) for value in (total, mean)):
+            raise ValueError(
+                f"Region {label!r} produced a non-finite intensity"
+            )
+        baseline = baselines.get(label)
+        relative = 0.0
+        if baseline is not None and math.isfinite(baseline) and baseline != 0:
+            relative = 100.0 * (total - baseline) / baseline
+        samples.append(RegionIntensitySample(
+            index=index,
+            label=label,
+            intensity_sum=total,
+            intensity_mean=mean,
+            pixel_count=pixel_count,
+            relative_change_pct=relative,
+        ))
+    return tuple(samples)
+
+
 def measure_camera_state(
     state: object,
     roi: RheedRoiDefinition,
     *,
     baseline_sum: float | None = None,
+    baseline_region_sums: Mapping[str, float] | None = None,
 ) -> RheedIntensitySample:
-    """Measure one valid camera state and preserve its capture provenance."""
+    """Measure one valid camera state and preserve its capture provenance.
+
+    Produces both the union figure (the documented metric, unchanged) and the
+    per-box series, in a single pass over one frame so every number in the
+    returned sample describes the same acquisition.
+    """
     if not bool(getattr(state, "connected", False)):
         raise ValueError("Camera is disconnected")
     if not bool(getattr(state, "valid", False)):
@@ -373,8 +588,12 @@ def measure_camera_state(
     if reason:
         raise ValueError(reason)
 
+    state_exposure = getattr(state, "exposure_us", None)
     started_ns = time.perf_counter_ns()
     total, mean, pixel_count = measure_regions(arr, roi.regions)
+    region_samples = measure_region_series(
+        arr, roi, baseline_sums=baseline_region_sums,
+    )
     measured_ns = time.perf_counter_ns()
     captured_ns = int(
         getattr(state, "captured_monotonic_ns", 0)
@@ -403,6 +622,17 @@ def measure_camera_state(
         measurement_duration_ms=max(
             0.0, (measured_ns - started_ns) / 1_000_000.0,
         ),
+        regions=region_samples,
+        exposure_us=(
+            float(state_exposure)
+            if isinstance(state_exposure, (int, float))
+            and not isinstance(state_exposure, bool)
+            and math.isfinite(float(state_exposure))
+            else None
+        ),
+        exposure_generation=int(
+            getattr(state, "exposure_generation", 0) or 0
+        ),
     )
 
 
@@ -417,6 +647,9 @@ def definition_from_mapping(payload: Mapping[str, Any]) -> RheedRoiDefinition:
                 float(item["right"]), float(item["bottom"]),
             )
             for item in payload["regions_normalized"]
+        ),
+        region_labels=tuple(
+            str(label) for label in payload.get("region_labels", ())
         ),
         capture_backend=str(payload.get("capture_backend", "")),
         source_hwnd=int(payload.get("source_hwnd", 0)),
@@ -435,16 +668,22 @@ def definition_from_mapping(payload: Mapping[str, Any]) -> RheedRoiDefinition:
 
 
 __all__ = [
+    "AUTO_TRIPLET_LABELS",
     "INTENSITY_METRIC",
+    "MAX_ROI_REGIONS",
     "MIN_DETECTION_SNR",
     "NormalizedRoi",
+    "RegionIntensitySample",
     "RheedIntensitySample",
     "RheedRoiDefinition",
     "auto_three_spot_roi_definition",
+    "default_region_labels",
     "definition_from_mapping",
     "frame_luminance_plane",
     "manual_roi_definition",
     "measure_camera_state",
+    "measure_region_series",
     "measure_regions",
     "preprocess_for_landmarks",
+    "without_last_region",
 ]

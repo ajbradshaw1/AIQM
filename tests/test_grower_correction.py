@@ -706,7 +706,10 @@ class ConfigLockTests(unittest.TestCase):
             self.monitor.config_browse_btn,
             self.monitor.config_prefix,
             self.monitor.config_camera_mode,
-            self.monitor.config_camera_exposure_ms,
+            # config_camera_exposure_ms deliberately excluded: since live
+            # exposure control (Aug 2026) it stays usable while armed, and
+            # _update_camera_exposure_enabled owns it. Its own contract is
+            # covered by test_exposure_control_stays_live_while_armed.
             self.monitor.config_pyrometer_mode,
             self.monitor.config_exactus_port,
             self.monitor.config_exactus_baud,
@@ -720,19 +723,62 @@ class ConfigLockTests(unittest.TestCase):
         for w in self._config_widgets():
             self.assertTrue(w.isEnabled(), f"{w} should be enabled in idle")
 
-    def test_exposure_control_requires_unlocked_direct_camera_mode(self):
+    def test_exposure_control_requires_direct_camera_mode(self):
+        """Exposure is a direct-Vimba control; other backends have none."""
         self.assertEqual(self.monitor.config_camera_mode.currentText(), "vimba")
         self.assertTrue(self.monitor.config_camera_exposure_ms.isEnabled())
 
         self.monitor.config_camera_mode.setCurrentText("screengrab")
         self.assertFalse(self.monitor.config_camera_exposure_ms.isEnabled())
+        self.assertFalse(self.monitor.btn_apply_exposure.isEnabled())
 
         self.monitor.config_camera_mode.setCurrentText("vimba")
         self.assertTrue(self.monitor.config_camera_exposure_ms.isEnabled())
-        self.monitor.set_state("armed")
-        self.assertFalse(self.monitor.config_camera_exposure_ms.isEnabled())
-        self.monitor.set_state("idle")
+
+    def test_exposure_control_stays_live_while_armed(self):
+        """The whole point of live exposure: no DISARM to change it.
+
+        Unlike every other config widget, exposure is not a value the worker
+        committed to at construction — it is written to the camera and read
+        back, so a mid-session change is verifiable rather than silently
+        divergent. Apply is the control that reaches hardware, so it is the
+        one gated on having a running camera.
+        """
+        self.monitor.config_camera_exposure_ms.setValue(500.0)
+        # Idle: dial it in, but there is no camera to write to yet.
         self.assertTrue(self.monitor.config_camera_exposure_ms.isEnabled())
+        self.assertFalse(self.monitor.btn_apply_exposure.isEnabled())
+
+        for state in ("armed", "running"):
+            self.monitor.set_state(state)
+            self.assertTrue(
+                self.monitor.config_camera_exposure_ms.isEnabled(),
+                f"exposure must stay editable in {state}",
+            )
+            self.assertTrue(
+                self.monitor.btn_apply_exposure.isEnabled(),
+                f"Apply must be available in {state}",
+            )
+
+        # "Keep current" (0) is not a value that can be applied.
+        self.monitor.config_camera_exposure_ms.setValue(0.0)
+        self.assertFalse(self.monitor.btn_apply_exposure.isEnabled())
+
+    def test_apply_exposure_emits_microseconds(self):
+        """The spinbox is in ms; the driver's contract is us."""
+        emitted: list[float] = []
+        self.monitor.apply_exposure_requested.connect(emitted.append)
+        self.monitor.set_state("armed")
+        self.monitor.config_camera_exposure_ms.setValue(500.0)
+        self.monitor.btn_apply_exposure.click()
+        self.assertEqual(emitted, [500_000.0])
+
+        # "Keep current" must never reach hardware, even if the button is
+        # somehow clicked while it reads 0.
+        emitted.clear()
+        self.monitor.config_camera_exposure_ms.setValue(0.0)
+        self.monitor._on_apply_exposure_clicked()
+        self.assertEqual(emitted, [])
 
     def test_armed_state_locks_all_config_widgets(self):
         self.monitor.set_state("armed")

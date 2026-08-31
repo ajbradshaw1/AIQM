@@ -164,6 +164,11 @@ class _StubTimer:
 class _StubGrowthLog:
     def __init__(self, active: bool = False):
         self.active = active
+        self.exposure_changes: list[dict] = []
+
+    def record_camera_exposure_change(self, **kwargs) -> bool:
+        self.exposure_changes.append(kwargs)
+        return True
 
 
 class _StubQcState:
@@ -179,6 +184,10 @@ class _StubApp:
         self.rheed_intensity_window = _StubTrendWindow()
         self.auto_capture_engine = _StubAutoCapture()
         self._reported_camera_exposure_us = None
+        self._reported_camera_exposure_error = ""
+        self._journalled_camera_exposure_generation = 0
+        self._journalled_camera_exposure_us = None
+        self._journalled_camera_exposure_error = ""
         self._status = _StubStatusBar()
         self.disarm_calls = 0
         # Required by the merged _on_camera_state. `_shutdown_pending` and
@@ -197,6 +206,9 @@ class _StubApp:
         from gui.growth_app import GrowthApp
         self._announce_camera_exposure = (
             GrowthApp._announce_camera_exposure.__get__(self)
+        )
+        self._journal_camera_exposure = (
+            GrowthApp._journal_camera_exposure.__get__(self)
         )
         self._return_to_idle_if_arm_failed = (
             GrowthApp._return_to_idle_if_arm_failed.__get__(self)

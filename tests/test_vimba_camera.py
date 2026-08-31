@@ -2553,7 +2553,293 @@ def test_absent_optional_features_still_allow_a_valid_write() -> None:
         uninstall_fake_vmbpy()
 
 
+
+# ---------------------------------------------------------------------------
+# Live exposure tests (Aug 31 2026 — Yao/Jiangang request: change exposure
+# without an ARM/DISARM cycle).
+#
+# The write happens on the driver's stream thread, so every test here waits on
+# an observable (generation bumped, or an error recorded) rather than sleeping
+# a fixed amount and hoping.
+# ---------------------------------------------------------------------------
+
+def _wait_until(predicate, timeout_s: float = 2.0) -> bool:
+    """Poll ``predicate`` until true or the timeout expires."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return predicate()
+
+
+def test_live_exposure_applies_without_reconnect() -> None:
+    """The whole point: a new exposure lands with no second connect cycle."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=2.0, access_mode="full")
+        cam.connect()
+        assert fake_cam.start_streaming_calls == 1
+        assert cam.exposure_generation == 0
+
+        cam.request_exposure_us(200_000.0)
+        assert _wait_until(lambda: cam.exposure_generation == 1), (
+            f"live exposure never confirmed: {cam.last_exposure_error!r}"
+        )
+        assert fake_cam.ExposureTimeAbs.value == 200_000.0
+        assert cam.exposure_us == 200_000.0
+        assert cam.last_exposure_error == ""
+        # No reconnect: the camera was never re-opened or re-streamed.
+        assert fake_cam.start_streaming_calls == 1
+        assert fake_cam.stop_streaming_calls == 0
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_live_exposure_generation_increments_on_each_confirmed_change() -> None:
+    """Re-applying the SAME value is still a real write the grower asked for."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=2.0, access_mode="full")
+        cam.connect()
+
+        cam.request_exposure_us(200_000.0)
+        assert _wait_until(lambda: cam.exposure_generation == 1)
+        writes_after_first = fake_cam.ExposureTimeAbs.set_call_count
+
+        cam.request_exposure_us(200_000.0)
+        assert _wait_until(lambda: cam.exposure_generation == 2), (
+            "re-applying the same exposure must still count as a change"
+        )
+        assert fake_cam.ExposureTimeAbs.set_call_count > writes_after_first
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_live_exposure_refused_in_read_mode() -> None:
+    """kSA holds the camera — refuse, and name the cause."""
+    try:
+        install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=100.0, access_mode="read")
+        cam.connect()
+        try:
+            cam.request_exposure_us(5_000.0)
+        except RuntimeError as exc:
+            assert "Read access mode" in str(exc)
+            assert "kSA" in str(exc)
+            assert cam.exposure_generation == 0
+            return
+        finally:
+            cam.disconnect()
+        raise AssertionError("live exposure unexpectedly accepted in Read mode")
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_live_exposure_refused_before_connect() -> None:
+    """A request with no live camera is refused on the caller's stack."""
+    try:
+        install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=100.0, access_mode="full")
+        try:
+            cam.request_exposure_us(5_000.0)
+        except RuntimeError as exc:
+            assert "not connected" in str(exc)
+            return
+        raise AssertionError("live exposure accepted with no camera connected")
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_live_exposure_refused_beyond_trigger_period_ceiling() -> None:
+    """The 90%-of-period headroom rule applies to live writes too."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=1.0, access_mode="full")
+        cam.connect()
+        writes_before = fake_cam.ExposureTimeAbs.set_call_count
+        try:
+            cam.request_exposure_us(950_000.0)
+        except ValueError as exc:
+            assert "10% acquisition headroom" in str(exc)
+            assert fake_cam.ExposureTimeAbs.set_call_count == writes_before
+            return
+        finally:
+            cam.disconnect()
+        raise AssertionError("live exposure ignored the trigger-period ceiling")
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_live_exposure_rejects_non_finite_values() -> None:
+    """NaN and inf must not reach the camera; bool is not a microsecond count."""
+    try:
+        install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=100.0, access_mode="full")
+        cam.connect()
+        for bad in (float("nan"), float("inf"), 0.0, -5.0, True):
+            try:
+                cam.request_exposure_us(bad)
+            except ValueError:
+                continue
+            raise AssertionError(f"live exposure accepted {bad!r}")
+        assert cam.exposure_generation == 0
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_live_exposure_outside_device_range_is_recorded_not_raised() -> None:
+    """A device-side refusal records an error and leaves acquisition alive."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        # Narrower than the trigger-period ceiling, so the request passes the
+        # synchronous gate and is refused by the DEVICE range on the stream
+        # thread — the path that cannot report back on the caller's stack.
+        fake_cam.ExposureTimeAbs = FakeSettable(
+            initial_value=100_000.0,
+            value_range=(100.0, 150_000.0),
+            increment=1.0,
+        )
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=1.0, access_mode="full")
+        cam.connect()
+
+        cam.request_exposure_us(400_000.0)
+        assert _wait_until(lambda: bool(cam.last_exposure_error))
+        assert "outside the camera range" in cam.last_exposure_error
+        assert cam.exposure_generation == 0
+        assert fake_cam.ExposureTimeAbs.value == 100_000.0
+        # A refused exposure must not tear down a healthy acquisition.
+        assert cam.connected
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_failed_live_exposure_write_restores_the_previous_value() -> None:
+    """A device that silently clamps must not leave the camera altered."""
+    class ClampingSettable(FakeSettable):
+        """Applies at most ``clamp_at``, mimicking a firmware clamp."""
+
+        def __init__(self, clamp_at: float, **kwargs):
+            super().__init__(**kwargs)
+            self._clamp_at = clamp_at
+
+        def set(self, value) -> None:  # noqa: A003
+            super().set(min(float(value), self._clamp_at))
+
+    try:
+        fake_cam = install_fake_vmbpy()
+        fake_cam.ExposureTimeAbs = ClampingSettable(
+            clamp_at=250_000.0,
+            initial_value=100_000.0,
+            value_range=(100.0, 900_000.0),
+            increment=1.0,
+        )
+        from drivers.rheed_camera import VmbCamera
+        cam = VmbCamera(trigger_hz=1.0, access_mode="full")
+        cam.connect()
+
+        cam.request_exposure_us(400_000.0)
+        assert _wait_until(lambda: bool(cam.last_exposure_error))
+        assert "readback" in cam.last_exposure_error
+        assert cam.exposure_generation == 0
+        assert fake_cam.ExposureTimeAbs.value == 100_000.0, (
+            "the camera was left at an exposure the grower never confirmed"
+        )
+        assert cam.exposure_us == 100_000.0
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_live_exposure_request_from_previous_cycle_is_not_replayed() -> None:
+    """A request parked before disconnect must not hit a freshly opened camera."""
+    try:
+        fake_cam = install_fake_vmbpy()
+        from drivers.rheed_camera import VmbCamera
+        # Silent: no triggers fire, so the loop never services the request
+        # before disconnect parks it against a dead cycle.
+        fake_cam.silent = True
+        cam = VmbCamera(trigger_hz=0.5, access_mode="full")
+        cam.connect()
+        with cam._exposure_request_lock:
+            cam._pending_exposure_us = 200_000.0
+        cam.disconnect()
+
+        cam.connect()
+        with cam._exposure_request_lock:
+            pending = cam._pending_exposure_us
+        assert pending is None, "a stale request survived into a new connect cycle"
+        cam.disconnect()
+    finally:
+        uninstall_fake_vmbpy()
+
+
+def test_worker_exposure_request_refused_for_backends_without_exposure() -> None:
+    """Dummy/screengrab have no camera exposure — say so, don't fail silently."""
+    from gui.workers import RheedCameraWorker
+
+    worker = RheedCameraWorker(mode="dummy")
+    try:
+        worker.request_exposure_us(200_000.0)
+    except RuntimeError as exc:
+        assert "no camera is connected" in str(exc)
+    else:
+        raise AssertionError("expected a refusal before any camera exists")
+
+    class _NoExposureCamera:
+        pass
+
+    worker._camera = _NoExposureCamera()
+    try:
+        worker.request_exposure_us(200_000.0)
+    except RuntimeError as exc:
+        assert "no camera exposure to" in str(exc)
+        return
+    raise AssertionError("expected a refusal for a backend with no exposure")
+
+
+def test_worker_publishes_live_exposure_provenance_onto_camera_state() -> None:
+    """CameraState carries the confirmed value, the generation and any refusal."""
+    from gui.state import CameraState
+    from gui.workers import RheedCameraWorker
+
+    class _Camera:
+        exposure_us = 250_000.0
+        exposure_generation = 3
+        last_exposure_error = "device said no"
+
+    worker = RheedCameraWorker(mode="vimba")
+    worker._camera = _Camera()
+    state = CameraState()
+    worker._refresh_exposure_provenance(state)
+    assert state.exposure_us == 250_000.0
+    assert state.exposure_generation == 3
+    assert state.exposure_error == "device said no"
+
+
 TESTS = [
+    test_live_exposure_applies_without_reconnect,
+    test_live_exposure_generation_increments_on_each_confirmed_change,
+    test_live_exposure_refused_in_read_mode,
+    test_live_exposure_refused_before_connect,
+    test_live_exposure_refused_beyond_trigger_period_ceiling,
+    test_live_exposure_rejects_non_finite_values,
+    test_live_exposure_outside_device_range_is_recorded_not_raised,
+    test_failed_live_exposure_write_restores_the_previous_value,
+    test_live_exposure_request_from_previous_cycle_is_not_replayed,
+    test_worker_exposure_request_refused_for_backends_without_exposure,
+    test_worker_publishes_live_exposure_provenance_onto_camera_state,
     test_palette_intensity_in_all_channels,
     test_palette_bgw_output,
     test_normalization_fixed_denominator,
