@@ -17,7 +17,14 @@ regions.
   frozen frame. Inspect the three orange boxes, SNR, and confidence, then click
   **Use detected ROI**. Detection proposes geometry only; it does not prove
   that the surface is 1×1. The three boxes are named `left`, `specular` and
-  `right`, in the detector's left-to-right order.
+  `right`, in the detector's left-to-right order. This path validates the
+  left/specular/right ordering and rejects collinear or too-close triples.
+- **Detect spots** (with **Spots: N**): place a box on each of the N brightest
+  separated maxima, named `spot 1`…`spot N` in descending brightness. It makes
+  **no claim about the diffraction pattern** — unlike the triplet detector it
+  applies no geometry validation, and it accepts vertically stacked spots.
+  Use it when you want several regions tracked and do not need the named 1×1
+  geometry. Also requires **Use detected ROI** to confirm.
 - **Remove last box**: drops the most recently added box only. Deliberately
   not "remove any box": the per-region log is keyed by label, so removing a
   middle box would renumber the ones after it and splice two different
@@ -36,6 +43,12 @@ because a moving ROI would mix tracking motion into the intensity trend.
 - **all boxes (union)**, always. Overlapping pixels are counted once here.
   Each *per-box* curve counts its own pixels in full — "what is this box
   doing" is a different question from "how much unique area is lit".
+- **Normalise (Δ%)** replots every series as percent change from its own
+  baseline. Boxes of very different brightness compress the dim ones against
+  the axis in absolute units; normalised, their *shapes* compare directly.
+  The percentages are recorded at measurement time against the baseline in
+  force then, so toggling the view never rewrites history — including across
+  an exposure change, which re-seeds the baselines.
 
 ## Validity and Logging
 

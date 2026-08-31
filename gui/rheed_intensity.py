@@ -23,6 +23,7 @@ from gui.equalizer_alignment import (
     PROCESS_H,
     PROCESS_W,
     detect_live_landmarks,
+    rank_peak_candidates,
 )
 
 
@@ -31,7 +32,7 @@ INTENSITY_METRIC = "bt601_display_luminance_sum_v1"
 # Version 1 payloads still deserialize: they carry one region for
 # `manual_rect` and three for `auto_1x1_three_spot`, and labels are derived.
 ROI_SCHEMA_VERSION = 2
-ROI_MODES = ("manual_rect", "auto_1x1_three_spot")
+ROI_MODES = ("manual_rect", "auto_1x1_three_spot", "auto_peaks")
 
 # Upper bound on tracked boxes. Not a storage limit — a legibility one. Past
 # roughly this many the plot legend stops being readable and the per-capture
@@ -52,6 +53,9 @@ def default_region_labels(mode: str, count: int) -> tuple[str, ...]:
     """
     if mode == "auto_1x1_three_spot" and count == len(AUTO_TRIPLET_LABELS):
         return AUTO_TRIPLET_LABELS
+    if mode == "auto_peaks":
+        # Ranked by brightness, so the name carries the ranking.
+        return tuple(f"spot {index + 1}" for index in range(count))
     return tuple(f"box {index + 1}" for index in range(count))
 
 
@@ -494,12 +498,111 @@ def auto_three_spot_roi_definition(
     )
 
 
+def auto_peak_roi_definition(
+    state: object,
+    frame: np.ndarray,
+    *,
+    count: int = 3,
+    box_size_processed_px: int = 7,
+) -> RheedRoiDefinition:
+    """Propose one box per bright spot, for the ``count`` brightest found.
+
+    The general form of what ``auto_three_spot_roi_definition`` does for the
+    1x1 triplet. That function stays the right choice when the grower wants
+    the named specular/first-order geometry, because it also validates the
+    left-specular-right ordering and rejects collinear or too-close triples.
+    This one makes no claim about the diffraction pattern at all: it finds
+    separated bright maxima and hands back boxes on them, ranked by intensity.
+
+    Like the triplet, detection is ONE-SHOT. The boxes are fixed once
+    confirmed and never re-detected per frame, because a region that tracked a
+    moving spot would fold that motion into the intensity trend.
+    """
+    requested = int(count)
+    if not 1 <= requested <= MAX_ROI_REGIONS:
+        raise ValueError(
+            f"Spot count must be between 1 and {MAX_ROI_REGIONS}, got {count}"
+        )
+    size = int(box_size_processed_px)
+    if size < 3 or size > 31 or size % 2 == 0:
+        raise ValueError("Spot box size must be an odd integer from 3 to 31")
+
+    processed = preprocess_for_landmarks(frame)
+    values = processed.astype(np.float64)
+    # Same robust statistics detect_landmarks uses: a median/MAD noise floor
+    # rather than a fixed threshold, so a dim idle frame and a bright growth
+    # frame are judged on contrast, not absolute level.
+    median = float(np.median(values))
+    mad = float(np.median(np.abs(values - median)))
+    noise = max(1e-6, 1.4826 * mad)
+    dynamic = float(np.percentile(values, 99.9) - median)
+    if dynamic <= max(1e-6, MIN_DETECTION_SNR * noise):
+        raise ValueError(
+            f"Insufficient spot contrast (peak SNR {dynamic / noise:.1f}); "
+            "nothing bright enough to place a box on"
+        )
+
+    chosen = rank_peak_candidates(
+        values, noise=noise, dynamic=dynamic, limit=requested,
+        # A general ROI proposal must accept vertically stacked spots; only
+        # the 1x1 row detector demands horizontal separation.
+        require_x_separation=False,
+    )
+    if len(chosen) < requested:
+        raise ValueError(
+            f"Found only {len(chosen)} separated spot(s), not {requested}. "
+            "Lower the spot count, or draw the extra boxes by hand."
+        )
+
+    half = size / 2.0
+    regions = []
+    for x, y, _intensity in chosen:
+        left = max(0.0, (float(x) + 0.5 - half) / PROCESS_W)
+        right = min(1.0, (float(x) + 0.5 + half) / PROCESS_W)
+        top = max(0.0, (float(y) + 0.5 - half) / PROCESS_H)
+        bottom = min(1.0, (float(y) + 0.5 + half) / PROCESS_H)
+        regions.append(NormalizedRoi(left, top, right, bottom))
+
+    peak_snr = min((value - median) / noise for _, _, value in chosen)
+    confidence = float(np.clip((peak_snr - MIN_DETECTION_SNR) / 12.0, 0.0, 1.0))
+    arr = np.asarray(frame)
+    height, width = arr.shape[:2]
+    return RheedRoiDefinition.create(
+        mode="auto_peaks",
+        regions=regions,
+        capture_backend=str(getattr(state, "capture_backend", "") or ""),
+        source_hwnd=int(getattr(state, "source_hwnd", 0) or 0),
+        capture_geometry_id=str(getattr(state, "capture_geometry_id", "") or ""),
+        frame_width=width,
+        frame_height=height,
+        definition_capture_sequence=int(
+            getattr(state, "capture_sequence", 0)
+            or getattr(state, "sample_sequence", 0)
+            or getattr(state, "frame_number", 0)
+        ),
+        definition_captured_at_utc=str(getattr(state, "captured_at_utc", "") or ""),
+        detector_confidence=confidence,
+        detector_peak_snr=float(peak_snr),
+        detector_method="auto-peaks-2d",
+    )
+
+
 def measure_regions(
     frame: np.ndarray,
     regions: Iterable[NormalizedRoi],
+    *,
+    luminance: np.ndarray | None = None,
 ) -> tuple[float, float, int]:
-    """Measure a rectangle union without double-counting overlaps."""
-    luminance = frame_luminance_plane(frame)
+    """Measure a rectangle union without double-counting overlaps.
+
+    ``luminance`` lets a caller that already built the BT.601 plane hand it in.
+    Converting a 656x492 RGB frame costs ~1.3 ms, and the union and per-box
+    passes measure the SAME capture — recomputing it for each would double the
+    per-frame cost to describe one image.
+    """
+    luminance = (
+        frame_luminance_plane(frame) if luminance is None else luminance
+    )
     height, width = luminance.shape
     mask = np.zeros((height, width), dtype=bool)
     count = 0
@@ -523,6 +626,7 @@ def measure_region_series(
     roi: RheedRoiDefinition,
     *,
     baseline_sums: Mapping[str, float] | None = None,
+    luminance: np.ndarray | None = None,
 ) -> tuple[RegionIntensitySample, ...]:
     """Measure every rectangle independently, in definition order.
 
@@ -531,7 +635,9 @@ def measure_region_series(
     answers "what is this box doing". Two boxes that overlap are two questions,
     and each is entitled to the shared pixels.
     """
-    luminance = frame_luminance_plane(frame)
+    luminance = (
+        frame_luminance_plane(frame) if luminance is None else luminance
+    )
     height, width = luminance.shape
     baselines = dict(baseline_sums or {})
     samples: list[RegionIntensitySample] = []
@@ -590,9 +696,15 @@ def measure_camera_state(
 
     state_exposure = getattr(state, "exposure_us", None)
     started_ns = time.perf_counter_ns()
-    total, mean, pixel_count = measure_regions(arr, roi.regions)
+    # One conversion, both passes — they describe the same capture.
+    luminance = frame_luminance_plane(arr)
+    total, mean, pixel_count = measure_regions(
+        arr, roi.regions, luminance=luminance,
+    )
     region_samples = measure_region_series(
-        arr, roi, baseline_sums=baseline_region_sums,
+        arr, roi,
+        baseline_sums=baseline_region_sums,
+        luminance=luminance,
     )
     measured_ns = time.perf_counter_ns()
     captured_ns = int(
@@ -676,6 +788,7 @@ __all__ = [
     "RegionIntensitySample",
     "RheedIntensitySample",
     "RheedRoiDefinition",
+    "auto_peak_roi_definition",
     "auto_three_spot_roi_definition",
     "default_region_labels",
     "definition_from_mapping",

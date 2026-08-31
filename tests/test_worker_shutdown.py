@@ -283,7 +283,7 @@ class _AppHarness:
         # state this file constructs.
         self._reported_camera_exposure_us = None
         self._reported_camera_exposure_error = ""
-        self._journalled_camera_exposure_generation = 0
+        self._journalled_camera_exposure_generation = None
         self._journalled_camera_exposure_us = None
         self._journalled_camera_exposure_error = ""
         from gui.growth_app import GrowthApp

@@ -1016,6 +1016,64 @@ def _smooth_image(image: np.ndarray, sigma: float = 2.0) -> np.ndarray:
     return np.apply_along_axis(lambda col: np.convolve(col, kernel, mode="same"), 0, tmp)
 
 
+def rank_peak_candidates(
+    values: np.ndarray,
+    *,
+    noise: float,
+    dynamic: float,
+    limit: int,
+    require_x_separation: bool,
+) -> list[tuple[float, float, float]]:
+    """Return up to ``limit`` well-separated bright peaks, brightest first.
+
+    Extracted from ``detect_landmarks`` so the 1x1 triplet detector and the
+    general N-spot ROI proposer share one implementation of the numerics
+    rather than growing a second, subtly different copy.
+
+    ``require_x_separation`` is what distinguishes the two callers. The 1x1
+    pattern is a horizontal row of spots, so the triplet detector additionally
+    demands horizontal separation to avoid picking two points off the same
+    streak. A general ROI proposal must NOT apply that rule: two spots stacked
+    vertically are a legitimate pair of regions to track.
+
+    Each entry is ``(x, y, smoothed_intensity)`` in input-image coordinates.
+    """
+    smooth = _smooth_image(values, sigma=2.0)
+    height, width = smooth.shape
+    margin_x = max(6, int(round(width * 0.05)))
+    margin_y = max(5, int(round(height * 0.05)))
+    interior = smooth[margin_y:height - margin_y, margin_x:width - margin_x]
+    if interior.size == 0:
+        return []
+
+    threshold = float(np.median(interior)) + max(4.0 * noise, 0.08 * dynamic)
+    ys, xs = np.where(interior >= threshold)
+    if len(xs) < limit:
+        return []
+    xs = xs + margin_x
+    ys = ys + margin_y
+    intensities = smooth[ys, xs]
+    order = np.argsort(-intensities, kind="stable")
+
+    chosen: list[tuple[float, float, float]] = []
+    for index in order:
+        x, y = int(xs[index]), int(ys[index])
+        radius = 2
+        patch = smooth[max(0, y - radius):y + radius + 1, max(0, x - radius):x + radius + 1]
+        if smooth[y, x] < float(np.max(patch)):
+            continue
+        if any(math.hypot(x - px, y - py) < MIN_PEAK_SEPARATION * 1.5 for px, py, _ in chosen):
+            continue
+        if require_x_separation and any(
+            abs(x - px) < MIN_PEAK_SEPARATION for px, _, _ in chosen
+        ):
+            continue
+        chosen.append((float(x), float(y), float(smooth[y, x])))
+        if len(chosen) == limit:
+            break
+    return chosen
+
+
 def detect_landmarks(image: np.ndarray, *, method: str = "auto-2d") -> LandmarkDetection:
     """Detect three bright, separated 1x1 spots or return an explicit failure."""
     arr = np.asarray(image)
@@ -1037,38 +1095,10 @@ def detect_landmarks(image: np.ndarray, *, method: str = "auto-2d") -> LandmarkD
             method=method,
         )
 
-    smooth = _smooth_image(values, sigma=2.0)
-    height, width = smooth.shape
-    margin_x = max(6, int(round(width * 0.05)))
-    margin_y = max(5, int(round(height * 0.05)))
-    interior = smooth[margin_y:height - margin_y, margin_x:width - margin_x]
-    if interior.size == 0:
-        return LandmarkDetection.failure("image has no searchable interior", method=method)
-
-    threshold = float(np.median(interior)) + max(4.0 * noise, 0.08 * dynamic)
-    ys, xs = np.where(interior >= threshold)
-    if len(xs) < 3:
-        return LandmarkDetection.failure("fewer than three peak candidates", method=method)
-    xs = xs + margin_x
-    ys = ys + margin_y
-    intensities = smooth[ys, xs]
-    order = np.argsort(-intensities, kind="stable")
-
-    chosen: list[tuple[float, float, float]] = []
-    for index in order:
-        x, y = int(xs[index]), int(ys[index])
-        radius = 2
-        patch = smooth[max(0, y - radius):y + radius + 1, max(0, x - radius):x + radius + 1]
-        if smooth[y, x] < float(np.max(patch)):
-            continue
-        if any(math.hypot(x - px, y - py) < MIN_PEAK_SEPARATION * 1.5 for px, py, _ in chosen):
-            continue
-        if any(abs(x - px) < MIN_PEAK_SEPARATION for px, _, _ in chosen):
-            continue
-        chosen.append((float(x), float(y), float(smooth[y, x])))
-        if len(chosen) == 3:
-            break
-
+    chosen = rank_peak_candidates(
+        values, noise=noise, dynamic=dynamic, limit=3,
+        require_x_separation=True,
+    )
     if len(chosen) != 3:
         return LandmarkDetection.failure("could not isolate three separated spots", method=method)
 

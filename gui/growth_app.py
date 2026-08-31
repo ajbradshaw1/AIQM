@@ -201,7 +201,11 @@ class GrowthApp(QMainWindow):
         # Separate from the _reported_* pair above: the status bar and
         # the session journal have different lifetimes (the journal only
         # exists between START and STOP), so they cannot share a cursor.
-        self._journalled_camera_exposure_generation: int = 0
+        # None until the first CameraState is seen. Starting at 0 assumed the
+        # driver also starts at 0, which is false whenever a session opens on
+        # a camera that has already taken a live exposure change — the first
+        # frame would then journal a change that never happened.
+        self._journalled_camera_exposure_generation: Optional[int] = None
         self._journalled_camera_exposure_us: Optional[float] = None
         self._journalled_camera_exposure_error: str = ""
         self.pyrometer_worker: Optional[PyrometerWorker] = None
@@ -511,7 +515,7 @@ class GrowthApp(QMainWindow):
         camera_mode = self.monitor.config_camera_mode.currentText()
         self._reported_camera_exposure_us = None
         self._reported_camera_exposure_error = ""
-        self._journalled_camera_exposure_generation = 0
+        self._journalled_camera_exposure_generation = None
         self._journalled_camera_exposure_us = None
         self._journalled_camera_exposure_error = ""
         exposure_ms = self.monitor.config_camera_exposure_ms.value()
@@ -2823,6 +2827,11 @@ class GrowthApp(QMainWindow):
                 "Exposure not applied: no camera worker is running.", 6000,
             )
             return
+        # Clear the "already reported" cursors first. Without this, clicking
+        # Apply twice with the same bad value reports the refusal once and
+        # then looks like it silently worked.
+        self._reported_camera_exposure_error = ""
+        self._journalled_camera_exposure_error = ""
         try:
             worker.request_exposure_us(float(exposure_us))
         except (ValueError, RuntimeError) as exc:
@@ -2849,7 +2858,12 @@ class GrowthApp(QMainWindow):
         exposure_us = getattr(state, "exposure_us", None)
         error = str(getattr(state, "exposure_error", "") or "")
 
-        if generation != self._journalled_camera_exposure_generation:
+        if self._journalled_camera_exposure_generation is None:
+            # First frame of this session: adopt what the camera is already
+            # at. That value belongs in session metadata, not in a change log.
+            self._journalled_camera_exposure_generation = generation
+            self._journalled_camera_exposure_us = exposure_us
+        elif generation != self._journalled_camera_exposure_generation:
             previous = self._journalled_camera_exposure_us
             self._journalled_camera_exposure_generation = generation
             self._journalled_camera_exposure_us = exposure_us
@@ -2903,8 +2917,10 @@ class GrowthApp(QMainWindow):
         # confirmed exposure — so it is deliberately separate from the
         # camera-error path.
         exposure_error = str(getattr(state, "exposure_error", "") or "")
+        announced_refusal = False
         if exposure_error and exposure_error != self._reported_camera_exposure_error:
             self._reported_camera_exposure_error = exposure_error
+            announced_refusal = True
             self.statusBar().showMessage(
                 f"Exposure change refused: {exposure_error}", 10000,
             )
@@ -2919,6 +2935,14 @@ class GrowthApp(QMainWindow):
         ):
             previous = self._reported_camera_exposure_us
             self._reported_camera_exposure_us = key
+            # The cursor advances either way, but the MESSAGE is suppressed
+            # when a refusal was just posted for this same state. A refused
+            # request leaves the camera at its previous exposure, so
+            # confirming that unchanged value would overwrite the refusal
+            # with "confirmed at 300 ms" — telling the grower their change
+            # succeeded at the value it failed to move away from.
+            if announced_refusal:
+                return
             changed_live = previous is not None and previous[0] != generation
             verb = "changed to" if changed_live else "confirmed at"
             self.statusBar().showMessage(

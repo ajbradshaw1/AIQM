@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QCheckBox,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -38,6 +39,7 @@ from gui.rheed_intensity import (
     NormalizedRoi,
     RheedIntensitySample,
     RheedRoiDefinition,
+    auto_peak_roi_definition,
     auto_three_spot_roi_definition,
     manual_roi_definition,
     measure_camera_state,
@@ -309,6 +311,11 @@ class RheedIntensityWindow(QMainWindow):
         # shares because they are all measured from the same capture.
         self._region_series: dict[str, deque[float]] = {}
         self._region_curves: dict[str, pg.PlotDataItem] = {}
+        # Δ% recorded at measurement time, against the baseline in force THEN.
+        # Normalising stored sums with the current baseline would misrepresent
+        # everything before an exposure change re-seeded it.
+        self._intensities_pct: deque[float] = deque(maxlen=self._MAXLEN)
+        self._region_series_pct: dict[str, deque[float]] = {}
         # Exposure provenance. A change steps the luminance sum with nothing
         # happening on the sample surface, so the trend has to break rather
         # than draw a line across it — see docs/rheed_roi_intensity.md.
@@ -332,7 +339,22 @@ class RheedIntensityWindow(QMainWindow):
         self.add_btn.clicked.connect(self._start_append_selection)
         self.add_btn.setEnabled(False)
         self.auto_btn = QPushButton("Detect 1×1 triplet")
+        self.auto_btn.setToolTip(
+            "Find the specular spot and its two first-order neighbours, with "
+            "the left/specular/right ordering validated."
+        )
         self.auto_btn.clicked.connect(self._detect_three_spots)
+        self.auto_peaks_btn = QPushButton("Detect spots")
+        self.auto_peaks_btn.setToolTip(
+            "Place a box on each of the N brightest separated spots. Makes no "
+            "claim about the diffraction pattern — use the triplet detector "
+            "when you want the named 1×1 geometry."
+        )
+        self.auto_peaks_btn.clicked.connect(self._detect_peaks)
+        self.spot_count = QSpinBox()
+        self.spot_count.setRange(1, MAX_ROI_REGIONS)
+        self.spot_count.setValue(3)
+        self.spot_count.setToolTip("How many spots to propose boxes for")
         self.accept_btn = QPushButton("Use detected ROI")
         self.accept_btn.clicked.connect(self._accept_candidate)
         self.accept_btn.setEnabled(False)
@@ -353,6 +375,15 @@ class RheedIntensityWindow(QMainWindow):
         self.spot_size.setValue(7)
         self.spot_size.setToolTip("Odd box width in the Equalizer's 128×96 coordinate frame")
 
+        self.normalize_check = QCheckBox("Normalise (Δ%)")
+        self.normalize_check.setToolTip(
+            "Plot each series as percent change from its own baseline. With "
+            "boxes of very different brightness the absolute sums compress "
+            "the dim ones against the axis; normalised, their shapes compare "
+            "directly."
+        )
+        self.normalize_check.toggled.connect(self._on_normalize_toggled)
+
         self.reset_btn = QPushButton("Clear plot")
         self.reset_btn.clicked.connect(self.reset)
 
@@ -360,12 +391,16 @@ class RheedIntensityWindow(QMainWindow):
         controls.addWidget(self.select_btn)
         controls.addWidget(self.add_btn)
         controls.addWidget(self.auto_btn)
+        controls.addWidget(self.auto_peaks_btn)
+        controls.addWidget(QLabel("Spots:"))
+        controls.addWidget(self.spot_count)
         controls.addWidget(self.accept_btn)
         controls.addWidget(self.remove_btn)
         controls.addWidget(self.clear_roi_btn)
         controls.addWidget(QLabel("Spot box (128×96 px):"))
         controls.addWidget(self.spot_size)
         controls.addStretch()
+        controls.addWidget(self.normalize_check)
         controls.addWidget(self.reset_btn)
 
         self.status_label = QLabel(
@@ -542,6 +577,54 @@ class RheedIntensityWindow(QMainWindow):
         )
         self._refresh_image()
 
+    def _detect_peaks(self) -> None:
+        """Propose one box per bright spot, for the N brightest found."""
+        current = self._usable_latest()
+        if current is None:
+            return
+        self.image_view.cancel_selection()
+        self._manual_selection_state = None
+        state, frame = current
+        size = int(self.spot_size.value())
+        if size % 2 == 0:
+            size += 1
+            self.spot_size.setValue(size)
+        try:
+            candidate = auto_peak_roi_definition(
+                state, frame,
+                count=int(self.spot_count.value()),
+                box_size_processed_px=size,
+            )
+        except (TypeError, ValueError) as exc:
+            self._candidate_roi = None
+            self.accept_btn.setEnabled(False)
+            self.status_label.setText(str(exc))
+            self._refresh_image()
+            return
+        self._candidate_roi = candidate
+        self.accept_btn.setEnabled(True)
+        snr = candidate.detector_peak_snr or 0.0
+        warning = " LOW SNR — inspect the orange boxes." if snr < MIN_DETECTION_SNR else ""
+        self.status_label.setText(
+            f"{len(candidate.regions)} spot(s) proposed, brightest first "
+            f"(SNR {snr:.1f}).{warning} Click 'Use detected ROI' to confirm. "
+            "This finds bright maxima only — it says nothing about which "
+            "reconstruction the pattern is."
+        )
+        self._refresh_image()
+
+    def _on_normalize_toggled(self, _checked: bool) -> None:
+        self._apply_plot_units()
+        self._redraw_curves()
+
+    def _apply_plot_units(self) -> None:
+        if self.normalize_check.isChecked():
+            self._plot.setLabel("left", "Change from baseline", units="%")
+        else:
+            self._plot.setLabel(
+                "left", "BT.601 display-luminance sum", units="a.u.",
+            )
+
     def _accept_candidate(self) -> None:
         if self._candidate_roi is None:
             return
@@ -575,6 +658,8 @@ class RheedIntensityWindow(QMainWindow):
         names = ", ".join(roi.region_labels)
         if roi.mode == "auto_1x1_three_spot":
             lead = "Confirmed three-spot ROI active"
+        elif roi.mode == "auto_peaks":
+            lead = f"{len(roi.regions)} auto-detected spot(s)"
         elif len(roi.regions) == 1:
             region = roi.regions[0]
             return (
@@ -595,6 +680,7 @@ class RheedIntensityWindow(QMainWindow):
             self._plot.removeItem(curve)
         self._region_curves.clear()
         self._region_series.clear()
+        self._region_series_pct.clear()
         roi = self._active_roi
         if roi is None:
             return
@@ -605,6 +691,7 @@ class RheedIntensityWindow(QMainWindow):
             return
         for index, label in enumerate(roi.region_labels):
             self._region_series[label] = deque(maxlen=self._MAXLEN)
+            self._region_series_pct[label] = deque(maxlen=self._MAXLEN)
             self._region_curves[label] = self._plot.plot(
                 pen=pg.mkPen(region_color(index), width=1.5), name=label,
             )
@@ -690,7 +777,10 @@ class RheedIntensityWindow(QMainWindow):
 
         self._times.append(float("nan"))
         self._intensities.append(float("nan"))
+        self._intensities_pct.append(float("nan"))
         for series in self._region_series.values():
+            series.append(float("nan"))
+        for series in self._region_series_pct.values():
             series.append(float("nan"))
         # Re-baseline: Δ% against a pre-change reference would report the
         # exposure step forever after, on every box.
@@ -706,6 +796,7 @@ class RheedIntensityWindow(QMainWindow):
         )
         self._plot.addItem(marker)
         self._exposure_markers.append(marker)
+        self._prune_stale_markers()
         self._redraw_curves()
 
         def _ms(value) -> str:
@@ -722,12 +813,32 @@ class RheedIntensityWindow(QMainWindow):
                 f"exposure {_ms(previous_us)} -> {_ms(exposure_us)}",
             )
 
+    def _prune_stale_markers(self) -> None:
+        """Drop markers whose sample has scrolled out of the history window.
+
+        `_times` is a bounded deque (one hour at 1 Hz), so on a long growth the
+        oldest samples fall off the left edge. A marker is positioned in
+        absolute elapsed minutes and would otherwise sit forever beside data it
+        no longer annotates, accumulating for the life of the window.
+        """
+        finite = [value for value in self._times if not np.isnan(value)]
+        if not finite:
+            return
+        oldest = min(finite)
+        for marker in list(self._exposure_markers):
+            if marker.value() < oldest:
+                self._plot.removeItem(marker)
+                self._exposure_markers.remove(marker)
+
     def _redraw_curves(self) -> None:
         """Push the current histories into their plot items."""
         times = list(self._times)
-        self._curve.setData(times, list(self._intensities))
+        normalized = self.normalize_check.isChecked()
+        union = self._intensities_pct if normalized else self._intensities
+        self._curve.setData(times, list(union))
+        source = self._region_series_pct if normalized else self._region_series
         for label, curve in self._region_curves.items():
-            series = self._region_series.get(label)
+            series = source.get(label)
             if series is None:
                 continue
             curve.setData(times, list(series))
@@ -778,10 +889,14 @@ class RheedIntensityWindow(QMainWindow):
         )
         self._times.append(elapsed_min)
         self._intensities.append(sample.intensity_sum)
+        self._intensities_pct.append(sample.relative_change_pct)
         for region in sample.regions:
             series = self._region_series.get(region.label)
             if series is not None:
                 series.append(region.intensity_sum)
+            pct = self._region_series_pct.get(region.label)
+            if pct is not None:
+                pct.append(region.relative_change_pct)
         self._redraw_curves()
         self.value_label.setText(self._format_values(sample))
         self.measurement_ready.emit(sample)
@@ -832,6 +947,7 @@ class RheedIntensityWindow(QMainWindow):
         self._latest_sample = None
         self._times.clear()
         self._intensities.clear()
+        self._intensities_pct.clear()
         self._curve.setData([], [])
         for marker in self._exposure_markers:
             self._plot.removeItem(marker)

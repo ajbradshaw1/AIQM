@@ -32,6 +32,7 @@ from gui.rheed_intensity import (  # noqa: E402
     MAX_ROI_REGIONS,
     NormalizedRoi,
     RheedRoiDefinition,
+    auto_peak_roi_definition,
     auto_three_spot_roi_definition,
     definition_from_mapping,
     frame_luminance_plane,
@@ -441,6 +442,79 @@ class RheedIntensityWindowTests(unittest.TestCase):
         self.assertEqual(self.window.active_roi.mode, "auto_1x1_three_spot")
 
 
+class AutoPeakRoiTests(unittest.TestCase):
+    """The general N-spot proposer, beside the 1x1 triplet detector."""
+
+    @staticmethod
+    def _spots(centres, *, shape=(96, 128)) -> np.ndarray:
+        h, w = shape
+        yy, xx = np.mgrid[0:h, 0:w]
+        img = np.full((h, w), 8.0)
+        for cx, cy, amp in centres:
+            img += amp * np.exp(-(((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * 3.0 ** 2)))
+        return np.clip(img, 0, 255).astype(np.uint8)
+
+    def test_proposes_the_requested_number_of_boxes_brightest_first(self) -> None:
+        frame = self._spots([(30, 48, 200), (64, 40, 240), (98, 48, 160)])
+        roi = auto_peak_roi_definition(_state(frame), frame, count=3)
+        self.assertEqual(roi.mode, "auto_peaks")
+        self.assertEqual(len(roi.regions), 3)
+        self.assertEqual(roi.region_labels, ("spot 1", "spot 2", "spot 3"))
+        self.assertEqual(roi.detector_method, "auto-peaks-2d")
+        # spot 1 is the brightest peak, which here is the centre one.
+        centre_x = (roi.regions[0].left + roi.regions[0].right) / 2.0
+        self.assertAlmostEqual(centre_x, 64.5 / 128, delta=0.05)
+
+    def test_accepts_vertically_stacked_spots(self) -> None:
+        """The x-separation rule belongs to the 1x1 row detector, not here.
+
+        Two spots in the same column are a legitimate pair of regions; the
+        triplet detector rejects them because a 1x1 pattern is a horizontal
+        row, and applying that rule generally would refuse valid ROIs.
+        """
+        frame = self._spots([(64, 24, 220), (64, 68, 200)])
+        roi = auto_peak_roi_definition(_state(frame), frame, count=2)
+        self.assertEqual(len(roi.regions), 2)
+        xs = [(r.left + r.right) / 2.0 for r in roi.regions]
+        self.assertAlmostEqual(xs[0], xs[1], delta=0.03)
+
+    def test_asking_for_more_spots_than_exist_says_so(self) -> None:
+        frame = self._spots([(30, 48, 220), (98, 48, 200)])
+        with self.assertRaises(ValueError) as ctx:
+            auto_peak_roi_definition(_state(frame), frame, count=5)
+        self.assertIn("Found only", str(ctx.exception))
+        self.assertIn("by hand", str(ctx.exception))
+
+    def test_a_flat_frame_is_refused_on_contrast(self) -> None:
+        frame = np.full((96, 128), 30, dtype=np.uint8)
+        with self.assertRaises(ValueError) as ctx:
+            auto_peak_roi_definition(_state(frame), frame, count=2)
+        self.assertIn("contrast", str(ctx.exception))
+
+    def test_count_is_bounded_by_the_region_ceiling(self) -> None:
+        frame = self._spots([(30, 48, 220)])
+        for bad in (0, MAX_ROI_REGIONS + 1):
+            with self.assertRaises(ValueError) as ctx:
+                auto_peak_roi_definition(_state(frame), frame, count=bad)
+            self.assertIn("between 1 and", str(ctx.exception))
+
+    def test_the_triplet_detector_still_owns_the_named_geometry(self) -> None:
+        """auto_peaks must not quietly become the 1x1 detector.
+
+        The triplet path validates left/specular/right ordering and rejects
+        collinear triples; auto_peaks makes no such claim, and its labels say
+        so.
+        """
+        frame = self._spots([(30, 48, 200), (64, 40, 240), (98, 48, 160)])
+        state = _state(frame)
+        triplet = auto_three_spot_roi_definition(state, frame)
+        peaks = auto_peak_roi_definition(state, frame, count=3)
+        self.assertEqual(triplet.region_labels, AUTO_TRIPLET_LABELS)
+        self.assertEqual(peaks.region_labels, ("spot 1", "spot 2", "spot 3"))
+        self.assertEqual(len(triplet.landmark_points_processed), 3)
+        self.assertEqual(peaks.landmark_points_processed, ())
+
+
 class RheedIntensityWindowMultiRegionTests(unittest.TestCase):
     """The trend window's side of per-box tracking and exposure breaks."""
 
@@ -573,6 +647,74 @@ class RheedIntensityWindowMultiRegionTests(unittest.TestCase):
             item.text() for item in overlay if hasattr(item, "text")
         )
         self.assertEqual(drawn_labels, ["box 1", "box 2"])
+
+    def test_normalise_toggle_switches_units_without_losing_history(self) -> None:
+        """Δ% is recorded at measurement time, not derived on toggle.
+
+        Deriving it from stored sums with the CURRENT baseline would
+        misrepresent every point taken before an exposure change re-seeded
+        that baseline.
+        """
+        self._define_two_boxes()
+        for sequence in (2, 3, 4):
+            self.window.on_camera_state(_state(
+                self._frame(), sequence=sequence, exposure_us=300_000.0,
+            ))
+        points = len(self.window._times)
+        self.assertEqual(len(self.window._intensities_pct), points)
+        for series in self.window._region_series_pct.values():
+            self.assertEqual(len(series), points)
+
+        absolute = self.window._curve.getData()[1]
+        self.window.normalize_check.setChecked(True)
+        normalised = self.window._curve.getData()[1]
+        self.assertEqual(len(absolute), len(normalised))
+        self.assertIn("%", self.window._plot.getPlotItem().getAxis("left").labelUnits)
+        # Sums are a.u. in the thousands; Δ% sits near zero. Different data.
+        self.assertNotEqual(list(absolute), list(normalised))
+
+        self.window.normalize_check.setChecked(False)
+        self.assertEqual(list(self.window._curve.getData()[1]), list(absolute))
+
+    def test_normalised_series_also_break_at_an_exposure_change(self) -> None:
+        self._define_two_boxes()
+        self.window.normalize_check.setChecked(True)
+        self.window.on_camera_state(
+            _state(self._frame(), sequence=2, exposure_us=300_000.0),
+        )
+        self.window.on_camera_state(_state(
+            self._frame(), sequence=3,
+            exposure_us=500_000.0, exposure_generation=1,
+        ))
+        self.assertTrue(
+            any(np.isnan(v) for v in self.window._intensities_pct)
+        )
+        for series in self.window._region_series_pct.values():
+            self.assertTrue(any(np.isnan(v) for v in series))
+        # Both histories stay the same length as the shared time axis.
+        points = len(self.window._times)
+        self.assertEqual(len(self.window._intensities), points)
+        self.assertEqual(len(self.window._intensities_pct), points)
+
+    def test_detect_spots_requires_explicit_accept_like_the_triplet(self) -> None:
+        h, w = 96, 128
+        yy, xx = np.mgrid[0:h, 0:w]
+        img = np.full((h, w), 8.0)
+        for cx, cy, amp in [(30, 48, 200), (64, 40, 240), (98, 48, 160)]:
+            img += amp * np.exp(-(((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * 3.0 ** 2)))
+        frame = np.clip(img, 0, 255).astype(np.uint8)
+        self.window.on_camera_state(_state(frame))
+        self.window.spot_count.setValue(3)
+        self.window._detect_peaks()
+        self.assertIsNone(self.window.active_roi)
+        self.assertTrue(self.window.accept_btn.isEnabled())
+        self.window._accept_candidate()
+        roi = self.window.active_roi
+        self.assertEqual(roi.mode, "auto_peaks")
+        self.assertEqual(len(roi.regions), 3)
+        self.assertEqual(
+            sorted(self.window._region_curves), sorted(roi.region_labels),
+        )
 
     def test_clearing_the_roi_removes_every_per_box_curve(self) -> None:
         self._define_two_boxes()

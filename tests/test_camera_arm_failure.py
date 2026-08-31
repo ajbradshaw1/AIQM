@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -185,7 +186,7 @@ class _StubApp:
         self.auto_capture_engine = _StubAutoCapture()
         self._reported_camera_exposure_us = None
         self._reported_camera_exposure_error = ""
-        self._journalled_camera_exposure_generation = 0
+        self._journalled_camera_exposure_generation = None
         self._journalled_camera_exposure_us = None
         self._journalled_camera_exposure_error = ""
         self._status = _StubStatusBar()
@@ -424,6 +425,98 @@ class RealDisarmTests(unittest.TestCase):
                 worker.stop_calls, 0,
                 f"{name} was stopped by a mid-session camera loss",
             )
+
+
+class LiveExposureAnnouncementTests(unittest.TestCase):
+    """GrowthApp's side of live exposure: what the grower is told, and logged."""
+
+    def _app(self, monitor_state: str = "running") -> _StubApp:
+        return _StubApp(monitor_state)
+
+    @staticmethod
+    def _state(**kwargs):
+        defaults = dict(
+            connected=True, valid=True, frame=None, error="",
+            exposure_us=None, exposure_generation=0, exposure_error="",
+            capture_sequence=1, captured_at_utc="2026-08-31T12:00:00.000Z",
+            capture_backend="vimba",
+        )
+        defaults.update(kwargs)
+        return SimpleNamespace(**defaults)
+
+    def test_reapplying_the_same_value_is_still_confirmed(self):
+        """Keyed on generation, not value.
+
+        A grower who re-applies 500 ms after a refusal needs to see that the
+        second attempt landed. Keyed on the value alone this was silent.
+        """
+        app = self._app()
+        app._announce_camera_exposure(
+            self._state(exposure_us=500_000.0, exposure_generation=1)
+        )
+        first = app._status.messages[-1]
+        app._announce_camera_exposure(
+            self._state(exposure_us=500_000.0, exposure_generation=2)
+        )
+        second = app._status.messages[-1]
+        self.assertIn("500 ms", first)
+        self.assertIn("500 ms", second)
+        self.assertNotEqual(len(app._status.messages), 1)
+
+    def test_unchanged_state_is_not_reannounced_every_frame(self):
+        app = self._app()
+        state = self._state(exposure_us=500_000.0, exposure_generation=1)
+        app._announce_camera_exposure(state)
+        count = len(app._status.messages)
+        for _ in range(5):
+            app._announce_camera_exposure(state)
+        self.assertEqual(len(app._status.messages), count)
+
+    def test_a_refusal_reaches_the_status_bar_and_the_journal(self):
+        app = self._app()
+        state = self._state(
+            exposure_us=300_000.0,
+            exposure_error="outside the camera range [100, 150000] us",
+        )
+        app._announce_camera_exposure(state)
+        app._journal_camera_exposure(state)
+        self.assertIn("refused", app._status.messages[-1].lower())
+        refusals = [
+            change for change in app.growth_log.exposure_changes
+            if change["outcome"] == "refused"
+        ]
+        self.assertEqual(len(refusals), 1)
+        self.assertIn("outside the camera range", refusals[0]["reason"])
+
+    def test_the_arm_time_exposure_is_not_logged_as_a_change(self):
+        """Session metadata owns the starting value; the journal owns changes.
+
+        The cursor is seeded from the first frame rather than assumed to be
+        generation 0, so a session opened on a camera that has already taken a
+        live change does not log one that never happened.
+        """
+        app = self._app()
+        app._journal_camera_exposure(
+            self._state(exposure_us=300_000.0, exposure_generation=4)
+        )
+        self.assertEqual(app.growth_log.exposure_changes, [])
+
+        app._journal_camera_exposure(
+            self._state(exposure_us=500_000.0, exposure_generation=5)
+        )
+        self.assertEqual(len(app.growth_log.exposure_changes), 1)
+        change = app.growth_log.exposure_changes[0]
+        self.assertEqual(change["outcome"], "confirmed")
+        self.assertEqual(change["confirmed_exposure_us"], 500_000.0)
+        self.assertEqual(change["previous_exposure_us"], 300_000.0)
+
+    def test_nothing_is_journalled_before_a_session_is_open(self):
+        app = self._app(monitor_state="armed")
+        self.assertFalse(app.growth_log.active)
+        app._journal_camera_exposure(
+            self._state(exposure_us=500_000.0, exposure_generation=1)
+        )
+        self.assertEqual(app.growth_log.exposure_changes, [])
 
 
 if __name__ == "__main__":
