@@ -27,6 +27,13 @@ opencv-python
 torch>=2.13
 timm==1.0.28
 requests
+# Hard dependency, not heater-optional. gui/heater_control/pid_controller.py
+# imports it at module scope and raises ImportError without it, and
+# tests/test_heater_safety_logging.py reaches that module through main_window.
+# Undeclared, this interrupted pytest COLLECTION on Linux — the whole suite
+# reported "1 error" and ran zero tests, red on upstream main from 2026-08-28.
+# It went unnoticed locally because developer environments already have it.
+simple-pid
 pyvisa
 pytesseract
 pymodbus
