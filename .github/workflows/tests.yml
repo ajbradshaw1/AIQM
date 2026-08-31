@@ -3,15 +3,18 @@ name: tests
 # Hardware probes stay in scripts/. pytest.ini restricts collection to offline
 # tests under tests/ and tools/rheed_postprocessing_labeling/tests/.
 #
-# This work is published to codex/gui-brightness-robust-four-output-shadow
-# without a PR, so `main`-only triggers would leave it untested. The branch is
-# listed explicitly, and workflow_dispatch allows a re-run against any commit
-# already on a remote branch.
+# Work here is published to feature branches without a PR, so `main`-only
+# triggers would leave it untested. Branches are listed explicitly, and
+# workflow_dispatch allows a re-run against any commit already on a remote
+# branch. ADD YOUR BRANCH HERE if you push without opening a PR — otherwise
+# Linux never sees it, and macOS alone is not a baseline (it carries several
+# platform-specific failures of its own).
 on:
   push:
     branches:
       - main
       - codex/gui-brightness-robust-four-output-shadow
+      - feat/live-exposure-multi-roi
   pull_request:
     branches: [main]
   workflow_dispatch:

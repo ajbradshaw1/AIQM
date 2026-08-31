@@ -330,9 +330,10 @@ def write_catalog_json(entries: list[CatalogEntry],
     return output_path
 
 
-# CSVs to copy per session. Order controls bundling; missing files
-# are silently skipped (older sessions predate later additions).
-_BUNDLED_CSVS: list[str] = [
+# Files to copy per session. Order controls bundling; missing files are
+# silently skipped (older sessions predate later additions). Not all CSV —
+# the ROI definition and exposure journals are JSONL.
+_BUNDLED_SESSION_FILES: list[str] = [
     "sensor_log.csv",
     "commit_log.csv",
     "auto_capture_events.csv",
@@ -342,6 +343,16 @@ _BUNDLED_CSVS: list[str] = [
     "events_labels.csv",
     "live_labels.csv",
     "set_change_events.csv",
+    # ROI intensity: the union series, the per-box series, and the definitions
+    # needed to interpret either (which rectangle, bound to which capture
+    # geometry). Without these the CS side sees frames with no quantitative
+    # intensity signal attached.
+    "rheed_roi_intensity.csv",
+    "rheed_roi_region_intensity.csv",
+    "rheed_roi_definitions.jsonl",
+    # Exposure is changeable mid-session, and it scales the luminance sums in
+    # the two files above. Anyone modelling those needs to segment on it.
+    "camera_exposure_changes.jsonl",
     "session_metadata.json",
 ]
 
@@ -487,10 +498,10 @@ def bundle_sessions(
             dst = sessions_dir / entry.session_id
             dst.mkdir()
 
-            for csv_name in _BUNDLED_CSVS:
-                s = src / csv_name
+            for name in _BUNDLED_SESSION_FILES:
+                s = src / name
                 if s.exists():
-                    shutil.copy2(s, dst / csv_name)
+                    shutil.copy2(s, dst / name)
 
             # session_meta.json — small subset + our quality tags
             meta = asdict(entry)
@@ -561,6 +572,9 @@ def _bundle_readme(entries: list[CatalogEntry],
         "sessions/<session_id>/",
         "  {sensor,commit,auto_capture,manual,heartbeat,rheed_view_events}.csv",
         "  {events_labels,live_labels,set_change_events}.csv",
+        "  rheed_roi_intensity.csv (ROI union series), "
+        "rheed_roi_region_intensity.csv (one row per box)",
+        "  rheed_roi_definitions.jsonl, camera_exposure_changes.jsonl",
         "  session_meta.json    # counts + quality flags",
     ]
     if include_frames:
@@ -574,7 +588,10 @@ def _bundle_readme(entries: list[CatalogEntry],
         "",
         "1. Read `catalog.json` to filter by quality flags.",
         "2. Per-session CSVs use the schemas documented in `schema.md`.",
-        "3. Join labels (`events_labels.csv`, `live_labels.csv`, "
+        "3. ROI intensity is a display-luminance sum, so it is only "
+        "comparable at a fixed exposure. Segment on `exposure_generation` "
+        "(present in both ROI CSVs) before trending across a session.",
+        "4. Join labels (`events_labels.csv`, `live_labels.csv`, "
         "`commit_log.csv:recon_*`) on `event_idx` or `timestamp` as needed.",
         "",
     ]

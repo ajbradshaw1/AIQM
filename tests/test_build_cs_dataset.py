@@ -366,6 +366,57 @@ class BundleSessionsTests(unittest.TestCase):
         # No frames/ dir when include_frames=False
         self.assertFalse(any("/frames/" in n for n in names))
 
+    def test_roi_intensity_and_exposure_files_are_bundled(self):
+        """The CS side cannot model ROI intensity it never receives.
+
+        The bundler copies a fixed list of session files; ROI intensity, the
+        per-box series, the ROI definitions needed to interpret either, and
+        the exposure journal that says which readings are comparable all have
+        to be on it.
+        """
+        session = self.logs / "growth_TEST_1"
+        _write_csv(
+            session / "rheed_roi_intensity.csv",
+            ["capture_sequence", "intensity_sum", "exposure_generation"],
+            [{"capture_sequence": "1", "intensity_sum": "1234.5",
+              "exposure_generation": "0"}],
+        )
+        _write_csv(
+            session / "rheed_roi_region_intensity.csv",
+            ["capture_sequence", "region_label", "intensity_sum"],
+            [{"capture_sequence": "1", "region_label": "specular",
+              "intensity_sum": "900.0"}],
+        )
+        (session / "rheed_roi_definitions.jsonl").write_text(
+            '{"event":"defined"}\n', encoding="utf-8",
+        )
+        (session / "camera_exposure_changes.jsonl").write_text(
+            '{"exposure_generation":1,"outcome":"confirmed"}\n',
+            encoding="utf-8",
+        )
+
+        out_tar = self.out_dir / "roi_bundle.tar.gz"
+        bundle_sessions(
+            self.entries, self.logs, out_tar, include_frames=False,
+        )
+        with tarfile.open(out_tar, "r:gz") as archive:
+            names = archive.getnames()
+        for expected in (
+            "rheed_roi_intensity.csv",
+            "rheed_roi_region_intensity.csv",
+            "rheed_roi_definitions.jsonl",
+            "camera_exposure_changes.jsonl",
+        ):
+            self.assertTrue(
+                any(name.endswith(f"growth_TEST_1/{expected}") for name in names),
+                f"{expected} missing from the bundle",
+            )
+        # Sessions predating these files must still bundle cleanly.
+        self.assertFalse(
+            any(name.endswith("growth_TEST_2/rheed_roi_intensity.csv")
+                for name in names)
+        )
+
     def test_catalog_json_matches_sessions_included(self):
         out_tar = self.out_dir / "bundle2.tar.gz"
         bundle_sessions(self.entries, self.logs, out_tar)
