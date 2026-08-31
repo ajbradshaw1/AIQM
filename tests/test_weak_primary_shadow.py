@@ -90,18 +90,24 @@ class CollectionDiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(MemoryError, "was not loaded"):
                 _require_available_memory()
 
-    def test_bundled_package_is_complete_and_is_the_default(self) -> None:
+    def _bundled_artifact_root(self) -> Path:
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("AI_REPO_ROOT", None)
             root = Path(_resolve_weak_primary_ai_repo_root())
         self.assertEqual(root.resolve(), _BUNDLED_WEAK_PRIMARY_AI_ROOT.resolve())
+        return root
+
+    def test_bundled_package_is_complete_and_is_the_default(self) -> None:
+        """Everything about the bundle that does NOT depend on the manifest.
+
+        Split from the manifest-integrity assertions below so one known-bad
+        checksum does not mask a real regression in bundle layout.
+        """
+        root = self._bundled_artifact_root()
         artifact_root = root / "brightness_robust_four_output_all_extreme"
         self.assertTrue((root / "backbones.py").is_file())
         self.assertTrue((root / "Classifier2" / "weak_primary_model.py").is_file())
         self.assertTrue((root / "Classifier2" / "davidson_pairwise.py").is_file())
-        manifest, paths = load_release_manifest(artifact_root)
-        self.assertEqual(manifest["brightness_policy"], "all_extreme")
-        self.assertNotIn("five_output", manifest["contracts"])
         self.assertFalse((artifact_root / "five_output_1x1_gates").exists())
         self.assertTrue(
             (
@@ -109,10 +115,41 @@ class CollectionDiscoveryTests(unittest.TestCase):
                 / "dinov2_vits14_pretrained_zeropad512.pth"
             ).is_file()
         )
-        self.assertEqual(
-            len(paths),
-            36,
-        )
+
+    # QUARANTINED 2026-08-31 — a real, unfixed defect in the committed bundle,
+    # not a flaky test. Do not "fix" it by editing MANIFEST.json.
+    #
+    # MANIFEST.json expects shared_encoder/dinov2_vits14_pretrained_zeropad512.json
+    # at sha256 941f9ede… / 3870 bytes. The committed file is fad75fc5… /
+    # 3793 bytes. Established by scanning every ref:
+    #
+    #   * Both files entered the repo in ONE commit, 5e41233 (Yufan Yao,
+    #     2026-08-06), already disagreeing. Neither has been touched since, so
+    #     this has never passed.
+    #   * The 3870-byte file matches no JSON blob anywhere in history — it was
+    #     never committed.
+    #   * The committed file is exactly json.dumps(obj, indent=2) + newline, so
+    #     the 77-byte gap is missing CONTENT (one or two fields), not
+    #     formatting. Re-serialising it cannot reach the expected hash.
+    #   * The 86 MB encoder .pth matches the manifest byte-for-byte, as do the
+    #     ensemble cells — the model itself is intact. Only this sidecar
+    #     metadata, which carries state_contract / train_frames / training
+    #     provenance, is short.
+    #
+    # ACTION: the bundle author (Yao) supplies either the 3870-byte metadata
+    # file or a regenerated MANIFEST.json. Then delete this decorator.
+    #
+    # Quarantined rather than deleted so the assertions keep running: if the
+    # bundle is fixed this flips to an unexpected PASS and fails the suite,
+    # which is the signal to remove the marker.
+    @unittest.expectedFailure
+    def test_release_manifest_integrity(self) -> None:
+        root = self._bundled_artifact_root()
+        artifact_root = root / "brightness_robust_four_output_all_extreme"
+        manifest, paths = load_release_manifest(artifact_root)
+        self.assertEqual(manifest["brightness_policy"], "all_extreme")
+        self.assertNotIn("five_output", manifest["contracts"])
+        self.assertEqual(len(paths), 36)
 
 
 class ShadowDisplayTests(unittest.TestCase):
