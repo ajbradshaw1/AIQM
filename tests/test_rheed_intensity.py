@@ -32,6 +32,7 @@ from gui.rheed_intensity import (  # noqa: E402
     MAX_ROI_REGIONS,
     NormalizedRoi,
     RheedRoiDefinition,
+    SPOT_BOX_FWHM_MULTIPLE,
     auto_peak_roi_definition,
     auto_three_spot_roi_definition,
     definition_from_mapping,
@@ -40,6 +41,8 @@ from gui.rheed_intensity import (  # noqa: E402
     measure_camera_state,
     measure_region_series,
     measure_regions,
+    measure_spot_extent_px,
+    refine_peak_in_source,
     without_last_region,
 )
 from gui.rheed_intensity_window import RheedIntensityWindow  # noqa: E402
@@ -442,6 +445,126 @@ class RheedIntensityWindowTests(unittest.TestCase):
         self.assertEqual(self.window.active_roi.mode, "auto_1x1_three_spot")
 
 
+class ElongatedSpotFittingTests(unittest.TestCase):
+    """RHEED spots are not round — boxes have to be rectangles.
+
+    Real STO first-order features are vertical streaks: measured on a lab
+    frame they run ~7x19 px against a ~34x48 px specular, so aspect ratios of
+    1.4 and 2.5 coexist in one image. A single square, or even a single
+    global aspect, is wrong for at least one of them.
+    """
+
+    @staticmethod
+    def _frame(spots, shape=(492, 656)) -> np.ndarray:
+        """spots = [(cx, cy, amp, sigma_x, sigma_y)] on a dark field."""
+        h, w = shape
+        yy, xx = np.mgrid[0:h, 0:w]
+        img = np.full((h, w), 6.0)
+        for cx, cy, amp, sx, sy in spots:
+            img += amp * np.exp(
+                -(((xx - cx) ** 2) / (2 * sx ** 2) + ((yy - cy) ** 2) / (2 * sy ** 2))
+            )
+        mono = np.clip(img, 0, 255).astype(np.uint8)
+        return np.stack([mono] * 3, axis=-1)
+
+    def test_extent_is_measured_independently_per_axis(self) -> None:
+        frame = self._frame([(300, 240, 220, 3.0, 12.0)])
+        luminance = frame_luminance_plane(frame)
+        background = float(np.median(luminance))
+        w, h = measure_spot_extent_px(
+            luminance, 300, 240, background=background, max_span_px=120,
+        )
+        # FWHM = 2.355 sigma -> ~7 px wide, ~28 px tall.
+        self.assertAlmostEqual(w, 2.355 * 3.0, delta=2.0)
+        self.assertAlmostEqual(h, 2.355 * 12.0, delta=3.0)
+        self.assertGreater(h / w, 3.0)
+
+    def test_a_vertical_streak_gets_a_tall_narrow_box(self) -> None:
+        frame = self._frame([
+            (200, 200, 200, 3.0, 12.0),
+            (328, 230, 250, 9.0, 12.0),
+            (456, 200, 190, 3.0, 12.0),
+        ])
+        roi = auto_three_spot_roi_definition(_state(frame), frame)
+        self.assertTrue(roi.detector_method.endswith("-fitted"))
+        aspects = []
+        for region in roi.regions:
+            x0, y0, x1, y1 = region.pixel_bounds(656, 492)
+            aspects.append((y1 - y0) / (x1 - x0))
+        left, specular, right = aspects
+        # The narrow streaks must come out clearly taller than wide, and
+        # clearly more elongated than the rounder specular.
+        self.assertGreater(left, 2.0)
+        self.assertGreater(right, 2.0)
+        self.assertLess(specular, left)
+        self.assertLess(specular, right)
+
+    def test_boxes_scale_with_the_measured_fwhm(self) -> None:
+        narrow = self._frame([(200, 200, 200, 3.0, 6.0),
+                              (328, 230, 250, 3.0, 6.0),
+                              (456, 200, 190, 3.0, 6.0)])
+        wide = self._frame([(200, 200, 200, 9.0, 18.0),
+                            (328, 230, 250, 9.0, 18.0),
+                            (456, 200, 190, 9.0, 18.0)])
+        sizes = []
+        for frame in (narrow, wide):
+            roi = auto_three_spot_roi_definition(_state(frame), frame)
+            x0, y0, x1, y1 = roi.regions[1].pixel_bounds(656, 492)
+            sizes.append((x1 - x0, y1 - y0))
+        (nw, nh), (ww, wh) = sizes
+        self.assertGreater(ww, nw * 2)
+        self.assertGreater(wh, nh * 2)
+        # Roughly 1.5x the FWHM of a 9-sigma spot: 2.355*9*1.5 ~= 32 px.
+        self.assertAlmostEqual(ww, 2.355 * 9.0 * SPOT_BOX_FWHM_MULTIPLE, delta=8)
+
+    def test_fixed_squares_remain_available_as_a_fallback(self) -> None:
+        frame = self._frame([(200, 200, 200, 3.0, 12.0),
+                             (328, 230, 250, 9.0, 12.0),
+                             (456, 200, 190, 3.0, 12.0)])
+        roi = auto_three_spot_roi_definition(
+            _state(frame), frame, fit_to_spot=False,
+        )
+        self.assertTrue(roi.detector_method.endswith("-fixed"))
+        # Sub-pixel centres make floor/ceil bounds differ by a pixel, so the
+        # boxes are near-identical rather than byte-identical. What matters is
+        # that fixed mode ignores the elongation entirely: every box square,
+        # including the streaks that fitting stretches to ~2.5.
+        for region in roi.regions:
+            x0, y0, x1, y1 = region.pixel_bounds(656, 492)
+            self.assertAlmostEqual((y1 - y0) / (x1 - x0), 1.0, delta=0.1)
+
+    def test_the_peak_is_relocated_at_source_resolution(self) -> None:
+        """The 128x96 detector grid quantises a centre to ~5 source px.
+
+        Sizing a 7-px-wide streak on that grid is impossible, so the peak is
+        re-found in the source frame before anything is measured.
+        """
+        frame = self._frame([(301, 237, 220, 3.0, 12.0)])
+        luminance = frame_luminance_plane(frame)
+        # The detector would report this spot near (58.7, 46.2) processed.
+        x, y = refine_peak_in_source(luminance, 58.7, 46.2)
+        self.assertAlmostEqual(x, 301, delta=2)
+        self.assertAlmostEqual(y, 237, delta=2)
+
+    def test_fitting_admits_far_less_background_than_a_square(self) -> None:
+        """The measurable win: a streak's box stops being mostly dark field."""
+        frame = self._frame([(200, 200, 200, 3.0, 12.0),
+                             (328, 230, 250, 9.0, 12.0),
+                             (456, 200, 190, 3.0, 12.0)])
+        state = _state(frame)
+        fitted = auto_three_spot_roi_definition(state, frame)
+        fixed = auto_three_spot_roi_definition(state, frame, fit_to_spot=False)
+        fitted_px = measure_region_series(frame, fitted)[0].pixel_count
+        fixed_px = measure_region_series(frame, fixed)[0].pixel_count
+        self.assertLess(fitted_px, fixed_px)
+        # Mean intensity rises because the same signal is divided by far less
+        # dark field — exactly what dilutes a fractional-change trend.
+        self.assertGreater(
+            measure_region_series(frame, fitted)[0].intensity_mean,
+            measure_region_series(frame, fixed)[0].intensity_mean,
+        )
+
+
 class AutoPeakRoiTests(unittest.TestCase):
     """The general N-spot proposer, beside the 1x1 triplet detector."""
 
@@ -460,7 +583,7 @@ class AutoPeakRoiTests(unittest.TestCase):
         self.assertEqual(roi.mode, "auto_peaks")
         self.assertEqual(len(roi.regions), 3)
         self.assertEqual(roi.region_labels, ("spot 1", "spot 2", "spot 3"))
-        self.assertEqual(roi.detector_method, "auto-peaks-2d")
+        self.assertEqual(roi.detector_method, "auto-peaks-2d-fitted")
         # spot 1 is the brightest peak, which here is the centre one.
         centre_x = (roi.regions[0].left + roi.regions[0].right) / 2.0
         self.assertAlmostEqual(centre_x, 64.5 / 128, delta=0.05)

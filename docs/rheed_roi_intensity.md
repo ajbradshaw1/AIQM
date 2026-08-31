@@ -29,11 +29,45 @@ regions.
   not "remove any box": the per-region log is keyed by label, so removing a
   middle box would renumber the ones after it and splice two different
   rectangles into one trace.
-- **Spot box** controls each proposed box width in the detector's 128×96
-  coordinate frame. Changing it does not modify an already accepted ROI.
+- **Fit to spot** (on by default) sizes each proposed box to that spot's own
+  measured width and height — see *Box shape* below. Turn it off to get the
+  fixed square set by **Fixed box** instead.
+- **Fixed box** controls the fallback box width in the detector's 128×96
+  coordinate frame, used when fitting is off or measurement fails. Changing
+  it does not modify an already accepted ROI.
 
 Boxes are fixed after confirmation. They are not re-detected on each frame,
 because a moving ROI would mix tracking motion into the intensity trend.
+
+## Box Shape
+
+**RHEED features are not round, so the boxes are rectangles.** First-order
+features are streaks elongated along y; the specular spot has its own shape.
+On a lab STO frame the first-order spots measure about 7×19 px against a
+34×48 px specular — aspect ratios of ~2.5 and ~1.4 in the *same image*, so
+neither one square nor one global aspect ratio is right.
+
+With **Fit to spot**, each box is sized independently per axis from that
+spot's own full-width-at-half-maximum, times `SPOT_BOX_FWHM_MULTIPLE` (1.5).
+For a Gaussian that captures ~92% of the profile on each axis while keeping
+background out — background adds a constant offset that dilutes the
+fractional change the trend exists to show.
+
+The measurement is made at **source resolution**, not in the detector's
+128×96 frame. That frame is right for *finding* spots but useless for
+measuring them: one processed pixel is about five source pixels, so a 7-px
+streak is barely two pixels across and its centre is quantised to the same
+grid. The peak is re-located in the source frame first.
+
+Fitted boxes are floored at 6 px and capped at 35% of the frame, so neither
+sub-pixel drift nor a saturated bloom can produce an unusable region. If
+half-maximum measurement fails for a frame, the whole proposal falls back to
+fixed squares rather than mixing fitted and fixed boxes — a mix would make
+the per-box sums incomparable for a reason nothing on screen explains. The
+`detector_method` recorded with the ROI ends in `-fitted` or `-fixed`.
+
+Manually drawn boxes have always been arbitrary rectangles; this applies to
+the automatic proposals.
 
 ## What Is Plotted
 

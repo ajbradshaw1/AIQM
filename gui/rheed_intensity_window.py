@@ -369,11 +369,25 @@ class RheedIntensityWindow(QMainWindow):
         self.clear_roi_btn.clicked.connect(self.clear_roi)
         self.clear_roi_btn.setEnabled(False)
 
+        self.fit_boxes_check = QCheckBox("Fit to spot")
+        self.fit_boxes_check.setChecked(True)
+        self.fit_boxes_check.setToolTip(
+            "Size each box to that spot's own measured width and height. "
+            "RHEED features are not round — first-order streaks run several "
+            "times taller than they are wide — so one square per spot either "
+            "clips the streaks or pads the specular with background. "
+            "Unchecked, every box is the fixed square set below."
+        )
+        self.fit_boxes_check.toggled.connect(self._on_fit_boxes_toggled)
+
         self.spot_size = QSpinBox()
         self.spot_size.setRange(3, 31)
         self.spot_size.setSingleStep(2)
         self.spot_size.setValue(7)
-        self.spot_size.setToolTip("Odd box width in the Equalizer's 128×96 coordinate frame")
+        self.spot_size.setToolTip(
+            "Fallback box width in the Equalizer's 128×96 coordinate frame, "
+            "used when 'Fit to spot' is off or measurement fails."
+        )
 
         self.normalize_check = QCheckBox("Normalise (Δ%)")
         self.normalize_check.setToolTip(
@@ -397,7 +411,9 @@ class RheedIntensityWindow(QMainWindow):
         controls.addWidget(self.accept_btn)
         controls.addWidget(self.remove_btn)
         controls.addWidget(self.clear_roi_btn)
-        controls.addWidget(QLabel("Spot box (128×96 px):"))
+        controls.addWidget(self.fit_boxes_check)
+        self.spot_size_label = QLabel("Fixed box (128×96 px):")
+        controls.addWidget(self.spot_size_label)
         controls.addWidget(self.spot_size)
         controls.addStretch()
         controls.addWidget(self.normalize_check)
@@ -432,6 +448,8 @@ class RheedIntensityWindow(QMainWindow):
         splitter.addWidget(self.image_view)
         splitter.addWidget(self._plot)
         splitter.setSizes([480, 520])
+
+        self._on_fit_boxes_toggled(self.fit_boxes_check.isChecked())
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -557,7 +575,9 @@ class RheedIntensityWindow(QMainWindow):
             self.spot_size.setValue(size)
         try:
             candidate = auto_three_spot_roi_definition(
-                state, frame, box_size_processed_px=size,
+                state, frame,
+                box_size_processed_px=size,
+                fit_to_spot=self.fit_boxes_check.isChecked(),
             )
         except (TypeError, ValueError) as exc:
             self._candidate_roi = None
@@ -594,6 +614,7 @@ class RheedIntensityWindow(QMainWindow):
                 state, frame,
                 count=int(self.spot_count.value()),
                 box_size_processed_px=size,
+                fit_to_spot=self.fit_boxes_check.isChecked(),
             )
         except (TypeError, ValueError) as exc:
             self._candidate_roi = None
@@ -612,6 +633,11 @@ class RheedIntensityWindow(QMainWindow):
             "reconstruction the pattern is."
         )
         self._refresh_image()
+
+    def _on_fit_boxes_toggled(self, checked: bool) -> None:
+        """The fixed-size control is only meaningful as the fallback."""
+        self.spot_size.setEnabled(not checked)
+        self.spot_size_label.setEnabled(not checked)
 
     def _on_normalize_toggled(self, _checked: bool) -> None:
         self._apply_plot_units()

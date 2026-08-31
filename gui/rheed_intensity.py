@@ -44,6 +44,20 @@ MAX_ROI_REGIONS = 8
 # be matched to a spot on the frame without counting boxes.
 AUTO_TRIPLET_LABELS = ("left", "specular", "right")
 
+# Box edge length as a multiple of the spot's measured FWHM, per axis.
+# For a Gaussian, +/-0.75*FWHM is +/-1.77 sigma, capturing ~92% of the profile
+# on each axis (~85% in 2D). Going wider buys little signal and admits
+# background, which adds a constant offset and dilutes the fractional change
+# the trend exists to show.
+SPOT_BOX_FWHM_MULTIPLE = 1.5
+
+# Bounds on a fitted box edge, in SOURCE pixels. The floor keeps a box big
+# enough to survive sub-pixel drift and to average over sensor noise; the
+# ceiling stops a saturated bloom or a streak running off the detector from
+# claiming most of the frame.
+MIN_FITTED_BOX_PX = 6
+MAX_FITTED_BOX_FRACTION = 0.35
+
 
 def default_region_labels(mode: str, count: int) -> tuple[str, ...]:
     """Stable, human-readable names for a definition's regions.
@@ -341,6 +355,129 @@ def preprocess_for_landmarks(frame: np.ndarray) -> np.ndarray:
     )
 
 
+def refine_peak_in_source(
+    luminance: np.ndarray,
+    processed_x: float,
+    processed_y: float,
+    *,
+    search_radius_px: int = 12,
+) -> tuple[int, int]:
+    """Map a 128x96 detector peak back to source pixels and re-find its max.
+
+    The detector works on a heavily downsampled frame — good for FINDING
+    spots, useless for measuring them: one processed pixel is about five
+    source pixels, so a 7-px-wide streak is barely two pixels across and its
+    centre is quantised to the same grid. Re-locating the maximum in the
+    source frame recovers the precision before anything is measured.
+    """
+    height, width = luminance.shape
+    cx = int(round((float(processed_x) + 0.5) * width / PROCESS_W))
+    cy = int(round((float(processed_y) + 0.5) * height / PROCESS_H))
+    cx = max(0, min(width - 1, cx))
+    cy = max(0, min(height - 1, cy))
+    radius = max(1, int(search_radius_px))
+    x0, y0 = max(0, cx - radius), max(0, cy - radius)
+    window = luminance[y0:cy + radius + 1, x0:cx + radius + 1]
+    if window.size == 0:
+        return cx, cy
+    dy, dx = np.unravel_index(int(np.argmax(window)), window.shape)
+    return x0 + int(dx), y0 + int(dy)
+
+
+def measure_spot_extent_px(
+    luminance: np.ndarray,
+    x: int,
+    y: int,
+    *,
+    background: float,
+    max_span_px: int,
+) -> tuple[int, int]:
+    """Full-width-at-half-maximum of one spot, along x and y, in source px.
+
+    Measured independently per axis, because RHEED spots are not round: the
+    first-order features are streaks elongated along y, and the specular spot
+    is its own shape again. A single width would either clip the streaks or
+    pad the specular with background.
+
+    Walks outward from the peak along each axis until the profile drops below
+    half of (peak - background), so it measures the spot actually present
+    rather than assuming a model profile.
+    """
+    height, width = luminance.shape
+    peak = float(luminance[y, x])
+    threshold = background + 0.5 * (peak - background)
+    if not math.isfinite(threshold) or peak <= background:
+        raise ValueError("Spot is not above the local background")
+
+    span = max(1, int(max_span_px))
+    left = x
+    while left - 1 >= 0 and x - (left - 1) <= span and luminance[y, left - 1] >= threshold:
+        left -= 1
+    right = x
+    while right + 1 < width and (right + 1) - x <= span and luminance[y, right + 1] >= threshold:
+        right += 1
+    top = y
+    while top - 1 >= 0 and y - (top - 1) <= span and luminance[top - 1, x] >= threshold:
+        top -= 1
+    bottom = y
+    while bottom + 1 < height and (bottom + 1) - y <= span and luminance[bottom + 1, x] >= threshold:
+        bottom += 1
+    return (right - left + 1), (bottom - top + 1)
+
+
+def fitted_spot_region(
+    luminance: np.ndarray,
+    processed_x: float,
+    processed_y: float,
+    *,
+    background: float,
+) -> NormalizedRoi:
+    """A rectangle sized to one spot's own measured width and height."""
+    height, width = luminance.shape
+    x, y = refine_peak_in_source(luminance, processed_x, processed_y)
+    max_span = int(max(width, height) * MAX_FITTED_BOX_FRACTION)
+    fwhm_x, fwhm_y = measure_spot_extent_px(
+        luminance, x, y, background=background, max_span_px=max_span,
+    )
+    box_w = fwhm_x * SPOT_BOX_FWHM_MULTIPLE
+    box_h = fwhm_y * SPOT_BOX_FWHM_MULTIPLE
+    box_w = min(max(box_w, MIN_FITTED_BOX_PX), width * MAX_FITTED_BOX_FRACTION)
+    box_h = min(max(box_h, MIN_FITTED_BOX_PX), height * MAX_FITTED_BOX_FRACTION)
+
+    left = max(0.0, (x + 0.5 - box_w / 2.0) / width)
+    right = min(1.0, (x + 0.5 + box_w / 2.0) / width)
+    top = max(0.0, (y + 0.5 - box_h / 2.0) / height)
+    bottom = min(1.0, (y + 0.5 + box_h / 2.0) / height)
+    # A spot at the very edge can clamp to a degenerate rectangle; nudge it
+    # back inside rather than raising, so one awkward peak does not fail the
+    # whole proposal.
+    if right - left < 1.0 / width:
+        left, right = max(0.0, right - 2.0 / width), min(1.0, left + 2.0 / width)
+    if bottom - top < 1.0 / height:
+        top, bottom = max(0.0, bottom - 2.0 / height), min(1.0, top + 2.0 / height)
+    return NormalizedRoi(left, top, right, bottom)
+
+
+def square_spot_region(
+    processed_x: float,
+    processed_y: float,
+    *,
+    box_size_processed_px: int,
+) -> NormalizedRoi:
+    """Fixed-size box in the detector's own 128x96 frame.
+
+    The pre-fitting behaviour, kept as an explicit fallback for frames where
+    half-maximum measurement is meaningless — a saturated bloom with no
+    shoulder, or spots sitting on a strong background gradient.
+    """
+    half = int(box_size_processed_px) / 2.0
+    left = max(0.0, (float(processed_x) + 0.5 - half) / PROCESS_W)
+    right = min(1.0, (float(processed_x) + 0.5 + half) / PROCESS_W)
+    top = max(0.0, (float(processed_y) + 0.5 - half) / PROCESS_H)
+    bottom = min(1.0, (float(processed_y) + 0.5 + half) / PROCESS_H)
+    return NormalizedRoi(left, top, right, bottom)
+
+
 def manual_roi_definition(
     normalized_rect: tuple[float, float, float, float],
     state: object,
@@ -446,8 +583,15 @@ def auto_three_spot_roi_definition(
     frame: np.ndarray,
     *,
     box_size_processed_px: int = 7,
+    fit_to_spot: bool = True,
 ) -> RheedRoiDefinition:
-    """Detect three bright spots once and return three fixed square boxes.
+    """Detect the 1x1 triplet once and return three fixed boxes.
+
+    With ``fit_to_spot`` each box is a rectangle sized to that spot's own
+    measured extent. This matters most here: the first-order spots either
+    side of the specular are vertical streaks, and a square sized to their
+    width clips them while a square sized to their height buries them in
+    background.
 
     ``detect_live_landmarks`` detects geometry only; it does not prove the
     surface is 1x1.  Low-confidence successful candidates are preserved for
@@ -461,14 +605,12 @@ def auto_three_spot_roi_definition(
     if not detection.success:
         raise ValueError(f"Three-spot detection failed: {detection.reason}")
 
-    half = size / 2.0
-    regions: list[NormalizedRoi] = []
-    for x, y in detection.points:
-        left = max(0.0, (float(x) + 0.5 - half) / PROCESS_W)
-        right = min(1.0, (float(x) + 0.5 + half) / PROCESS_W)
-        top = max(0.0, (float(y) + 0.5 - half) / PROCESS_H)
-        bottom = min(1.0, (float(y) + 0.5 + half) / PROCESS_H)
-        regions.append(NormalizedRoi(left, top, right, bottom))
+    regions, fitted = _spot_regions(
+        frame,
+        [(x, y) for x, y in detection.points],
+        fit_to_spot=fit_to_spot,
+        box_size_processed_px=size,
+    )
 
     arr = np.asarray(frame)
     height, width = arr.shape[:2]
@@ -494,8 +636,46 @@ def auto_three_spot_roi_definition(
         ),
         detector_confidence=float(detection.confidence),
         detector_peak_snr=float(detection.peak_snr),
-        detector_method=detection.method,
+        detector_method=(
+            f"{detection.method}-fitted" if fitted
+            else f"{detection.method}-fixed"
+        ),
     )
+
+
+def _spot_regions(
+    frame: np.ndarray,
+    points: Iterable[tuple[float, float]],
+    *,
+    fit_to_spot: bool,
+    box_size_processed_px: int,
+) -> tuple[list[NormalizedRoi], bool]:
+    """Build one region per detected peak; report whether fitting was used.
+
+    Falls back to the fixed square PER PROPOSAL rather than per spot: a mix of
+    fitted and fixed boxes in one ROI would make the per-box sums
+    incomparable with each other for a reason nothing on screen explains.
+    """
+    peaks = [(float(x), float(y)) for x, y in points]
+    if fit_to_spot:
+        luminance = frame_luminance_plane(frame)
+        background = float(np.median(luminance))
+        try:
+            return [
+                fitted_spot_region(
+                    luminance, x, y, background=background,
+                )
+                for x, y in peaks
+            ], True
+        except ValueError:
+            # Half-maximum is meaningless for this frame (saturated bloom, or
+            # a spot at or below the local background). Fixed boxes still
+            # give the grower something to confirm or adjust.
+            pass
+    return [
+        square_spot_region(x, y, box_size_processed_px=box_size_processed_px)
+        for x, y in peaks
+    ], False
 
 
 def auto_peak_roi_definition(
@@ -504,8 +684,15 @@ def auto_peak_roi_definition(
     *,
     count: int = 3,
     box_size_processed_px: int = 7,
+    fit_to_spot: bool = True,
 ) -> RheedRoiDefinition:
     """Propose one box per bright spot, for the ``count`` brightest found.
+
+    With ``fit_to_spot`` each box is a RECTANGLE sized to that spot's own
+    measured width and height. RHEED features are not round — first-order
+    streaks run several times taller than they are wide, and the specular
+    spot has a different shape again — so one square per spot either clips
+    the streaks or pads the specular with background.
 
     The general form of what ``auto_three_spot_roi_definition`` does for the
     1x1 triplet. That function stays the right choice when the grower wants
@@ -554,14 +741,12 @@ def auto_peak_roi_definition(
             "Lower the spot count, or draw the extra boxes by hand."
         )
 
-    half = size / 2.0
-    regions = []
-    for x, y, _intensity in chosen:
-        left = max(0.0, (float(x) + 0.5 - half) / PROCESS_W)
-        right = min(1.0, (float(x) + 0.5 + half) / PROCESS_W)
-        top = max(0.0, (float(y) + 0.5 - half) / PROCESS_H)
-        bottom = min(1.0, (float(y) + 0.5 + half) / PROCESS_H)
-        regions.append(NormalizedRoi(left, top, right, bottom))
+    regions, fitted = _spot_regions(
+        frame,
+        [(x, y) for x, y, _ in chosen],
+        fit_to_spot=fit_to_spot,
+        box_size_processed_px=size,
+    )
 
     peak_snr = min((value - median) / noise for _, _, value in chosen)
     confidence = float(np.clip((peak_snr - MIN_DETECTION_SNR) / 12.0, 0.0, 1.0))
@@ -583,7 +768,9 @@ def auto_peak_roi_definition(
         definition_captured_at_utc=str(getattr(state, "captured_at_utc", "") or ""),
         detector_confidence=confidence,
         detector_peak_snr=float(peak_snr),
-        detector_method="auto-peaks-2d",
+        detector_method=(
+            "auto-peaks-2d-fitted" if fitted else "auto-peaks-2d-fixed"
+        ),
     )
 
 
@@ -792,7 +979,12 @@ __all__ = [
     "auto_three_spot_roi_definition",
     "default_region_labels",
     "definition_from_mapping",
+    "SPOT_BOX_FWHM_MULTIPLE",
+    "fitted_spot_region",
     "frame_luminance_plane",
+    "measure_spot_extent_px",
+    "refine_peak_in_source",
+    "square_spot_region",
     "manual_roi_definition",
     "measure_camera_state",
     "measure_region_series",
