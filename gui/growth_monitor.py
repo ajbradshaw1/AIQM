@@ -13,7 +13,7 @@ Tab layout:
 import os
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Optional
 
 from drivers.config import MBESystemConfig, get_active_config
@@ -56,7 +56,15 @@ def _default_save_path(config: Optional[MBESystemConfig] = None) -> str:
         # Check the drive itself, not the OMBE folder — folder gets
         # created on first save if missing.
         if Path("E:\\").exists():
-            return str(Path("E:\\") / chamber_folder / "GrowthMonitor")
+            # PureWindowsPath, not Path, for the RETURNED string. Path is
+            # PosixPath off Windows, so joining there produced
+            # "E:\/OMBE/GrowthMonitor" — which no Windows box would ever
+            # see, but which made this branch untestable anywhere except
+            # Windows and left three tests permanently red on Linux and
+            # macOS CI. The existence check above stays a real Path.
+            return str(
+                PureWindowsPath("E:\\") / chamber_folder / "GrowthMonitor"
+            )
         # Windows without T9: prefer Documents over C: root; keeps growth
         # sessions per-user and off any C:-bloat path.
         return str(Path.home() / "Documents" / chamber_folder)
